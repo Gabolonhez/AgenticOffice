@@ -218,7 +218,8 @@ export class UsageCards {
   }
 
   render(): void {
-    const accounts = this.ctx.store.snapshot?.accounts ?? [];
+    // Antigravity: só leitura, sem uso do plano para mostrar.
+    const accounts = (this.ctx.store.snapshot?.accounts ?? []).filter((a) => a.provider !== 'antigravity');
     this.list.sync(accounts);
     this.el.classList.toggle('is-empty', accounts.length === 0);
     setStyleVar(this.el, '--count', String(accounts.length));

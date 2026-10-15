@@ -462,6 +462,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
    */
   function toggleTerminal(): void {
     const id = selection?.type === 'agent' ? selection.id : null;
+    if (id !== null && ctx.agent(id)?.provider === 'antigravity') return ctx.announce(tr('O Antigravity é só leitura aqui: sem terminal no escritório.'));
     if (id !== null && pty.enabled && ctx.agent(id)?.kind === 'main') return router.toggle(id);
     if (id === null && pty.isOpen) return pty.close();
     if (terminal.isOpen && (id === null || terminal.agentId === id)) terminal.close();

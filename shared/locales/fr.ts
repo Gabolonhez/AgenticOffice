@@ -3280,4 +3280,9 @@ export const FR: Readonly<Record<string, string>> = {
   "Carimbo deixado na portaria: {0}": "Tampon laissé à l'accueil : {0}",
   "Entre no prédio ou chegue mais perto da porta para carimbar.": "Entrez dans l'immeuble ou approchez-vous de la porte pour tamponner.",
   "O carimbo não foi deixado. Tente de novo.": "Le tampon n'a pas été laissé. Réessayez.",
+  "Para responder, use o Antigravity": "Pour répondre, utilisez Antigravity",
+  "Abrir a pasta do projeto no Antigravity": "Ouvrir le dossier du projet dans Antigravity",
+  "O Antigravity é só leitura aqui: sem terminal no escritório.": "Antigravity est en lecture seule ici : pas de terminal dans le bureau.",
+  "Agente principal (Antigravity)": "Agent principal (Antigravity)",
+  "Antigravity: falha ao ler as conversas ({0}).": "Antigravity : échec de lecture des conversations ({0}).",
 };

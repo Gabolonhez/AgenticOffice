@@ -217,6 +217,7 @@ class AgentView {
   private followBtn: HTMLButtonElement;
   private termBtn: HTMLButtonElement;
   private codeBtn: HTMLButtonElement;
+  private codeLabel: HTMLElement;
   private termLabel: HTMLElement;
   /** Por que o terminal não abre: no celular não há hover para ler o title, então o toque mostra o motivo aqui. */
   private termWhy: HTMLElement;
@@ -303,7 +304,8 @@ class AgentView {
     centerBtn.append(h('span', { text: tr('Centralizar') }));
     this.codeBtn = h('button', { class: 'ui-btn', type: 'button', title: tr('Abrir a pasta do projeto no VS Code'), on: { click: () => this.openCode() } });
     this.codeBtn.innerHTML = ICONS.code;
-    this.codeBtn.append(h('span', { text: tr('VS Code') }));
+    this.codeLabel = h('span', { text: tr('VS Code') });
+    this.codeBtn.append(this.codeLabel);
     const statusRow = h(
       'div',
       { class: 'ui-status' },
@@ -498,7 +500,7 @@ class AgentView {
   /** Abre a pasta do projeto deste agente no VS Code (o servidor resolve a pasta pelo id). */
   private openCode(): void {
     if (!this.id) return;
-    openInVscode(this.id).catch((err: unknown) => this.ctx.announce(err instanceof Error ? err.message : String(err)));
+    openInVscode(this.id, providerOf(this.last) === 'antigravity' ? 'antigravity-ide' : 'vscode').catch((err: unknown) => this.ctx.announce(err instanceof Error ? err.message : String(err)));
   }
 
   /** Abre (ou fecha) o terminal deste agente; desligado sem acesso local ou depois que ele saiu. */
@@ -709,10 +711,14 @@ class AgentView {
     setHidden(this.codeBtn, !this.pty.enabled || !access().terminal || !this.id || isDemoId(this.id));
     // Interativo: o Claude Code roda aqui (pty) ou roda noutro terminal e dá para assumir pela janela.
     const readOnly = !!this.ctx.store.snapshot?.meta.terminal;
-    const kind = !this.id ? '' : router?.interactive(this.id) ? 'interativo' : !readOnly && this.pty.enabled && ptyControllable(this.last) ? 'em outro terminal' : 'ao vivo';
+    // Antigravity: só leitura (sem transcript legível), o terminal fica desligado; o botão do editor abre o próprio IDE.
+    const antigravity = provider === 'antigravity';
+    setText(this.codeLabel, antigravity ? 'Antigravity' : tr('VS Code'));
+    setTitle(this.codeBtn, antigravity ? tr('Abrir a pasta do projeto no Antigravity') : tr('Abrir a pasta do projeto no VS Code'));
+    const kind = !this.id || antigravity ? '' : router?.interactive(this.id) ? 'interativo' : !readOnly && this.pty.enabled && ptyControllable(this.last) ? 'em outro terminal' : 'ao vivo';
     setText(this.termRo, kind === 'interativo' ? tr('interativo') : kind === 'ao vivo' ? tr('ao vivo') : kind ? tr('em outro terminal') : '');
     // aria-disabled (e não disabled): o botão continua focável e a dica do porquê aparece no hover.
-    const enabled = open || (available && live);
+    const enabled = open || (available && live && !antigravity);
     if (enabled) setHidden(this.termWhy, true);
     setAttr(this.termBtn, 'aria-disabled', enabled ? null : 'true');
     this.termBtn.classList.toggle('is-disabled', !enabled);
@@ -723,6 +729,8 @@ class AgentView {
       this.termBtn,
       open
         ? tr('Fechar o terminal (T)')
+        : antigravity
+          ? tr('O Antigravity é só leitura aqui: sem terminal no escritório.')
         : !available
           ? this.ctx.store.replaying
             ? tr('Sem terminal no timelapse: a conversa é a de agora, não a do momento reproduzido.')

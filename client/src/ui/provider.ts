@@ -8,7 +8,7 @@ import { shortcutHint } from './model';
 import { tr } from '../../../shared/i18n';
 
 /** Nome de cada ferramenta como aparece nos textos. */
-export const PROVIDER_NAME: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex' };
+export const PROVIDER_NAME: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity' };
 
 /** Ferramenta de um agente, conta, sessão ou pedido (ausente = Claude Code). */
 export function providerOf(x: { provider?: Provider } | null | undefined): Provider {
@@ -30,7 +30,7 @@ export function looksLikeCodexId(id: string): boolean {
 /** Ferramenta da conta: a do snapshot; sem ela, a dica de quem chamou ou o jeito do id. */
 export function accountProvider(account: Pick<AccountInfo, 'provider'> | undefined, fallbackId = '', hint?: Provider): Provider {
   if (account) return providerOf(account);
-  return hint ?? (looksLikeCodexId(fallbackId) ? 'codex' : 'claude');
+  return hint ?? (looksLikeCodexId(fallbackId) ? 'codex' : /(?:^|[:/\\])\.?antigravity(?:[-_.~:]|$)/i.test(fallbackId) ? 'antigravity' : 'claude');
 }
 
 /**
@@ -42,10 +42,10 @@ export function fallbackShort(id: string, provider: Provider = accountProvider(u
   const rest = id
     .replace(/^.*:/, '')
     .replace(/~\d+$/, '')
-    .replace(/^\.?(?:claude|codex)(?=[-_.]|$)[-_.]?/i, '');
+    .replace(/^\.?(?:claude|codex|antigravity)(?=[-_.]|$)[-_.]?/i, '');
   const letter = /[\p{L}\p{N}]/u.exec(rest)?.[0];
   if (letter) return letter.toUpperCase();
-  return provider === 'codex' ? 'X' : '?';
+  return provider === 'codex' ? 'X' : provider === 'antigravity' ? 'G' : '?';
 }
 
 /** O selo "Codex" ao lado do nome da conta (não repete quando o nome já diz "Codex"). */
@@ -66,7 +66,7 @@ export function accountChipLabel(account: Pick<AccountInfo, 'name' | 'email' | '
  * shell (a letra de uma conta do Codex não é um atalho); o Codex só entra quando há uma conta dele.
  */
 export function emptyOfficeHint(accounts: readonly Pick<AccountInfo, 'short' | 'provider'>[]): string {
-  const keys = shortcutHint(accounts.filter((a) => !isCodex(a)));
+  const keys = shortcutHint(accounts.filter((a) => providerOf(a) === 'claude'));
   if (!accounts.some(isCodex)) return tr('Abra o Claude Code em qualquer projeto{0} e veja seu agente chegar.', [keys ? ` (${keys})` : '']);
   return tr('Abra o Claude Code{0} ou o Codex em qualquer projeto e veja seu agente chegar.', [keys ? ` (${keys})` : '']);
 }

@@ -52,7 +52,9 @@ export function isWorldId(id: string): boolean {
 export const WORLD_TOOL_ACCOUNTS: Readonly<Record<Provider, { short: string; name: string; color: string }>> = {
   claude: { short: 'C', name: 'Claude Code', color: '#f08a3c' },
   codex: { short: 'X', name: 'Codex', color: '#a77bf3' },
+  antigravity: { short: 'G', name: 'Antigravity', color: '#3ec6c1' },
 };
+// O mundo só conhece Claude Code e Codex (a projeção manda o Antigravity como Claude Code).
 const PROVIDERS: readonly Provider[] = ['claude', 'codex'];
 /** Status que existem no mundo; um que esta versão não conhece vira 'idle' (passeia, sem prometer nada). */
 const STATUSES: readonly AgentStatus[] = ['working', 'waiting', 'idle', 'shell'];
