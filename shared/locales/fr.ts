@@ -228,7 +228,6 @@ export const FR: Readonly<Record<string, string>> = {
   "Centralizar": "Centrer",
   "Abrir a pasta do projeto no VS Code": "Ouvrir le dossier du projet dans VS Code",
   "VS Code": "VS Code",
-  "VS Code não encontrado: o comando \"code\" não está no PATH": "VS Code introuvable : la commande \"code\" n'est pas dans le PATH",
   "Abrir terminal": "Ouvrir le terminal",
   "Com o plugin habblaud-permissoes (npm run mod:install), dá para responder as perguntas por aqui.": "Avec le plugin habblaud-permissoes (npm run mod:install), vous pouvez répondre aux questions d'ici.",
   "Precisa de você": "A besoin de vous",
