@@ -89,6 +89,11 @@ export interface ApiDeps {
    * HABBLAUD_REMOTE_ALLOW libera. Requisição remota nunca vale pelo Host: só pelo que `allows` liberar.
    */
   remote?: { is(req: IncomingMessage): boolean; allows(feature: RemoteFeature): boolean };
+  /**
+   * Rotas do Habblaud World (/api/world/*, server/world/http.ts). Ausente = HABBLAUD_WORLD=0: 404 em todas. Só pela porta
+   * local com Host local: pela porta do celular, nem com login (403 `local_only`).
+   */
+  world?: (req: IncomingMessage, res: ServerResponse, url: URL) => void;
 }
 
 /** GET /api/agents/:id/terminal (ids nunca contêm '/'). */
@@ -333,6 +338,18 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       sendJson(res, 403, { error: tr('rota só do próprio computador (hooks, plugins e o auxiliar do host)') });
       return true;
     }
+    if (path === '/api/world' || path.startsWith('/api/world/')) {
+      // A conta do Habblaud World age em seu nome: só o próprio computador, como o terminal. O Host local sozinho não
+      // basta (o Tailscale chega pelo loopback e o Host se imita): a porta remota nunca passa, nem com login.
+      if (!deps.world) {
+        req.resume();
+        sendJson(res, 404, { error: tr('rota desconhecida') });
+      } else if (isRemote(req) || !isLoopbackHost(req.headers.host)) {
+        req.resume();
+        sendJson(res, 403, { error: { code: 'local_only', message: tr('o Habblaud World só é usado pelo próprio computador (http://localhost)') } });
+      } else deps.world(req, res, url);
+      return true;
+    }
     if (path === '/api/stream') {
       if (method !== 'GET') methodNotAllowed(res, 'GET');
       else hub.attach(req, res);
@@ -381,6 +398,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
           messages: !!deps.messages && trusted(req, 'messages'),
           terminal: !!terminals && trusted(req, 'terminal'),
           spawn: !!deps.spawn && trusted(req, 'spawn'),
+          world: !!deps.world && !!deps.terminal && !remote && isLoopbackHost(req.headers.host),
         };
         sendJson(res, 200, access);
       }

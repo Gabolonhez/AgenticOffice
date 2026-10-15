@@ -34,6 +34,8 @@ export class TopBar implements UiComponent {
   private pill: HTMLElement;
   private pillText: HTMLElement;
   private demoBadge: HTMLElement;
+  /** Linha de baixo da marca (conexão, versão, selos): o chip do Habblaud World entra aqui (ui/index.ts). */
+  private status: HTMLElement;
   private counters = new Map<keyof Counters, CounterRefs>();
   private shellsBtn: HTMLButtonElement;
   /** Próximo agente do botão de shells (cliques seguidos passam por todos, do que espera há mais tempo). */
@@ -109,6 +111,7 @@ export class TopBar implements UiComponent {
     this.spawnBtn.setAttribute('aria-haspopup', 'dialog');
     this.spawnBtn.hidden = true;
     this.version = new VersionChip(ctx, this.settingsBtn);
+    this.status = h('div', { class: 'ui-topbar__status' }, this.pill, this.version.el, this.demoBadge);
     const viewGroup = h(
       'div',
       { class: 'ui-btn-group', role: 'group', attrs: { 'aria-label': tr('Câmera') } },
@@ -138,13 +141,23 @@ export class TopBar implements UiComponent {
           'div',
           { class: 'ui-brand' },
           mark,
-          h('div', { class: 'ui-brand__text' }, wordmark(), h('div', { class: 'ui-topbar__status' }, this.pill, this.version.el, this.demoBadge)),
+          h('div', { class: 'ui-brand__text' }, wordmark(), this.status),
         ),
       ),
       counterWrap,
       this.usage.el,
       h('div', { class: 'ui-topbar__right' }, viewGroup, panelGroup),
     );
+  }
+
+  /** Acrescenta um selo à linha de status da marca, depois da versão (ex.: o chip do Habblaud World). */
+  addStatus(el: HTMLElement): void {
+    this.status.append(el);
+  }
+
+  /** Botão Mundo (troca de cena), ao lado do Timelapse. */
+  addSceneButton(btn: HTMLElement): void {
+    this.panelGroup.insertBefore(btn, this.timelapseBtn);
   }
 
   /** Acrescenta um botão de janela própria (ex.: Meu dia) ao começo do grupo de painéis. */

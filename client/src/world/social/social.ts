@@ -11,7 +11,6 @@ import { TILE } from '../constants';
 import { CAFE_ID, LOUNGE_ID, RECEPTION_ID, RESTROOM_ID } from '../layout/core';
 import type { SpotDef } from '../layout/types';
 import { FREE } from '../path/grid';
-import { isLongIdle } from '../sim/behavior';
 import { facing, type Character } from '../sim/character';
 import type { Sim } from '../sim/sim';
 import type { Step } from '../sim/steps';
@@ -196,14 +195,14 @@ export class Social {
       .map((c) => {
         const cp = personaFor(c.info.seed);
         let s = partnerScore(kind, cp, bondBetween(host.info.seed, c.info.seed), rng);
-        if (isLongIdle(c.info.status, c.info.statusSince, now)) s -= 1.5;
+        if (this.sim.longIdle(c, now)) s -= 1.5;
         if (kind === 'mirror' && !hasTrait(cp, 'vaidade')) s -= 2;
         return { c, s };
       })
       .sort((a, b) => b.s - a.s);
     let chosen = ranked.slice(0, want).map((x) => x.c);
     // dorminhocos (ociosos há muito tempo) às vezes nem acordam com o convite
-    if (!forced) chosen = chosen.filter((c, i) => i < info.min - 1 || !isLongIdle(c.info.status, c.info.statusSince, now) || rng() < 0.35);
+    if (!forced) chosen = chosen.filter((c, i) => i < info.min - 1 || !this.sim.longIdle(c, now) || rng() < 0.35);
     if (chosen.length + 1 < (kind === 'mirror' ? (groupOnly ? 2 : 1) : info.min)) return false;
     const plan = this.plan(kind, chosen.length + 1, host);
     if (!plan) return false;
@@ -291,7 +290,7 @@ export class Social {
     }
     if (text) this.say(host, text, now);
     guests.forEach((c, i) => {
-      const sleepy = isLongIdle(c.info.status, c.info.statusSince, now);
+      const sleepy = this.sim.longIdle(c, now);
       const p = sleepy ? L.ACCEPT_SLEEPY : c.mode === 'shell' && g.kind !== 'rps' ? L.ACCEPT_SHELL : pool;
       g.pending.push({ id: c.id, at: now + 900 + i * 650, text: L.pick(p, rng) });
     });

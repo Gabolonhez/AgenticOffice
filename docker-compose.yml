@@ -47,6 +47,15 @@ services:
       HABBLAUD_REMOTE_PASSWORD_HASH: ${HABBLAUD_REMOTE_PASSWORD_HASH:-}
       HABBLAUD_REMOTE_ALLOW: ${HABBLAUD_REMOTE_ALLOW:-}
       HABBLAUD_REMOTE_INSECURE_HTTP: ${HABBLAUD_REMOTE_INSECURE_HTTP:-}
+      # Habblaud World (em desenvolvimento; desligado sem HABBLAUD_WORLD_URL). 0 esconde tudo.
+      HABBLAUD_WORLD: ${HABBLAUD_WORLD:-}
+      HABBLAUD_WORLD_URL: ${HABBLAUD_WORLD_URL:-}
+      HABBLAUD_WORLD_DEV: ${HABBLAUD_WORLD_DEV:-}
+    # O host visto de dentro do container (servidor do Habblaud World local em teste: HABBLAUD_WORLD_URL=
+    # http://host.docker.internal:<porta> com HABBLAUD_WORLD_DEV=1). No Docker Desktop o nome já existe; no Linux,
+    # host-gateway o aponta para o host. Inofensivo sem o World.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Endurecimento: sistema de arquivos só leitura (exceto /data e /tmp), sem capabilities extras.
     read_only: true
     # /tmp em memória, com teto: sem `size` o Docker deixa usar metade da RAM do host.

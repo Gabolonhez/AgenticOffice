@@ -18,6 +18,7 @@
     "dev:client": "vite --config vite.config.ts",
     "demo": "HABBLAUD_DEMO=1 npm run dev",
     "demo:timeline": "tsx scripts/demo-timeline.ts",
+    "shots:world": "node scripts/world-shots.mjs",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build --config vite.config.ts",
     "build:server": "node scripts/build-server.mjs",

@@ -212,7 +212,9 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     const ta = h('textarea', { style: 'position:fixed;opacity:0;pointer-events:none' });
     ta.value = text;
-    document.body.append(ta);
+    // Com uma janela modal aberta, o resto da página fica inerte (e o campo não seria selecionado): ele entra nela.
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    (active?.closest('dialog[open]') ?? document.body).append(ta);
     ta.select();
     let ok = false;
     try {
@@ -221,6 +223,7 @@ export async function copyText(text: string): Promise<boolean> {
       ok = false;
     }
     ta.remove();
+    active?.focus();
     return ok;
   }
 }

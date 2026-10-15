@@ -21,7 +21,9 @@
 //    codetown_codetown-data são copiados para ele (o antigo fica, para apagar à mão). Avisa de CODETOWN_*
 //    no ambiente e no .env, que não valem mais.
 // 4. Roda `docker compose up -d --build`, espera o /api/health e mostra a URL.
-// 5. Atualiza o mod do Habblaud nas contas onde ele JÁ está instalado com outra versão (depois de
+// 5. Diz no fim se o Habblaud World está ligado (HABBLAUD_WORLD_URL do ambiente ou do .env, conferida como o servidor
+//    confere) e para qual servidor; ele vem desligado.
+// 6. Atualiza o mod do Habblaud nas contas onde ele JÁ está instalado com outra versão (depois de
 //    atualizar o Habblaud): relê o marketplace desta pasta e roda `claude plugin update` com o
 //    CLAUDE_CONFIG_DIR de cada conta. Nunca instala sozinho; se o `claude` faltar ou falhar, é só um aviso. Numa
 //    conta com o mod e sem o plugin de mensagens (que veio depois), só dá a dica de rodar o npm run mod:install.
@@ -41,6 +43,7 @@ import { describeStateMigration, LEGACY_NAME, legacyEnvWarning, migrateLegacySta
 import { makeClaudeRunner, MIN_CLAUDE_VERSION, readPackageVersion, updateInstalledMods, type ModUpdateResult } from './mod-install';
 import { tr } from '../shared/i18n';
 import { readEnvValue } from '../server/remote/envfile';
+import { parseWorldConfig } from '../server/config';
 import { ensureServerCert, remoteTargets, remoteTlsBase, tlsPaths } from '../server/remote/tls';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -442,9 +445,39 @@ export function envFileKeys(text: string): string[] {
   return keys;
 }
 
+/** As variáveis do Habblaud World que o docker-compose.yml repassa ao container. */
+const WORLD_ENV_KEYS = ['HABBLAUD_WORLD', 'HABBLAUD_WORLD_URL', 'HABBLAUD_WORLD_DEV'] as const;
+
+/**
+ * A linha do Habblaud World no fim do docker:up: o que o container vai ler (o ambiente vale mais que o .env, como no
+ * Compose), conferido pelo mesmo parseWorldConfig do servidor (no container não há `--dev`: só HABBLAUD_WORLD_DEV).
+ * Mostra só o endereço já normalizado, nunca o valor cru (que poderia ter usuário e senha).
+ */
+export function worldLine(env: NodeJS.ProcessEnv, envFile = ''): string {
+  const vars: NodeJS.ProcessEnv = {};
+  for (const key of WORLD_ENV_KEYS) {
+    const value = key in env ? env[key] : readEnvValue(envFile, key);
+    if (value !== undefined) vars[key] = value;
+  }
+  const world = parseWorldConfig(vars, []);
+  if (!world.enabled) return tr('Habblaud World: desligado (HABBLAUD_WORLD={0}).', [vars.HABBLAUD_WORLD?.trim() ?? '0']);
+  if (world.url) return tr('Habblaud World: ligado: {0}', [world.url]);
+  if (world.warning) return tr('Habblaud World: desligado ({0}).', [world.warning]);
+  return tr('Habblaud World: desligado (defina HABBLAUD_WORLD_URL).');
+}
+
 // ---------------------------------------------------------------------------------------------
 // Estado no host (~/.habblaud)
 // ---------------------------------------------------------------------------------------------
+
+/** O .env desta pasta ('' sem ele). */
+function readEnvFile(): string {
+  try {
+    return readFileSync(ENV_FILE, 'utf8');
+  } catch {
+    return '';
+  }
+}
 
 /** Avisa das variáveis CODETOWN_* (nome antigo, ignoradas) no ambiente e no .env desta pasta. */
 function warnLegacyEnv(): void {
@@ -711,6 +744,7 @@ async function up(opts: Options, port: number): Promise<void> {
   for (const line of modHint(updateMods(dirs, accounts))) say(line);
   // Com a cópia falha, os dados só existem no volume antigo: nada de sugerir apagá-lo.
   if (plan.cleanup.length && !copyFailed) say(tr('  Sobrou do CodeTown; depois de conferir o escritório, apague com: {0}', [plan.cleanup.join(' · ')]));
+  say(`  ${worldLine(process.env, readEnvFile())}`);
   say(tr('  Logs: npm run docker:logs · Parar: npm run docker:down'));
 }
 

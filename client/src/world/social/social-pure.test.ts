@@ -4,7 +4,7 @@ import { IDLE_WEIGHTS } from '../sim/behavior';
 import { betFor, kindWeight, pickKind, rpsResult, winChance, type Gesture } from './gathering';
 import { fill, pick, timeLine } from './lines';
 import { bondBetween, personaFor, soloWeights, TRAIT_IDS, TRAITS, type Persona } from './persona';
-import { DELIVERY_REWARD, START_COINS, TASK_REWARD, Wallets, type StorageLike } from './wallet';
+import { clearWorldWallets, DELIVERY_REWARD, START_COINS, TASK_REWARD, Wallets, WORLD_STORAGE_KEY, type StorageLike } from './wallet';
 
 const T0 = 1_700_000_000_000;
 
@@ -14,7 +14,7 @@ function persona(traits: Persona['traits']): Persona {
 
 function memStorage(): StorageLike & { data: Map<string, string> } {
   const data = new Map<string, string>();
-  return { data, getItem: (k) => data.get(k) ?? null, setItem: (k, v) => void data.set(k, v) };
+  return { data, getItem: (k) => data.get(k) ?? null, setItem: (k, v) => void data.set(k, v), removeItem: (k) => void data.delete(k) };
 }
 
 describe('personalidade', () => {
@@ -146,6 +146,64 @@ describe('carteira', () => {
     again.save(T0);
     expect(new Wallets(st).get('velho')).toBeUndefined();
     expect(new Wallets({ getItem: () => '{lixo', setItem: () => undefined }).coins('ana')).toBe(0);
+  });
+
+  it('visita a um prédio do mundo (ids world:): chave própria, sem tocar na economia do escritório', () => {
+    const st = memStorage();
+    // o escritório local já tem a sua economia gravada
+    const office = new Wallets(st);
+    office.ensure(ana, T0);
+    office.credit('ana', 7, '💬', 'Pedido atendido', T0);
+    office.save(T0);
+    const officeRaw = st.data.get('habblaud.wallets.v1');
+    expect(officeRaw).toBeDefined();
+    // o Sim da visita carrega tudo, mas só grava a chave da visita
+    const visit = new Wallets(st);
+    const marina = { id: 'world:a_1f2e3d4c', name: 'Marina', kind: 'main' as const, tasks: [] };
+    const rafael = { id: 'world:a_2a3b4c5d', name: 'Rafael', kind: 'sub' as const, tasks: [] };
+    visit.ensure(marina, T0);
+    visit.ensure(rafael, T0);
+    visit.transfer('world:a_2a3b4c5d', 'world:a_1f2e3d4c', 10, '✊', 'no jokenpô', T0);
+    visit.recordMatch('world:a_1f2e3d4c', 'world:a_2a3b4c5d');
+    // enquanto isso, o escritório ganhou mais (em outra instância): a visita não regrava a cópia velha por cima
+    office.credit('ana', 3, '💬', 'Pedido atendido', T0 + 1);
+    office.save(T0 + 1);
+    const officeNow = st.data.get('habblaud.wallets.v1');
+    visit.save(T0 + 2);
+    expect(st.data.get('habblaud.wallets.v1')).toBe(officeNow);
+    expect(officeNow).not.toBe(officeRaw);
+    expect(officeNow).not.toContain('world:');
+    const world = JSON.parse(st.data.get(WORLD_STORAGE_KEY)!) as { wallets: Record<string, unknown> };
+    expect(Object.keys(world.wallets).sort()).toEqual(['world:a_1f2e3d4c', 'world:a_2a3b4c5d']);
+    // e o escritório também não regrava a chave da visita
+    office.credit('ana', 1, '💬', 'Pedido atendido', T0 + 3);
+    const worldRaw = st.data.get(WORLD_STORAGE_KEY);
+    office.save(T0 + 3);
+    expect(st.data.get(WORLD_STORAGE_KEY)).toBe(worldRaw);
+    // recarregar a página no meio da visita guarda as moedinhas dos dois lados
+    const again = new Wallets(st);
+    expect(again.coins('world:a_1f2e3d4c')).toBe(START_COINS.main + 10);
+    expect(again.coins('ana')).toBe(START_COINS.main + 7 + 3 + 1);
+    // ao sair da visita, a chave da visita some; a do escritório fica
+    clearWorldWallets(st);
+    expect(st.data.has(WORLD_STORAGE_KEY)).toBe(false);
+    expect(new Wallets(st).coins('world:a_1f2e3d4c')).toBe(0);
+    expect(new Wallets(st).coins('ana')).toBe(START_COINS.main + 11);
+    // sem removeItem, esvazia; sem storage, nada acontece
+    const bare: StorageLike & { data: Map<string, string> } = { ...memStorage(), removeItem: undefined };
+    bare.setItem(WORLD_STORAGE_KEY, '{"v":1,"wallets":{}}');
+    clearWorldWallets(bare);
+    expect(bare.getItem(WORLD_STORAGE_KEY)).toBe('');
+    expect(() => clearWorldWallets(null)).not.toThrow();
+  });
+
+  it('cada chave só com a sua economia: id do escritório na chave da visita (e o contrário) é ignorado', () => {
+    const st = memStorage();
+    const entry = { name: 'X', coins: 50, earned: 50, wins: 0, losses: 0, vs: {}, paid: [], ledger: [], createdAt: T0, seenAt: T0 };
+    st.setItem('habblaud.wallets.v1', JSON.stringify({ v: 1, wallets: { 'world:a_1': entry, ana: entry } }));
+    st.setItem(WORLD_STORAGE_KEY, JSON.stringify({ v: 1, wallets: { bia: entry, 'world:a_2': entry } }));
+    const w = new Wallets(st);
+    expect([w.coins('ana'), w.coins('world:a_2'), w.coins('world:a_1'), w.coins('bia')]).toEqual([50, 50, 0, 0]);
   });
 });
 

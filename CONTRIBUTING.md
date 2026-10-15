@@ -56,6 +56,9 @@ Use o caminho do plugin alterado (`mod/habblaud-permissoes` ou `mod/habblaud-men
 - Para mudanças visuais, inclua uma captura de tela ou um GIF, se ajudar a mostrar o resultado. Faça as capturas no
   modo demonstração (`?mock=1` na URL ou `npm run demo`), que mostra só agentes fictícios.
 - Atualize a seção **Não lançado** do `CHANGELOG.md` quando a mudança trouxer algo visível para quem usa o Habblaud.
+- PRs que tocam `shared/world/` ou `server/world/` (Habblaud World) explicam o que muda no que sai do computador, e a
+  revisão confere a lista de [`docs/world/privacidade.md`](docs/world/privacidade.md) contra o código. Leia antes o
+  [`shared/world/README.md`](shared/world/README.md).
 - Não inclua dados pessoais, credenciais ou conteúdo privado de sessões em capturas, exemplos ou logs.
 
 Se algo não estiver claro, pergunte na issue relacionada antes de seguir por uma direção que possa mudar o comportamento do projeto.

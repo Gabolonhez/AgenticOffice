@@ -10,6 +10,165 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Habblaud World (em desenvolvimento, desligado por padrão)
+
+A base do Habblaud World, a cidade online onde cada Habblaud vira um prédio. Sem `HABBLAUD_WORLD_URL` o recurso fica
+desligado: nada aparece na interface e nada sai do computador (`HABBLAUD_WORLD=0` esconde até as rotas). O que pode
+sair e o que nunca sai está em [`docs/world/privacidade.md`](docs/world/privacidade.md); o README ganhou a seção
+**Habblaud World** completa, nos quatro idiomas.
+
+- **Ligar e testar:** `HABBLAUD_WORLD_URL` (só `https://` ou `wss://`), `HABBLAUD_WORLD=0` e `HABBLAUD_WORLD_DEV=1`,
+  que aceita um servidor do mundo local sem TLS em `http://127.0.0.1:<porta>` (o `npm run dev` já aceita) ou, de dentro
+  do Docker, em `http://host.docker.internal:<porta>`. O `docker-compose.yml` repassa as três variáveis e liga
+  `host.docker.internal` ao host (`extra_hosts` com `host-gateway`, inofensivo no macOS), e o `npm run docker:up`
+  termina dizendo se o World está ligado e para qual servidor. O build grava `dist/build.json` com o commit e se a
+  cópia estava modificada (vai na primeira mensagem da conexão do prédio).
+- **Conta:** **Configurações › Habblaud World** (depois de Acesso pelo celular). **Criar conta** (e-mail e senha de 12
+  caracteres ou mais, o resumo do que sai e do que nunca sai do computador, a linha dos dados verdadeiros e o aceite
+  obrigatório dos Termos de Uso e da Política de Privacidade; o desafio anti-robô é resolvido pelo próprio Habblaud) ou
+  **Já tenho conta**; código de 6 dígitos com reenvio; **Esqueci a senha**; **Dispositivos** (até 3, com revogar) e
+  sair. Na lista de espera, só o aviso, sem posição nem previsão, e o Habblaud aberto confere sozinho a cada 30 minutos
+  se o acesso foi liberado. O cartão **Conheça o Habblaud World** aparece uma vez, para quem ainda não tem conta. Tudo
+  só pelo próprio computador: nunca pela porta do celular, e o que age pela conta só com o acesso local (a trava do
+  terminal). O token do dispositivo fica em `~/.habblaud/world.json` (permissão 600; no Docker, no volume `/data`) e
+  nunca vai ao navegador, ao snapshot, aos logs nem à URL.
+- **Personagem:** nome de jogador, dica visual, o mesmo editor de aparência da gaveta do agente, 2 ou 3 traços de
+  personalidade (os que não combinam ficam desabilitados) e uma frase de apresentação da lista; dá para criar ainda na
+  lista de espera. Se a moderação trocar o nome, a seção pede um nome novo, que entra sem esperar os 30 dias.
+- **Visibilidade do prédio:** ao vivo ou discreto, fechado a visitas, esconder o país, tokens (só em faixas), placar,
+  compactações e **Avisar quando baterem na porta** (desligado por padrão).
+- **Conta e dados** (nova tela em Configurações › Habblaud World): o interruptor **Avisar por e-mail antes de retirar
+  meu prédio por inatividade**; **Baixar meus dados**, que salva `habblaud-world-dados.json` com o que o mundo guarda da
+  conta (uma vez por dia); e **Excluir conta** em três etapas: o que some e quando (o prédio e o perfil na hora; a
+  conta, os likes, os bloqueios, as denúncias feitas e os dispositivos do banco em 7 dias; dos backups, em até 30), a
+  confirmação, que manda um código ao e-mail, e o código. Com a conta excluída (daqui ou de outro computador), a conexão
+  do prédio fecha e o `world.json` some deste computador; a seção avisa que a conta foi excluída.
+- **Seu prédio no mundo:** com o acesso liberado e o personagem criado, o cartão **Seu prédio** mostra se o prédio está
+  conectado, reconectando, pausado ou fora do mundo (ou se ainda falta o personagem), quantos andares e agentes ele
+  tem, quando saiu a última remessa e, se o mundo recusar uma remessa, o motivo. Quando o servidor do mundo para o
+  prédio, o cartão diz por quê: **Atualize o Habblaud** (versão antiga), **Conectado em outro computador** (com
+  **Trazer para este computador**), conta suspensa ou banida (com **Recorrer por e-mail**, que abre um e-mail para
+  privacidade@habblaud.com com o id da conta no assunto) ou conta excluída. Um prédio marcado como **não verificado**
+  mostra o selo e **Contestar por e-mail**, e o mundo em manutenção aparece como **Em manutenção** (o Habblaud tenta de
+  novo sozinho, com espera). **Pausar** interrompe o envio na hora e apaga o prédio, guardando o lote; **Retomar**
+  acende de novo. **Sair do mundo** (em dois cliques, com a diferença para a pausa ao lado) retira o prédio na hora e
+  libera o lote; a conta e o personagem continuam, e **Voltar ao mundo** cria um prédio novo, em outro lote (sair em
+  outro computador também vale aqui). **Ver o que foi enviado** abre o JSON exato da última remessa, com o horário, o
+  tamanho em bytes, a resposta do mundo (com os bytes que ele contou) e um botão para copiar: é tudo o que saiu do
+  computador. O tema escolhido em **Aparência › Tema do escritório** também vale para o prédio (e o tema guardado para o
+  prédio vale para o escritório), e a barra do topo ganha o selo "🏙️ no mundo" / "⏸ pausado" / "⚠️ parado", que abre
+  a seção (some na barra apertada e no celular).
+- **O prédio sobe ao mundo:** com a conta liberada e o personagem criado, o Habblaud abre uma conexão (WebSocket) com o
+  servidor do mundo e manda o prédio ao vivo: um andar por sala com alguém presente e, por agente, só um id aleatório,
+  principal ou subagente, a ferramenta, o status, um nome sorteado e a aparência; mais o tema, as tarefas concluídas no
+  dia em faixa, os tokens do prédio arredondados (desligável) e, se você ligar, as compactações. Os ids dos andares e
+  dos agentes são aleatórios e trocam a cada 24 h (±6 h); caminhos, nomes de sala, títulos, atividades, modelo, branch,
+  conta e nomes editados nunca saem. Manda ao mudar (no máximo uma vez a cada 5 s), reconecta sozinho com espera
+  crescente (2 s a 60 s, também na manutenção do mundo) e para quando o servidor pede (conta suspensa, banida ou
+  excluída, versão antiga, conectada em outro lugar). Agentes do modo demonstração nunca sobem. As tarefas e as
+  compactações são contadas também com o prédio pausado ou sem conexão, e vão na remessa seguinte.
+- **A cidade (botão Mundo):** com a cena disponível (`meta.world.scene.available`), o botão **Mundo** ao lado do
+  Timelapse troca o escritório pela cidade do Habblaud World, em pixel art 3/4 no mesmo estilo: quarteirões de 6 lotes
+  com calçada, meio-fio, postes, árvores, faixas de pedestres e a praça central com a fonte, os bancos e o totem; lotes
+  vazios viram jardins (parque, lago, pomar, café). Cada prédio tem a altura dos projetos abertos (até 12 andares
+  desenhados, com placa "+N" acima disso), janelas acesas na proporção dos agentes trabalhando e piscando em âmbar as de
+  quem espera, o tema do dono (abóboras, teias e morcegos no Halloween; neve, luzes, festão e árvore no Natal), tudo
+  apagado com a tabuleta "Fechado" quando o prédio está fora, cor e acabamento pela semente do lote e a placa com a
+  bandeira, o nome do dono e os ❤️ likes. A fileira de baixo de cada quarteirão mostra a fachada com a vitrine e a
+  porta; a de cima, com a porta virada para o norte, mostra o telhado com a marquise da entrada e os fundos. À noite os
+  postes e as janelas acendem. Anda com setas/WASD (Shift corre) ou clicando (o A* do escritório); a câmera segue, com o
+  zoom de sempre e afastando até ver uns 200 prédios; perto de uma porta aparece **Entrar (E)** (veja "Visitar um
+  prédio", abaixo). Passar o mouse num prédio abre o cartão (dono, país, estado, andares até "24+", agentes trabalhando,
+  esperando e à toa ou "modo discreto", likes, "no mundo desde"); clicar num jogador abre o perfil (personagem, país,
+  traços, frase, prédio e likes recebidos). Os outros jogadores andam suaves, um pouco atrás, no ritmo em que as
+  posições chegam (5 por segundo para os 20 mais perto, 2,5 para os outros), com o nome em cima; quem para em cima de um
+  banco aparece sentado (você também), e ausente o seu personagem fica parado onde está. O minimapa no canto mostra os
+  quarteirões em volta, mais acesos quanto mais prédios ligados, e leva a câmera até onde você clicar. Esc ou
+  **Escritório** voltam, e reabrir a cidade volta exatamente onde você estava (o personagem, a câmera e o zoom, sem
+  piscar); Configurações continua aberta na cidade, e o escritório para de desenhar enquanto isso. A cena é carregada só
+  quando abre. **Pausado ou fora do mundo, seu prédio fica apagado, mas você pode andar pela cidade**: com a cena
+  aberta, a conexão leva só a primeira mensagem, o sinal de vida e os comandos da cena, nunca o pacote do prédio, e
+  fecha junto com a cena. Conta banida, suspensa ou excluída (ou o prédio parado por versão antiga ou por outro
+  computador): o botão Mundo some; ele também só aparece pela página do próprio computador (nunca pela porta do celular
+  nem sem o acesso só local).
+- **A cidade pelo servidor local:** com a cena aberta, o Habblaud pede ao servidor do mundo o pedaço da cidade em volta
+  do seu personagem (`view`) pela mesma conexão do prédio e repassa ao navegador por `GET /api/world/stream` (SSE: o
+  estado inteiro ao abrir, depois cada mudança na ordem); fechada a cena, avisa (`view.off`) e nada mais desce. Prédios
+  por chunk com revisão (um salto pede a área de novo), jogadores por perto, minimapa e a sua posição ficam só em
+  memória. Os comandos do personagem (`POST /api/world/cmd`: andar, perfil, entrar e sair de um prédio e os do social
+  leve) são conferidos campo a campo, no máximo 5 lotes por segundo e só o último passo de cada lote; no máximo 4 abas
+  com a cidade. Só pelo próprio computador e só pela própria página (nunca por outro site). A geometria da cidade
+  (lotes, quarteirões, portas, chunks e o que é caminhável) fica em `shared/world/city.ts`, a mesma do servidor do
+  mundo. O seu personagem entra na rua na posição que o servidor do mundo validou (na calçada da sua porta ou na praça).
+- **Visitar um prédio:** a até 2 tiles da porta de um prédio, **Entrar (E)** leva para dentro: o escritório do dono como
+  ele vê o dele, com o tema dele, as salas com os nomes fictícios do dia ("Projeto Ipê", "Projeto Jade"...) e os agentes
+  no status de agora (digitando, de mão levantada, de olho no terminal ou à toa, com a vida social simulada no seu
+  navegador), mudando na hora a cada pacote do dono. Você entra pelo elevador com o seu personagem e o crachá de
+  **visitante** e anda com o teclado ou clicando (sem sentar nas mesas). A faixa do topo diz de quem é o prédio, quantos
+  andares e agentes e se está em modo discreto (salas vazias, com a luz acesa) ou apagado (pausado: tudo escuro); o
+  painel ao lado lista as salas e os agentes (nome, papel, ferramenta e status; clicar abre um cartão com isso e nada
+  mais). Nada do que vem do mundo tem horário, então lá dentro não existe pipoca, teia, cronômetro nem "espera há X".
+  **Sair** pelo botão, pelo Esc ou pelo elevador da recepção volta para a calçada em frente à porta. No painel,
+  **Curtir** (com o total; de dentro, sem a distância da porta) e **Deixar um carimbo** (um dos 8 carimbos da portaria,
+  um por prédio por dia); o quadro de cortiça da recepção mostra o carimbo que você deixou hoje e, no seu próprio
+  prédio, os do "Enquanto você estava fora". Prédio fechado a visitas, cheio (20 visitantes), bloqueado ou longe demais
+  dá um aviso na tela. Nada que age no escritório existe na visita (nem terminal, gaveta, feed, avisos, pedidos de
+  permissão, mensagens, Meu dia, timelapse, editor ou renomear sala): ela roda num mundo à parte, que só fala com
+  `/api/world/*`, e nenhum passo seu lá dentro sai do computador. As moedinhas da vida social dos agentes visitados
+  ficam numa chave à parte e somem ao sair. **Ver como os outros veem** (no cartão **Seu prédio** e na porta do seu
+  prédio) entra no seu próprio prédio. **Para o dono:** o selo do topo ganha "👀 N" e o cartão **Seu prédio**, "N
+  visitantes agora" (só a contagem, nunca quem); o primeiro visitante de cada conexão dá o aviso "Alguém entrou no seu
+  prédio", desligável em **Configurações › Habblaud World › Avisar quando alguém visitar**. Pelo servidor local, o
+  stream da cena repassa o interior (`building`, `building.patch` com a revisão conferida e `resync {building}` num
+  salto) e os visitantes (`visitors`, também em `meta.world.building.visitors`).
+- **O social leve, sem nenhum texto livre:** na cidade, **L** (ou o botão ❤️ que aparece perto da porta, até 4 passos)
+  curte um prédio, e o coração voa até a placa, cujo contador pula; **G** abre a roda com os 10 cumprimentos (teclas 1–9
+  e 0, setas ou toque), para quem acabou de te cumprimentar, quem está no cartão ou quem está mais perto, com balões de
+  5 s sobre as cabeças (um não cobre o outro) e "G para responder" quando alguém te cumprimenta; **K** bate na porta de
+  quem aceita (até 2 passos). O cartão do jogador ganha **Cumprimentar**, **Bloquear** (em dois cliques: vocês deixam de
+  se ver) e **Denunciar** (motivos fixos, "Denúncia enviada"); o do prédio, **Curtir**, **Bater**, o código do prédio e
+  o selo "não verificado". No minimapa, **Ir para HB-XXXX** e **Visitar um prédio aleatório**, com um fade enquanto o
+  personagem vai até a calçada da porta. Na praça, o termômetro da meta coletiva da semana ("10 mil horas de agentes
+  trabalhando") e a placa da prefeitura (os prédios acesos e "a cidade consumiu ≈ X esta semana", só com 10 prédios ou
+  mais); batida a meta, 20 s de fogos (às vezes em forma de coração) e, para todos, bandeirinhas com lampadazinhas e o
+  enfeite da estação. Nas fachadas, o medidor de tokens do dia ao lado da porta, o letreiro com 5 intensidades pela
+  faixa da semana (de apagado a neon com faíscas) e confete quando um prédio termina o turno. No celular, os botões
+  ficam no canto, só com os ícones. **No escritório:** o chip da barra ganha "❤️ N hoje"; ao conectar, o cartão
+  **Enquanto você estava fora** (visitas, likes e os carimbos deixados na portaria, sem quem) aparece no canto e também
+  em **Seu prédio**, com o código do prédio para mandar a um amigo; **Avisar quando baterem na porta** (Visibilidade,
+  desligado por padrão) mostra "Alguém bateu na porta do seu prédio"; **Configurações › Habblaud World › Bloqueados**
+  lista quem você bloqueou, com **Desbloquear**. **Pelo servidor local:** `POST /api/world/summary/seen` e
+  `/api/world/unblock`, e os comandos `like`, `unlike`, `greet`, `block`, `unblock`, `report`, `stamp`, `teleport`,
+  `knock` e `summary.seen` na cena, conferidos campo a campo.
+- **Rotas locais** (`/api/world/*`, só pelo próprio computador): a conta (cadastro, código, entrar, sair, reenviar,
+  trocar a senha, personagem, visibilidade com o aviso de inatividade opcional, dispositivos); o prédio
+  (`POST /api/world/pause` e `/resume`, que param o envio antes de responder; `/leave`, que só responde depois de o
+  servidor do mundo retirar o prédio; `/join`, que pede a volta antes de reconectar; `PUT /api/world/theme`, com o
+  automático virando o tema do dia; `GET /api/world/last-uplink`, a última remessa guardada em
+  `~/.habblaud/world-last-uplink.json`, permissão 600); e a conta e os dados (`POST /api/world/delete-account` e
+  `/delete-account/confirm`, que só responde depois de fechar o prédio e apagar o `world.json`; `GET /api/world/export`,
+  o JSON da conta como anexo, só pela própria página). Uma retomada que o servidor do mundo não confirmou tenta de novo
+  com a espera da reconexão. O status do World e o snapshot (`meta.world.building`) trazem o resumo do prédio:
+  conectado, pausado, fora do mundo, parado, andares, agentes e a última remessa.
+- **Protocolo aberto e transparência:** `shared/world/protocol.ts` e `schema.json` definem tudo o que o Habblaud troca
+  com o World (a Fase 4 acrescenta os avisos da porta, os visitantes do dono e o `resync` do prédio; a Fase 5, os
+  nomes do social leve: carimbos, metas da cidade, likes do dia, o resumo "enquanto você estava fora", bater na porta e
+  o código do prédio; a Fase 6, o `goodbye` `deleted`, o erro `maintenance`, a recusa `implausible` do pacote, o
+  `notifyInactivity` da visibilidade, o selo `unverified` do prédio e os formatos da exclusão e da exportação); as
+  regras do nome de jogador, os 14 traços, as 20 frases de apresentação, os 10 cumprimentos e os 60 nomes fictícios de
+  andar ("Projeto Ipê", "Projeto Jade"...) ficam em `shared/world/`. `docs/world/privacidade.md` lista cada campo do
+  pacote e da conexão, com um teste que confere a página contra o `schema.json`; os testes da projeção conferem cada
+  chave e que nenhum texto do escritório aparece no pacote. O aviso sobre dados verdadeiros, para pessoas e agentes de
+  IA, está no `CLAUDE.md`, no `AGENTS.md`, no `shared/world/README.md` e nos arquivos do World, e o `CONTRIBUTING.md`
+  tem a regra de revisão de PRs que mexem nele.
+- **Modo demonstração:** `?mock=1&world=logged_out` (ou `waiting`, `approved`) simula o servidor (o código é 123456),
+  com o prédio e a remessa de exemplo de `docs/world/privacidade.md`; `?mock=1&world=approved&scene=city` abre uma
+  cidade de mentira (20 prédios, o seu no lote (3,1), 5 pessoas andando e uma sentada num banco da praça; `&perf=N`
+  enche N lotes), com prédios para visitar (ao vivo, discreto e apagado) e o social leve (bots que se cumprimentam e
+  respondem, a meta a 80 % e, com `&fireworks=1`, um botão de teste dos fogos). `npm run shots:world` refaz as capturas
+  `docs/screenshots/world-predio.png`, `world-enviado.png`, `world-cidade.png`, `world-cartao.png`, `world-visita.png`,
+  `world-visita-painel.png`, `world-social.png` e `world-praca.png`.
+
 ## [0.11.0] - 2026-10-13
 
 Para atualizar: `git pull` e `npm run docker:up` (ele também atualiza o mod do Habblaud nas contas). O acesso pelo

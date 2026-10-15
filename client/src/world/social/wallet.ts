@@ -3,7 +3,10 @@
 //
 // Fica no navegador (localStorage), por agente: cada navegador tem a sua economia (as apostas são
 // sorteadas na simulação local). Sem localStorage (testes, aba anônima bloqueada), só em memória.
+// Os agentes de um prédio do mundo visitado (ids `world:`, shared/world/office-from-world.ts) ficam numa chave à
+// parte (WORLD_STORAGE_KEY), apagada ao sair da visita: a visita não mexe na economia do escritório local.
 import { tr } from '../../../../shared/i18n';
+import { isWorldId } from '../../../../shared/world/office-from-world';
 
 /** Saldo de quem chega ao escritório. */
 export const START_COINS: Readonly<Record<'main' | 'sub', number>> = { main: 100, sub: 30 };
@@ -15,6 +18,8 @@ export const DELIVERY_REWARD = 15;
 export const TURN_REWARD = 5;
 
 const STORAGE_KEY = 'habblaud.wallets.v1';
+/** Carteiras da visita a um prédio do mundo (ids `world:`). */
+export const WORLD_STORAGE_KEY = 'habblaud:world-wallet';
 const LEDGER_MAX = 12;
 const PAID_MAX = 300;
 /** Carteiras de agentes que não aparecem há mais que isso são esquecidas. */
@@ -56,6 +61,27 @@ export interface WalletAgent {
 export interface StorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
+  removeItem?(key: string): void;
+}
+
+/** De que economia é a carteira: a do escritório local ou a da visita a um prédio do mundo. */
+type Part = 'office' | 'world';
+const PARTS: readonly Part[] = ['office', 'world'];
+const KEYS: Readonly<Record<Part, string>> = { office: STORAGE_KEY, world: WORLD_STORAGE_KEY };
+const partOf = (id: string): Part => (isWorldId(id) ? 'world' : 'office');
+
+/**
+ * Apaga as carteiras da visita guardadas no navegador (ao sair do prédio). Chame depois de descartar o `Sim` da
+ * visita: ele grava as carteiras ao ser trocado.
+ */
+export function clearWorldWallets(storage: StorageLike | null): void {
+  if (!storage) return;
+  try {
+    if (storage.removeItem) storage.removeItem(WORLD_STORAGE_KEY);
+    else storage.setItem(WORLD_STORAGE_KEY, '');
+  } catch {
+    // bloqueado: o que ficou é esquecido pelo prune (FORGET_MS)
+  }
 }
 
 /** localStorage, se existir e funcionar (aba anônima/bloqueada lança ao acessar). */
@@ -76,7 +102,8 @@ function taskKey(t: { id: string; title: string }): string {
 
 export class Wallets {
   private map = new Map<string, WalletEntry>();
-  private dirty = false;
+  /** O que mudou desde a última gravação, por economia: cada uma só regrava a própria chave. */
+  private dirty: Record<Part, boolean> = { office: false, world: false };
 
   constructor(private readonly storage: StorageLike | null) {
     this.load();
@@ -100,7 +127,7 @@ export class Wallets {
       if (w.name !== a.name) w.name = a.name;
       if (now - w.seenAt > 60_000) {
         w.seenAt = now;
-        this.dirty = true;
+        this.touch(a.id);
       }
       return { entry: w, created: false };
     }
@@ -116,7 +143,7 @@ export class Wallets {
       w.earned += v;
       this.log(w, { at: now, delta: v, icon: '✅', text: done.length === 1 ? tr('1 tarefa já concluída') : tr('{0} tarefas já concluídas', [done.length]) });
     }
-    this.dirty = true;
+    this.touch(a.id);
     return { entry: w, created: true };
   }
 
@@ -136,7 +163,7 @@ export class Wallets {
       total += TASK_REWARD;
       this.log(w, { at: now, delta: TASK_REWARD, icon: '✅', text: tr('Tarefa concluída: {0}', [t.title]) });
     }
-    if (total) this.dirty = true;
+    if (total) this.touch(a.id);
     return total;
   }
 
@@ -147,7 +174,7 @@ export class Wallets {
     w.coins += amount;
     w.earned += amount;
     this.log(w, { at: now, delta: amount, icon, text });
-    this.dirty = true;
+    this.touch(id);
     return amount;
   }
 
@@ -165,7 +192,8 @@ export class Wallets {
     to.coins += v;
     this.log(from, { at: now, delta: -v, icon, text: tr('Perdeu {0} para {1}', [what, to.name]) });
     this.log(to, { at: now, delta: v, icon, text: tr('Ganhou {0} de {1}', [what, from.name]) });
-    this.dirty = true;
+    this.touch(fromId);
+    this.touch(toId);
     return v;
   }
 
@@ -178,28 +206,43 @@ export class Wallets {
     l.losses++;
     (w.vs[loserId] ??= [0, 0])[0]++;
     (l.vs[winnerId] ??= [0, 0])[1]++;
-    this.dirty = true;
+    this.touch(winnerId);
+    this.touch(loserId);
   }
 
-  /** Grava no navegador se algo mudou (chamado com baixa frequência). */
+  /**
+   * Grava no navegador o que mudou (chamado com baixa frequência), cada economia na sua chave: a visita a um prédio
+   * do mundo nunca regrava a do escritório (nem com uma cópia velha dela) e vice-versa.
+   */
   save(now: number): void {
-    if (!this.dirty) return;
-    this.dirty = false;
-    this.prune(now);
-    if (!this.storage) return;
-    try {
-      this.storage.setItem(STORAGE_KEY, JSON.stringify({ v: 1, wallets: Object.fromEntries(this.map) }));
-    } catch {
-      // cota cheia/bloqueado: segue só em memória
+    for (const part of PARTS) {
+      if (!this.dirty[part]) continue;
+      this.dirty[part] = false;
+      this.prune(now, part);
+      if (!this.storage) continue;
+      const wallets = Object.fromEntries([...this.map].filter(([id]) => partOf(id) === part));
+      try {
+        this.storage.setItem(KEYS[part], JSON.stringify({ v: 1, wallets }));
+      } catch {
+        // cota cheia/bloqueado: segue só em memória
+      }
     }
   }
 
-  /** Esquece carteiras de quem não aparece há dias (e limita o total). */
-  prune(now: number): void {
-    for (const [id, w] of this.map) if (now - w.seenAt > FORGET_MS) this.map.delete(id);
-    if (this.map.size <= MAX_WALLETS) return;
-    const old = [...this.map.entries()].sort((a, b) => a[1].seenAt - b[1].seenAt);
-    for (const [id] of old.slice(0, this.map.size - MAX_WALLETS)) this.map.delete(id);
+  /** Esquece carteiras de quem não aparece há dias (e limita o total de cada economia). */
+  prune(now: number, only?: Part): void {
+    for (const part of only ? [only] : PARTS) {
+      const entries = [...this.map].filter(([id]) => partOf(id) === part);
+      for (const [id, w] of entries) if (now - w.seenAt > FORGET_MS) this.map.delete(id);
+      const left = entries.filter(([id]) => this.map.has(id));
+      if (left.length <= MAX_WALLETS) continue;
+      const old = left.sort((a, b) => a[1].seenAt - b[1].seenAt);
+      for (const [id] of old.slice(0, left.length - MAX_WALLETS)) this.map.delete(id);
+    }
+  }
+
+  private touch(id: string): void {
+    this.dirty[partOf(id)] = true;
   }
 
   private log(w: WalletEntry, e: LedgerEntry): void {
@@ -208,12 +251,17 @@ export class Wallets {
   }
 
   private load(): void {
+    for (const part of PARTS) this.loadPart(part);
+  }
+
+  private loadPart(part: Part): void {
     if (!this.storage) return;
     try {
-      const raw = this.storage.getItem(STORAGE_KEY);
+      const raw = this.storage.getItem(KEYS[part]);
       if (!raw) return;
       const j = JSON.parse(raw) as { v?: number; wallets?: Record<string, Partial<WalletEntry>> };
       for (const [id, w] of Object.entries(j.wallets ?? {})) {
+        if (partOf(id) !== part) continue; // cada chave só com a sua economia
         if (!w || typeof w.coins !== 'number' || !Number.isFinite(w.coins)) continue;
         this.map.set(id, {
           name: typeof w.name === 'string' ? w.name : id,

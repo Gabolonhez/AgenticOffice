@@ -165,6 +165,7 @@ interface Harness {
   localBase: string;
   permissionCalls: string[];
   ptyCalls: string[];
+  worldCalls: string[];
   spawn: SpawnService;
   close: () => Promise<void>;
 }
@@ -197,6 +198,7 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
   hub.start();
   const permissionCalls: string[] = [];
   const ptyCalls: string[] = [];
+  const worldCalls: string[] = [];
   const spawn = new SpawnService();
   const api = createApiHandler({
     office,
@@ -223,6 +225,11 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
     },
     renameRoom: () => 'sala',
     remote: { is: isRemoteRequest, allows: (f) => allowSet.has(f) },
+    world: (req, res, url) => {
+      req.resume();
+      worldCalls.push(`${req.method} ${url.pathname}`);
+      sendJson(res, 200, { ok: true });
+    },
   });
   const guard = createRequestGuard();
   const gate = createRemoteGate({ config: CFG, sessions: new RemoteSessions(SECRET, CFG), secure: false });
@@ -256,6 +263,7 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
     remoteBase: `http://127.0.0.1:${(remote.address() as AddressInfo).port}`,
     permissionCalls,
     ptyCalls,
+    worldCalls,
     spawn,
     close,
   };
@@ -330,6 +338,51 @@ describe('porta remota', () => {
     // Na porta local, o hook e o terminal interativo seguem como antes.
     expect((await request(s.localBase, '/api/permissions', { method: 'POST', body: {} })).status).toBe(200);
     expect((await request(s.localBase, '/api/pty')).status).toBe(200);
+  });
+
+  it('Habblaud World: nenhuma rota pela porta do celular, nem logado com tudo liberado e Host imitando localhost', async () => {
+    const s = await start(['permissions', 'messages', 'terminal', 'spawn']);
+    const cookie = await login(s.remoteBase);
+    const headers = { Cookie: cookie, Host: 'localhost' };
+    const routes: Array<[string, string]> = [
+      ['GET', '/api/world/status'],
+      ['POST', '/api/world/register'],
+      ['POST', '/api/world/verify'],
+      ['POST', '/api/world/login'],
+      ['POST', '/api/world/logout'],
+      ['POST', '/api/world/resend'],
+      ['POST', '/api/world/password/forgot'],
+      ['POST', '/api/world/password/reset'],
+      ['PUT', '/api/world/character'],
+      ['PUT', '/api/world/visibility'],
+      ['GET', '/api/world/devices'],
+      ['POST', '/api/world/devices/d1/revoke'],
+      ['PUT', '/api/world/theme'],
+      ['POST', '/api/world/pause'],
+      ['POST', '/api/world/resume'],
+      ['GET', '/api/world/last-uplink'],
+      ['POST', '/api/world/leave'],
+      ['POST', '/api/world/join'],
+      ['GET', '/api/world/stream'],
+      ['POST', '/api/world/cmd'],
+      ['POST', '/api/world/delete-account'],
+      ['POST', '/api/world/delete-account/confirm'],
+      ['GET', '/api/world/export'],
+      ['POST', '/api/world/summary/seen'],
+      ['POST', '/api/world/unblock'],
+    ];
+    for (const [method, path] of routes) {
+      const r = await request(s.remoteBase, path, { method, headers, ...(method === 'GET' ? {} : { body: {} }) });
+      expect(r.status, `${method} ${path}`).toBe(403);
+      expect(JSON.parse(r.body).error.code).toBe('local_only');
+    }
+    expect(s.worldCalls).toEqual([]);
+    expect(JSON.parse((await request(s.remoteBase, '/api/access', { headers })).body).world).toBe(false);
+    // Na porta local, com Host local, as rotas chegam ao Habblaud World.
+    expect((await request(s.localBase, '/api/world/status')).status).toBe(200);
+    expect((await request(s.localBase, '/api/world/status', { headers: { Host: '192.168.0.10:4747' } })).status).toBe(403);
+    expect(s.worldCalls).toEqual(['GET /api/world/status']);
+    expect(JSON.parse((await request(s.localBase, '/api/access')).body).world).toBe(true);
   });
 
   it('novo agente: só com spawn liberado no celular; o auxiliar do host nunca pela porta remota', async () => {
@@ -531,13 +584,15 @@ describe('GET /api/access (o que a página pode fazer)', () => {
       messages: false,
       terminal: false,
       spawn: false,
+      world: false,
     });
-    expect(JSON.parse((await request(h.localBase, '/api/access')).body)).toEqual({ remote: false, local: true, permissions: true, messages: true, terminal: false, spawn: true });
+    expect(JSON.parse((await request(h.localBase, '/api/access')).body)).toEqual({ remote: false, local: true, permissions: true, messages: true, terminal: false, spawn: true, world: true });
     expect(JSON.parse((await request(h.localBase, '/api/access', { headers: { Host: '192.168.1.5:4747' } })).body)).toMatchObject({
       local: false,
       permissions: false,
       messages: false,
       spawn: false,
+      world: false,
     });
     expect((await request(h.remoteBase, '/api/access')).status).toBe(401);
   });

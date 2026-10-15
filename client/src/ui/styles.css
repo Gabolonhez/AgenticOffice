@@ -9029,3 +9029,1971 @@ html.is-replay #world {
     box-shadow: 0 -12px 24px rgba(5, 7, 12, 0.35);
   }
 }
+
+/* ------------------------------------------------------------------ Habblaud World (ui/world/)
+   Seção em Configurações (conta, lista de espera, personagem, visibilidade, dispositivos) e o cartão de convite.
+   Mesmas cores do resto do painel (tokens do .ui-root); o popover já ocupa a largura do celular com as margens. */
+
+.ui-world {
+  scroll-margin: 8px;
+}
+
+.ui-world.is-highlight {
+  animation: ui-help-flash 1.6s ease-out;
+}
+
+.ui-world h3:focus {
+  outline: none;
+}
+
+.ui-world__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.ui-world__top h3 {
+  margin-bottom: 0;
+}
+
+.ui-world__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--ui-line-strong);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ui-muted);
+  white-space: nowrap;
+}
+
+.ui-world__chip:empty {
+  display: none;
+}
+
+.ui-world__chip::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.ui-world__chip.is-waiting {
+  color: var(--st-waiting);
+  border-color: color-mix(in srgb, var(--st-waiting) 40%, transparent);
+}
+
+.ui-world__chip.is-approved {
+  color: var(--st-working);
+  border-color: color-mix(in srgb, var(--st-working) 40%, transparent);
+}
+
+.ui-world__chip.is-logged_out {
+  color: var(--ui-accent);
+  border-color: rgba(124, 200, 255, 0.35);
+}
+
+.ui-world__body,
+.ui-world__stack,
+.ui-world__form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ui-world__body {
+  padding: 4px 0 2px;
+}
+
+.ui-world__stack > *,
+.ui-world__form > * {
+  min-width: 0;
+}
+
+.ui-world__flash {
+  margin: 2px 0 6px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--st-working) 35%, transparent);
+  background: color-mix(in srgb, var(--st-working) 9%, transparent);
+  font-size: 12px;
+  color: color-mix(in srgb, var(--st-working) 60%, #fff);
+}
+
+.ui-world__head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.ui-world__back {
+  font-size: 11.5px;
+  text-decoration: none;
+}
+
+.ui-world__back:hover {
+  text-decoration: underline;
+}
+
+.ui-world__title {
+  margin: 0;
+  font: 700 14px/1.25 var(--font-ui);
+}
+
+.ui-world__lead {
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ui-world__privacy {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--ui-accent-soft);
+  border: 1px solid rgba(124, 200, 255, 0.25);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ui-world__notice {
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--st-waiting) 38%, transparent);
+  background: color-mix(in srgb, var(--st-waiting) 9%, transparent);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.ui-world:has(.ui-world__chip.is-approved) .ui-world__notice {
+  border-color: color-mix(in srgb, var(--st-working) 38%, transparent);
+  background: color-mix(in srgb, var(--st-working) 9%, transparent);
+}
+
+.ui-world__error {
+  font-size: 12px;
+  line-height: 1.4;
+  color: #ff9a8a;
+}
+
+.ui-world__warn {
+  font-size: 11.5px;
+  color: var(--st-waiting);
+}
+
+.ui-world__demo {
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px dashed var(--ui-line-strong);
+  font: 600 11.5px/1.4 var(--font-mono);
+  color: var(--ui-muted);
+}
+
+.ui-world__email {
+  overflow-wrap: anywhere;
+}
+
+.ui-world__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Campos */
+.ui-world__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ui-world__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ui-text);
+}
+
+.ui-world__input,
+.ui-world__select {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--ui-line-strong);
+  background: rgba(0, 0, 0, 0.25);
+  font: 500 13px/1 var(--font-ui);
+  color: var(--ui-text);
+}
+
+.ui-world__select {
+  padding-right: 4px;
+}
+
+.ui-world__select option {
+  background: #161a23;
+  color: var(--ui-text);
+}
+
+.ui-world__code {
+  max-width: 150px;
+  font: 700 17px/1 var(--font-mono);
+  letter-spacing: 0.3em;
+}
+
+.ui-world__input::placeholder {
+  color: var(--ui-faint);
+  opacity: 0.55;
+}
+
+.ui-root .ui-world__input:focus-visible,
+.ui-root .ui-world__select:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 1px;
+}
+
+.ui-world__peek {
+  align-self: flex-start;
+  font-size: 11.5px;
+}
+
+.ui-world__accept {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.ui-world__checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 1px 0 0;
+  accent-color: #2f7fd1;
+}
+
+/* Resumo de privacidade (tela do cadastro) */
+.ui-world__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 11px;
+  border-radius: 9px;
+  background: var(--ui-bg-soft);
+  border: 1px solid var(--ui-line-strong);
+  box-shadow: inset 3px 0 0 var(--ui-accent);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.ui-world__summary-title {
+  margin: 0;
+  font: 600 12px/1.2 var(--font-ui);
+  color: var(--ui-text);
+}
+
+.ui-world__official {
+  color: var(--ui-text);
+}
+
+.ui-world__key {
+  font-weight: 600;
+  color: var(--ui-text);
+}
+
+.ui-world__list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--ui-muted);
+}
+
+.ui-world__list strong {
+  color: var(--ui-text);
+}
+
+.ui-world__summary > .ui-link-btn {
+  align-self: flex-start;
+}
+
+.ui-world__truth {
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--lv-crit) 35%, transparent);
+  background: color-mix(in srgb, var(--lv-crit) 8%, transparent);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+/* Conta: lote do prédio, personagem, navegação */
+.ui-world__lot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 2px dashed var(--ui-line-strong);
+  background: repeating-linear-gradient(135deg, transparent 0 8px, rgba(255, 255, 255, 0.025) 8px 16px);
+}
+
+.ui-world__lot-art {
+  flex: none;
+  width: 30px;
+  height: 40px;
+  /* Prédio apagado em pixels: corpo, janelas e porta. */
+  background:
+    linear-gradient(var(--ui-faint), var(--ui-faint)) 12px 32px / 6px 8px no-repeat,
+    linear-gradient(rgba(124, 200, 255, 0.35), rgba(124, 200, 255, 0.35)) 6px 8px / 6px 4px no-repeat,
+    linear-gradient(rgba(124, 200, 255, 0.35), rgba(124, 200, 255, 0.35)) 18px 8px / 6px 4px no-repeat,
+    linear-gradient(rgba(124, 200, 255, 0.2), rgba(124, 200, 255, 0.2)) 6px 18px / 6px 4px no-repeat,
+    linear-gradient(rgba(124, 200, 255, 0.2), rgba(124, 200, 255, 0.2)) 18px 18px / 6px 4px no-repeat,
+    linear-gradient(rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.09)) 0 0 / 30px 40px no-repeat;
+  image-rendering: pixelated;
+}
+
+.ui-world__lot-text {
+  font: 600 12.5px/1.35 var(--font-ui);
+  color: var(--ui-muted);
+}
+
+.ui-world__player {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.ui-world__player-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ui-world__player-name {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.ui-world__player-intro {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--ui-muted);
+}
+
+.ui-world__traits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ui-world__trait {
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--ui-line);
+  background: var(--ui-bg-soft);
+  font-size: 11px;
+}
+
+.ui-world__nav {
+  display: flex;
+  flex-direction: column;
+  border-radius: 9px;
+  border: 1px solid var(--ui-line);
+  overflow: hidden;
+}
+
+.ui-world__navrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 6px 10px;
+  background: var(--ui-bg-soft);
+}
+
+.ui-world__navrow + .ui-world__navrow {
+  border-top: 1px solid var(--ui-line);
+}
+
+.ui-world__navrow:hover {
+  background: var(--ui-bg-hover);
+}
+
+.ui-world__navval {
+  font-size: 11.5px;
+  color: var(--ui-muted);
+  text-align: right;
+}
+
+.ui-world__chev {
+  font-size: 16px;
+  color: var(--ui-faint);
+}
+
+.ui-world__signout .ui-set {
+  padding: 2px 0;
+}
+
+.ui-world__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+/* Personagem */
+.ui-world__character .ui-char__top {
+  align-items: center;
+}
+
+.ui-world__character .ui-char__groups {
+  margin-top: 0;
+}
+
+.ui-world__traitset legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ui-world__count {
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--ui-faint);
+}
+
+.ui-world__traitopts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ui-world__trait-opt {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--ui-line-strong);
+  background: var(--ui-bg-soft);
+  font-size: 12px;
+  color: var(--ui-text);
+}
+
+.ui-world__trait-opt:hover {
+  background: var(--ui-bg-hover);
+}
+
+.ui-world__trait-opt[aria-pressed='true'] {
+  border-color: rgba(124, 200, 255, 0.6);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent);
+  font-weight: 600;
+}
+
+.ui-world__trait-opt[aria-disabled='true'] {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Dispositivos */
+.ui-world__devices {
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-world__device + .ui-world__device {
+  border-top: 1px solid var(--ui-line);
+}
+
+.ui-world__device-name {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ui-world__tag {
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--ui-accent-soft);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ui-accent);
+}
+
+/* Textos do World com "C" maiúsculo e dígitos ("Criar conta", "Confirmar e-mail"): na Pixelify o "C" parece "O",
+   então os botões principais e o título do cartão usam a fonte do corpo. */
+.ui-world .ui-btn--primary,
+.ui-world-invite .ui-btn--primary {
+  font: 600 13px/1 var(--font-ui);
+  letter-spacing: 0;
+}
+
+/* Botões: confirmação em dois cliques e "enviando" */
+.ui-btn.is-danger {
+  border-color: color-mix(in srgb, var(--lv-crit) 55%, transparent);
+  background: color-mix(in srgb, var(--lv-crit) 14%, transparent);
+  color: color-mix(in srgb, var(--lv-crit) 55%, #fff);
+}
+
+.ui-btn[aria-busy='true'] {
+  cursor: progress;
+  opacity: 0.75;
+}
+
+.ui-btn[aria-busy='true']::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: currentColor;
+  animation: ui-blink 0.8s steps(2, jump-none) infinite;
+}
+
+/* Cartão de convite ("Conheça o Habblaud World"): no meio da área livre, uma vez só. */
+.ui-world-invite {
+  position: fixed;
+  z-index: 12;
+  top: calc((var(--free-top) + 100vh - var(--free-bottom)) / 2);
+  left: calc((var(--free-left) + 100vw - var(--free-right)) / 2);
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - var(--free-top) - var(--free-bottom));
+  overflow-y: auto;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 22px 18px;
+  border-radius: 14px;
+  background: var(--ui-bg-solid);
+  border: 1px solid var(--ui-line-strong);
+  box-shadow:
+    0 30px 70px rgba(5, 7, 12, 0.55),
+    inset 0 3px 0 rgba(124, 200, 255, 0.35);
+  animation: ui-empty-in 0.4s var(--ease);
+}
+
+.ui-world-invite__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ui-world-invite__badge {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent);
+}
+
+.ui-world-invite__icon {
+  width: 24px;
+  height: 24px;
+}
+
+.ui-world-invite__title {
+  margin: 0;
+  font: 700 18px/1.25 var(--font-ui);
+}
+
+.ui-world-invite__perks {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ui-world-invite__perks li {
+  position: relative;
+  padding-left: 16px;
+}
+
+.ui-world-invite__perks li::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--st-working);
+}
+
+.ui-world-invite__privacy {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--ui-accent-soft);
+  border: 1px solid rgba(124, 200, 255, 0.25);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ui-world-invite__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.ui-world-invite__actions .ui-link-btn {
+  margin-left: auto;
+}
+
+@media (max-width: 600px) {
+  .ui-world-invite {
+    padding: 16px 16px 14px;
+  }
+
+  .ui-world-invite__actions .ui-link-btn {
+    margin-left: 0;
+  }
+
+  .ui-world__actions .ui-btn--primary {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}
+
+/* ------------------------------------------------------------------ Habblaud World: prédio no mundo (Fase 2)
+   Cartão "Seu prédio" na seção (conta aprovada), a janela "Ver o que foi enviado", a dica do tema em Aparência e o
+   chip da barra do topo. A interface só tem o tema escuro: as cores saem dos tokens do .ui-root. */
+
+.ui-world__building {
+  --bld: var(--st-working);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 11px 12px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--bld) 34%, transparent);
+  background: color-mix(in srgb, var(--bld) 6%, var(--ui-bg-soft));
+  box-shadow: inset 3px 0 0 var(--bld);
+}
+
+.ui-world__building.is-reconnecting {
+  --bld: var(--st-waiting);
+}
+
+.ui-world__building.is-paused,
+.ui-world__building.is-no_player {
+  --bld: var(--st-idle);
+}
+
+.ui-world__building.is-no_player {
+  border-style: dashed;
+}
+
+/* Parado pelo servidor do mundo (atualize, outro computador, conta suspensa...): vermelho; fora do mundo: cinza. */
+.ui-world__building.is-stopped {
+  --bld: var(--lv-crit);
+}
+
+.ui-world__building.is-left {
+  --bld: var(--st-idle);
+  border-style: dashed;
+}
+
+/* "Sair do mundo": separado das ações do dia a dia por uma linha, com a explicação em cima do botão. */
+.ui-world__leave {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ui-line);
+}
+
+.ui-world__leave .ui-set__hint {
+  line-height: 1.45;
+}
+
+/* Fase 6: recurso por e-mail (conta suspensa ou banida, prédio "não verificado") e o selo no cartão. */
+.ui-world__appeal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ui-world__appeal .ui-set__hint {
+  line-height: 1.45;
+}
+
+.ui-world__appeal a.ui-btn {
+  text-decoration: none;
+}
+
+.ui-world__unverified {
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--st-waiting) 40%, transparent);
+  background: color-mix(in srgb, var(--st-waiting) 9%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* O mundo em manutenção: aviso âmbar no topo da seção (o prédio tenta de novo sozinho). */
+.ui-world__maint {
+  padding: 9px 11px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--st-waiting) 45%, transparent);
+  background: color-mix(in srgb, var(--st-waiting) 12%, transparent);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+/* "Conta e dados": blocos separados por uma linha; excluir a conta, com a borda vermelha à esquerda. */
+.ui-world__acct {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ui-line);
+}
+
+.ui-world__acct-title {
+  margin: 0;
+  font: 600 12.5px/1.2 var(--font-ui);
+  color: var(--ui-text);
+}
+
+.ui-world__acct--danger {
+  padding-left: 10px;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--lv-crit) 55%, transparent);
+}
+
+.ui-world__acct .ui-set {
+  padding: 2px 0;
+}
+
+.ui-world__bhead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* Prédio em pixels: aceso (janelas amarelas) só com a conexão aberta. */
+.ui-world__bart {
+  --win: rgba(124, 200, 255, 0.22);
+  flex: none;
+  width: 30px;
+  height: 40px;
+  background:
+    linear-gradient(var(--ui-faint), var(--ui-faint)) 12px 32px / 6px 8px no-repeat,
+    linear-gradient(var(--win), var(--win)) 6px 8px / 6px 4px no-repeat,
+    linear-gradient(var(--win), var(--win)) 18px 8px / 6px 4px no-repeat,
+    linear-gradient(var(--win), var(--win)) 6px 18px / 6px 4px no-repeat,
+    linear-gradient(var(--win), var(--win)) 18px 18px / 6px 4px no-repeat,
+    linear-gradient(rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.1)) 0 0 / 30px 40px no-repeat;
+  image-rendering: pixelated;
+}
+
+.ui-world__building.is-connected .ui-world__bart {
+  --win: #ffd36b;
+  filter: drop-shadow(0 0 5px rgba(255, 211, 107, 0.35));
+}
+
+.ui-world__btitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.ui-world__btitle h4 {
+  margin: 0;
+  font: 700 14px/1.25 var(--font-ui);
+}
+
+.ui-world__bstate {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--bld) 40%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--bld) 75%, #fff);
+  white-space: nowrap;
+}
+
+.ui-world__bstate::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--bld);
+}
+
+.ui-world__building.is-connected .ui-world__bstate::before {
+  box-shadow: 0 0 6px var(--bld);
+}
+
+.ui-world__building.is-reconnecting .ui-world__bstate::before {
+  animation: ui-blink 1s steps(2, jump-none) infinite;
+}
+
+.ui-world__bdesc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ui-muted);
+  overflow-wrap: anywhere;
+}
+
+.ui-world__bstats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ui-world__bstats li {
+  padding: 1px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--ui-line);
+  background: rgba(0, 0, 0, 0.18);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ui-world__brejected {
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--lv-crit) 38%, transparent);
+  background: color-mix(in srgb, var(--lv-crit) 9%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ui-world__brejected strong {
+  color: color-mix(in srgb, var(--lv-crit) 55%, #fff);
+}
+
+.ui-world__building > .ui-set__hint {
+  line-height: 1.45;
+}
+
+/* Dica do tema em Aparência (o tema também vai para o prédio). */
+.ui-world-theme {
+  display: block;
+  margin-top: 2px;
+}
+
+.ui-world-theme .ui-world__error {
+  font-size: inherit;
+}
+
+/* Janela "Ver o que foi enviado": cartão central no computador, quase a tela toda no celular. */
+.ui-world-sent {
+  width: min(620px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 48px);
+  padding: 0;
+  border: 1px solid var(--ui-line-strong);
+  border-radius: 14px;
+  background: var(--ui-bg-solid);
+  color: var(--ui-text);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+  font: 13px/1.4 var(--font-ui);
+}
+
+.ui-world-sent::backdrop {
+  background: rgba(5, 8, 14, 0.72);
+  backdrop-filter: blur(3px);
+}
+
+.ui-world-sent[open] {
+  animation: ui-deliv-in 0.22s ease-out;
+}
+
+.ui-world-sent__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
+}
+
+.ui-world-sent__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ui-world-sent__title {
+  margin: 0;
+  font: 700 16px/1.25 var(--font-ui);
+}
+
+.ui-world-sent__content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ui-world-sent__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ui-world-sent__meta li {
+  padding: 1px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--ui-line);
+  background: var(--ui-bg-soft);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-world-sent__ack {
+  --ack: var(--st-idle);
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--ack) 38%, transparent);
+  background: color-mix(in srgb, var(--ack) 9%, transparent);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ui-world-sent__ack strong {
+  color: color-mix(in srgb, var(--ack) 60%, #fff);
+}
+
+.ui-world-sent__ack.is-accepted {
+  --ack: var(--st-working);
+}
+
+.ui-world-sent__ack.is-rejected {
+  --ack: var(--lv-crit);
+}
+
+.ui-world-sent__lead {
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ui-world-sent__json {
+  max-height: min(52vh, 460px);
+  min-height: 120px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 8px;
+  border: 1px solid var(--ui-line-strong);
+  background: rgba(0, 0, 0, 0.32);
+  font: 500 11.5px/1.5 var(--font-mono);
+  color: #cfe3ff;
+  white-space: pre;
+  tab-size: 2;
+  user-select: text;
+}
+
+.ui-root .ui-world-sent__json:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 1px;
+}
+
+/* Chip da barra do topo: discreto como o número da versão; verde aceso, cinza pausado, âmbar reconectando. */
+.ui-world-chip {
+  --chip: var(--st-working);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px 0 5px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--chip) 32%, transparent);
+  background: color-mix(in srgb, var(--chip) 10%, transparent);
+  font: 600 10.5px/1 var(--font-ui);
+  color: color-mix(in srgb, var(--chip) 70%, #fff);
+  white-space: nowrap;
+  transition: background-color 0.15s;
+}
+
+.ui-world-chip:hover {
+  background: color-mix(in srgb, var(--chip) 20%, transparent);
+}
+
+.ui-world-chip.is-paused {
+  --chip: var(--st-idle);
+}
+
+.ui-world-chip.is-reconnecting {
+  --chip: var(--st-waiting);
+}
+
+.ui-world-chip.is-stopped {
+  --chip: var(--lv-crit);
+}
+
+.ui-world-chip__icon {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.ui-world-chip.is-paused .ui-world-chip__icon {
+  font-size: 9px;
+}
+
+/* Barra apertada: a linha de status vira um selo no canto do logo (sem versão nem "Demonstração"); o chip sai também
+   (o prédio continua em Configurações › Habblaud World). */
+@media (max-width: 1040px) {
+  .ui-world-chip {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .ui-world-sent {
+    width: calc(100vw - 16px);
+    max-width: none;
+    max-height: calc(100dvh - 16px);
+  }
+
+  .ui-world-sent__body {
+    max-height: calc(100dvh - 16px);
+    padding: 12px 12px calc(14px + env(safe-area-inset-bottom));
+  }
+
+  .ui-world-sent__json {
+    max-height: 48vh;
+    font-size: 11px;
+  }
+}
+
+/* ------------------------------------------------------------------ Habblaud World: a cidade (botão Mundo) */
+
+/* Botão Mundo / Escritório, ao lado do Timelapse: com rótulo (é a troca de cena), em azul quando na cidade. */
+.ui-scene-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 206, 110, 0.28);
+  background: rgba(255, 206, 110, 0.08);
+  color: #ffe3a0;
+  font: 600 12.5px/1 var(--font-ui);
+  white-space: nowrap;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+.ui-scene-btn:hover {
+  background: rgba(255, 206, 110, 0.16);
+}
+
+.ui-scene-btn.is-city {
+  border-color: rgba(124, 200, 255, 0.35);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent);
+}
+
+.ui-scene-btn__icon {
+  display: inline-grid;
+  place-items: center;
+}
+
+@media (max-width: 760px) {
+  .ui-scene-btn {
+    padding: 0 7px;
+  }
+
+  .ui-scene-btn__label {
+    display: none;
+  }
+}
+
+/* Na cidade, o que é do escritório sai da frente (Configurações, ajuda e os avisos continuam). */
+.ui-root.is-city > .ui-sidebar,
+.ui-root.is-city > .ui-feed,
+.ui-root.is-city > .ui-drawer,
+.ui-root.is-city > .ui-scrim,
+.ui-root.is-city > .ui-term,
+.ui-root.is-city > .ui-empty,
+.ui-root.is-city > .ui-tip,
+.ui-root.is-city > .ui-world-invite,
+.ui-root.is-city > .ui-lapse,
+.ui-root.is-city > .ui-lapse-vignette,
+.ui-root.is-city .ui-btn-sidebar,
+.ui-root.is-city .ui-btn-feed,
+.ui-root.is-city .ui-btn-timelapse {
+  display: none !important;
+}
+
+.ui-city,
+#ui > .ui-city {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  /* a camada cobre a tela, mas os cliques passam para o canvas da cidade (só o cartão e o minimapa recebem) */
+  pointer-events: none;
+}
+
+.ui-city > * {
+  pointer-events: auto;
+}
+
+.ui-city[hidden] {
+  display: none;
+}
+
+/* Os avisos do escritório continuam na cidade, acima do minimapa. */
+.ui-root.is-city .ui-toasts {
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(150px + env(safe-area-inset-bottom));
+}
+
+/* Cartões do prédio e do jogador */
+.ui-city-card {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 264px;
+  padding: 10px 12px 10px;
+  border-radius: var(--radius);
+  background: var(--ui-bg-solid);
+  border: 1px solid var(--ui-line-strong);
+  box-shadow: 0 12px 30px rgba(5, 7, 12, 0.55);
+  font-size: 12px;
+  will-change: transform;
+  pointer-events: none;
+}
+
+.ui-city-card.is-pinned {
+  pointer-events: auto;
+}
+
+.ui-city-card.is-online {
+  border-color: rgba(255, 206, 110, 0.4);
+}
+
+.ui-city-card[hidden] {
+  display: none;
+}
+
+.ui-city-card.is-docked {
+  left: 8px;
+  right: 8px;
+  top: auto;
+  bottom: calc(132px + env(safe-area-inset-bottom));
+  width: auto;
+  transform: none !important;
+}
+
+.ui-city-card__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.ui-city-card__avatar {
+  flex: none;
+  display: grid;
+  place-items: end center;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #2a3550, #1b2133);
+  border: 1px solid var(--ui-line);
+}
+
+.ui-city-card__avatar[hidden] {
+  display: none;
+}
+
+.ui-city-card__avatar-img {
+  image-rendering: pixelated;
+}
+
+.ui-city-card__names {
+  min-width: 0;
+  flex: 1;
+}
+
+.ui-city-card__line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ui-city-card__flag {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.ui-city-card__title {
+  font: 700 14px/1.25 var(--font-ui);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-city-card__sub {
+  color: var(--ui-muted);
+  font-size: 11.5px;
+  margin-top: 1px;
+}
+
+.ui-city-card__sub:empty {
+  display: none;
+}
+
+.ui-city-card__close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: -4px -6px 0 0;
+  border-radius: 6px;
+  color: var(--ui-muted);
+  font-size: 16px;
+  line-height: 1;
+  text-align: center;
+}
+
+.ui-city-card__close:hover {
+  background: var(--ui-bg-hover);
+  color: var(--ui-text);
+}
+
+.ui-city-card:not(.is-pinned) .ui-city-card__close {
+  visibility: hidden;
+}
+
+.ui-city-card__body {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.ui-city-card__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ui-city-card__sep {
+  color: var(--ui-faint);
+}
+
+.ui-city-card__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--st-offline);
+}
+
+.ui-city-card__dot.is-on {
+  background: #ffce6e;
+  box-shadow: 0 0 6px rgba(255, 206, 110, 0.7);
+}
+
+.ui-city-card__agents {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.ui-city-card__agent {
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: var(--ui-bg-soft);
+  border: 1px solid var(--ui-line);
+  color: var(--ui-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ui-city-card__agent b {
+  display: block;
+  font: 700 14px/1.2 var(--font-ui);
+}
+
+.ui-city-card__agent.is-working b {
+  color: var(--st-working);
+}
+
+.ui-city-card__agent.is-waiting b {
+  color: var(--st-waiting);
+}
+
+.ui-city-card__agent.is-idle b {
+  color: var(--st-idle);
+}
+
+.ui-city-card__muted {
+  color: var(--ui-muted);
+  font-size: 11.5px;
+}
+
+.ui-city-card__foot {
+  justify-content: space-between;
+  color: var(--ui-muted);
+}
+
+.ui-city-card__since {
+  font-size: 11px;
+  color: var(--ui-faint);
+}
+
+.ui-city-card__intro {
+  font-style: italic;
+  color: var(--ui-text);
+}
+
+.ui-city-card__traits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ui-city-card__link {
+  color: var(--ui-accent);
+  font-weight: 600;
+  font-size: 11.5px;
+}
+
+.ui-city-card__link:hover {
+  text-decoration: underline;
+}
+
+/* Minimapa */
+.ui-city-minimap {
+  position: fixed;
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  padding: 4px;
+  border-radius: var(--radius);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-line-strong);
+  box-shadow: 0 8px 22px rgba(5, 7, 12, 0.45);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+.ui-city-minimap__canvas {
+  display: block;
+  width: 176px;
+  height: 116px;
+  border-radius: 6px;
+  cursor: crosshair;
+  image-rendering: pixelated;
+}
+
+/* Dica das teclas, aviso rápido e "entrando" */
+.ui-city-help {
+  position: fixed;
+  left: calc(12px + env(safe-area-inset-left));
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  max-width: calc(100vw - 230px);
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-line);
+  color: var(--ui-muted);
+  font-size: 11.5px;
+  pointer-events: none !important;
+}
+
+.ui-city-help kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1px solid var(--ui-line-strong);
+  background: var(--ui-bg-soft);
+  color: var(--ui-text);
+  font: 600 10.5px/16px var(--font-ui);
+}
+
+.ui-city-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(150px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  padding: 9px 14px;
+  border-radius: var(--radius);
+  background: var(--ui-bg-solid);
+  border: 1px solid rgba(255, 206, 110, 0.45);
+  box-shadow: 0 10px 26px rgba(5, 7, 12, 0.5);
+  color: #ffe9b8;
+  font-weight: 600;
+  text-align: center;
+}
+
+.ui-city-toast.is-in {
+  animation: ui-city-toast-in 0.18s var(--ease);
+}
+
+@keyframes ui-city-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 6px);
+  }
+}
+
+.ui-city-toast[hidden],
+.ui-city-loading[hidden] {
+  display: none;
+}
+
+.ui-city-loading {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  background: var(--ui-bg);
+  color: var(--ui-muted);
+  font-weight: 600;
+}
+
+@media (max-width: 600px) {
+  .ui-city-help {
+    display: none;
+  }
+
+  .ui-city-minimap__canvas {
+    width: 132px;
+    height: 88px;
+  }
+}
+
+/* ===================================================================== Visita (Habblaud World, Fase 4) */
+
+/* Dentro de um prédio: a cidade fica parada por baixo; dela, só os avisos continuam. */
+.ui-city.is-visiting > :not(.ui-city-toast) {
+  display: none !important;
+}
+
+.ui-visit {
+  position: fixed;
+  inset: 0;
+  z-index: 41;
+  /* os cliques passam para o canvas da visita (só a faixa, o painel e os botões recebem) */
+  pointer-events: none;
+}
+
+#ui > .ui-visit {
+  pointer-events: none;
+}
+
+.ui-visit > * {
+  pointer-events: auto;
+}
+
+.ui-visit-bar {
+  position: fixed;
+  left: 50%;
+  top: calc(var(--ui-visit-top, 76px));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100vw - 24px);
+  padding: 8px 10px 8px 14px;
+  border-radius: var(--radius);
+  background: var(--ui-bg-solid);
+  border: 1px solid rgba(255, 206, 110, 0.4);
+  box-shadow: 0 12px 30px rgba(5, 7, 12, 0.5);
+  color: var(--ui-text);
+}
+
+.ui-visit.has-panel .ui-visit-bar {
+  left: calc((100vw - 300px) / 2);
+}
+
+.ui-visit-bar__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ui-visit-bar__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ui-visit-bar__title {
+  font-family: var(--font-px);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #ffe3a0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-visit-bar__details,
+.ui-visit-bar__visitors {
+  font-size: 12px;
+  color: var(--ui-muted);
+  white-space: nowrap;
+}
+
+.ui-visit-bar__visitors:empty {
+  display: none;
+}
+
+.ui-visit-bar__mode {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: rgba(124, 200, 255, 0.14);
+  color: var(--ui-accent);
+}
+
+.ui-visit-bar__mode.is-away {
+  background: rgba(160, 150, 255, 0.16);
+  color: #c8c2ff;
+}
+
+.ui-visit-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.ui-visit-bar__panel {
+  display: none;
+}
+
+.ui-visit-bar__leave.ui-btn--primary {
+  height: 30px;
+  padding: 0 14px;
+}
+
+/* Painel lateral: salas e agentes, só leitura */
+.ui-visit-panel {
+  position: fixed;
+  top: calc(var(--ui-visit-top, 76px));
+  right: calc(12px + env(safe-area-inset-right));
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  width: 276px;
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  overflow: auto;
+  border-radius: var(--radius);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-line-strong);
+  box-shadow: 0 12px 30px rgba(5, 7, 12, 0.45);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: var(--ui-text);
+}
+
+.ui-visit.has-panel .ui-visit-panel {
+  display: flex;
+}
+
+.ui-visit-panel__title {
+  margin: 0;
+  font-family: var(--font-px);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ui-visit-panel__empty,
+.ui-visit-panel__hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--ui-muted);
+}
+
+.ui-visit-panel__hint {
+  margin-top: auto;
+  color: var(--ui-faint);
+  font-size: 11px;
+}
+
+.ui-visit-panel__rooms,
+.ui-visit-room__agents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ui-visit-panel__rooms {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ui-visit-room {
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--ui-bg-soft);
+  border: 1px solid var(--ui-line);
+}
+
+.ui-visit-room__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.ui-visit-room__count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--ui-bg-hover);
+  color: var(--ui-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.ui-visit-room__agents {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+}
+
+.ui-visit-agent {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  grid-template-areas:
+    'dot name status'
+    'dot meta meta';
+  align-items: center;
+  column-gap: 8px;
+  width: 100%;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ui-visit-agent:hover,
+.ui-visit-agent:focus-visible {
+  background: var(--ui-bg-hover);
+}
+
+.ui-visit-agent.is-selected {
+  border-color: rgba(124, 200, 255, 0.5);
+  background: var(--ui-accent-soft);
+}
+
+.ui-visit-agent__dot {
+  grid-area: dot;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #8790a6;
+}
+
+.ui-visit-agent.is-working .ui-visit-agent__dot,
+.ui-visit-card__status.is-working::before {
+  background: #5bd18b;
+}
+
+.ui-visit-agent.is-waiting .ui-visit-agent__dot,
+.ui-visit-card__status.is-waiting::before {
+  background: #ffcf4a;
+}
+
+.ui-visit-agent.is-shell .ui-visit-agent__dot,
+.ui-visit-card__status.is-shell::before {
+  background: #b9f6b4;
+}
+
+.ui-visit-agent__name {
+  grid-area: name;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-visit-agent__meta {
+  grid-area: meta;
+  font-size: 11px;
+  color: var(--ui-faint);
+}
+
+.ui-visit-agent__status {
+  grid-area: status;
+  font-size: 11px;
+  color: var(--ui-muted);
+  white-space: nowrap;
+}
+
+/* Cartão de um agente: nome, papel, ferramenta e status (nada mais) */
+.ui-visit-card {
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--ui-bg-solid);
+  border: 1px solid rgba(124, 200, 255, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ui-visit-card[hidden] {
+  display: none;
+}
+
+.ui-visit-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ui-visit-card__name {
+  font-family: var(--font-px);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ui-visit-card__close {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ui-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ui-visit-card__close:hover {
+  background: var(--ui-bg-hover);
+  color: var(--ui-text);
+}
+
+.ui-visit-card__meta,
+.ui-visit-card__room {
+  font-size: 12px;
+  color: var(--ui-muted);
+}
+
+.ui-visit-card__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ui-visit-card__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ui-visit-card__status::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #8790a6;
+}
+
+/* "Sair pelo elevador (E)" sobre o visitante */
+.ui-visit-exit {
+  position: fixed;
+  left: 0;
+  top: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+  background: rgba(18, 21, 29, 0.88);
+  border: 1px solid rgba(255, 214, 140, 0.85);
+  color: #ffe3a0;
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ui-visit-exit:hover {
+  background: rgba(40, 46, 60, 0.95);
+}
+
+.ui-visit-exit[hidden] {
+  display: none;
+}
+
+.ui-visit-exit kbd,
+.ui-visit-help kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1px solid var(--ui-line-strong);
+  background: var(--ui-bg-soft);
+  color: var(--ui-text);
+  font: 600 10.5px/16px var(--font-ui);
+}
+
+.ui-visit-help {
+  position: fixed;
+  left: calc(12px + env(safe-area-inset-left));
+  bottom: calc(12px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-line);
+  color: var(--ui-muted);
+  font-size: 11.5px;
+  pointer-events: none !important;
+}
+
+.ui-visit-leaving {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  background: var(--ui-bg);
+  color: var(--ui-muted);
+  font-weight: 600;
+}
+
+.ui-visit-leaving[hidden] {
+  display: none;
+}
+
+/* Celular: a faixa ocupa a largura; o painel vira uma folha embaixo, aberta pelo botão "Salas" */
+@media (max-width: 760px) {
+  .ui-visit-bar,
+  .ui-visit.has-panel .ui-visit-bar {
+    left: 8px;
+    right: 8px;
+    transform: none;
+    max-width: none;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+
+  .ui-visit-bar__text {
+    flex: 1 1 100%;
+  }
+
+  .ui-visit-bar__title {
+    font-size: 15px;
+  }
+
+  .ui-visit-bar__actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+  }
+
+  .ui-visit-bar__panel {
+    display: inline-flex;
+    margin-right: auto;
+  }
+
+  .ui-visit-panel {
+    top: auto;
+    left: 8px;
+    right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    width: auto;
+    max-height: 46vh;
+  }
+
+  .ui-visit-help {
+    display: none;
+  }
+}
+
+/* Na visita, os avisos do escritório desta máquina ficam ao lado do painel (e acima da folha, no celular). */
+.ui-root.is-visit .ui-toasts {
+  right: calc(300px + env(safe-area-inset-right));
+  bottom: calc(56px + env(safe-area-inset-bottom));
+}
+
+@media (max-width: 760px) {
+  /* no celular, embaixo (a folha das salas, aberta, fica por cima) */
+  .ui-root.is-visit .ui-toasts {
+    right: calc(8px + env(safe-area-inset-right));
+    bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .ui-root.is-visit .ui-visit {
+    z-index: 51;
+  }
+}
+
+/* "👀 N" no chip do mundo: gente visitando o seu prédio agora */
+.ui-world-chip__visitors {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(255, 206, 110, 0.16);
+  color: #ffe3a0;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ui-world-chip__visitors[hidden] {
+  display: none;
+}

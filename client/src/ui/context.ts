@@ -69,6 +69,11 @@ export interface UiContext {
   toggleSettings(): void;
   /** Abre o campo de renomear a sala perto do ponto (px da janela); botão direito na sala (ui/roomrename.ts). */
   renameRoom?(roomId: string, at: { x: number; y: number }): void;
+  /**
+   * (Opcional) "Ver como os outros veem": abre a cidade do Habblaud World e entra no próprio prédio (a cena Visita). Só
+   * existe com a cena Mundo montada (app.ts).
+   */
+  visitOwnBuilding?(): void;
   /** Abre as configurações na seção "Sobre" (versão em uso e versão nova). */
   openAbout(): void;
   /** Abre/fecha o timelapse do dia (ui/timelapse.ts). */

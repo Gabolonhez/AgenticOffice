@@ -1,68 +1,14 @@
 // Personalidades dos personagens — funções PURAS e determinísticas (mesma semente = mesma pessoa em
 // qualquer navegador). Cada agente tem 2 ou 3 traços, que mudam o que prefere fazer quando está à toa,
 // com quem anda e o que fala; pares de agentes podem ter amizade ou rivalidade.
-//
-// Os rótulos são substantivos ("Competição", "Vaidade"): não dependem do gênero de ninguém.
 import { mulberry32 } from '../../../../shared/hash';
 import { IDLE_WEIGHTS, type IdleActivity } from '../sim/behavior';
 import { tr } from '../../../../shared/i18n';
+import { TRAIT_IDS, traitsClash, type TraitId } from '../../../../shared/world/traits';
 
-export type TraitId =
-  | 'competicao'
-  | 'apostas'
-  | 'games'
-  | 'series'
-  | 'fofoca'
-  | 'vaidade'
-  | 'cafeina'
-  | 'piadas'
-  | 'esporte'
-  | 'timidez'
-  | 'economia'
-  | 'sonecas'
-  | 'calma'
-  | 'leitura';
-
-export interface Trait {
-  id: TraitId;
-  emoji: string;
-  label: string;
-  /** Uma frase explicando o efeito no escritório (dica na interface). */
-  desc: string;
-}
-
-export const TRAITS: Readonly<Record<TraitId, Trait>> = {
-  competicao: { id: 'competicao', emoji: '🏆', label: tr('Competição'), desc: tr('Adora competir: desafia os colegas no ping-pong, no videogame e no jokenpô.') },
-  apostas: { id: 'apostas', emoji: '🎲', label: tr('Apostas'), desc: tr('Topa qualquer aposta e aposta alto no jokenpô.') },
-  games: { id: 'games', emoji: '🎮', label: tr('Games'), desc: tr('Vive no videogame do lounge e nos fliperamas — e costuma ganhar.') },
-  series: { id: 'series', emoji: '📺', label: tr('Séries e TV'), desc: tr('Não perde um programa na TV do lounge (de preferência com pipoca).') },
-  fofoca: { id: 'fofoca', emoji: '🗣️', label: tr('Fofoca'), desc: tr('Puxa papo na copa e sabe de tudo o que acontece nas salas.') },
-  vaidade: { id: 'vaidade', emoji: '💄', label: tr('Vaidade'), desc: tr('Passa no espelho do banheiro para se arrumar sempre que pode.') },
-  cafeina: { id: 'cafeina', emoji: '☕', label: tr('Cafeína'), desc: tr('Movido a café: a cafeteira da copa é a segunda casa.') },
-  piadas: { id: 'piadas', emoji: '😂', label: tr('Piadas'), desc: tr('Conta piada em toda conversa e faz a roda rir.') },
-  esporte: { id: 'esporte', emoji: '🏓', label: tr('Esporte'), desc: tr('Joga ping-pong, se alonga e vibra com o futebol na TV.') },
-  timidez: { id: 'timidez', emoji: '🙈', label: tr('Timidez'), desc: tr('Prefere ficar na sua: lê, olha a janela e entra menos nas rodas.') },
-  economia: { id: 'economia', emoji: '💰', label: tr('Economia'), desc: tr('Pão-duro: aposta pouco e às vezes foge da aposta.') },
-  sonecas: { id: 'sonecas', emoji: '😴', label: tr('Sonecas'), desc: tr('Qualquer sofá ou puff vira cama.') },
-  calma: { id: 'calma', emoji: '🧘', label: tr('Calma'), desc: tr('Zen: alongamentos, janela e conversas tranquilas.') },
-  leitura: { id: 'leitura', emoji: '📚', label: tr('Leitura'), desc: tr('Sempre com um livro da estante (ou o celular) na mão.') },
-};
-
-/** Ordem fixa (o sorteio depende dela: não reordene). */
-export const TRAIT_IDS = Object.keys(TRAITS) as TraitId[];
-
-/** Pares que não combinam na mesma pessoa. */
-const CLASHES: readonly (readonly [TraitId, TraitId])[] = [
-  ['timidez', 'piadas'],
-  ['timidez', 'fofoca'],
-  ['apostas', 'economia'],
-  ['esporte', 'sonecas'],
-  ['calma', 'competicao'],
-];
-
-function clashes(a: TraitId, b: TraitId): boolean {
-  return CLASHES.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
-}
+// Os ids, os rótulos e os pares que não combinam ficam em shared/world/traits.ts (os mesmos do jogador do Habblaud
+// World); re-exportados aqui para quem já importava deste módulo.
+export { TRAIT_IDS, TRAITS, type Trait, type TraitId } from '../../../../shared/world/traits';
 
 /** Bordões: cada um tem o seu (aparece de vez em quando nas falas). */
 export const CATCHPHRASES = [
@@ -108,7 +54,7 @@ export function personaFor(seed: number): Persona {
   const traits: TraitId[] = [];
   for (let guard = 0; traits.length < n && guard < 40; guard++) {
     const t = TRAIT_IDS[Math.floor(rng() * TRAIT_IDS.length) % TRAIT_IDS.length];
-    if (traits.includes(t) || traits.some((o) => clashes(o, t))) continue;
+    if (traits.includes(t) || traits.some((o) => traitsClash(o, t))) continue;
     traits.push(t);
   }
   let sociability = 0.45 + rng() * 0.3;

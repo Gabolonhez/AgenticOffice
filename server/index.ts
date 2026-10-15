@@ -6,7 +6,7 @@ import http from 'node:http';
 import { join } from 'node:path';
 import { codexDirsRefused, isDefaultDir } from './accounts/detect';
 import { AccountsService } from './accounts/service';
-import { isTruthy, loadConfig, messagesOffReason, terminalOffReason } from './config';
+import { isTruthy, loadConfig, messagesOffReason, terminalOffReason, worldSocketUrl } from './config';
 import { createApiHandler, sendJson } from './http/app';
 import { createRequestGuard, isLoopbackHost } from './http/guard';
 import { createRemoteGate, isRemoteRequest, loadSecret, RemoteSessions, startRemoteListener, type RemoteListener } from './http/remote';
@@ -37,9 +37,10 @@ import { ClaudeWatcher } from './sources/watcher';
 import { discoverCodexDirs } from './sources/codex/accounts';
 import { CodexHistory } from './sources/codex/history';
 import { CodexSource } from './sources/codex/source';
-import { createBuildReader } from './build';
+import { createBuildReader, readBuildInfo } from './build';
 import { UpdateChecker } from './updates/checker';
-import { tr } from '../shared/i18n';
+import { getLocale, tr } from '../shared/i18n';
+import type { WorldLocale } from '../shared/world/protocol';
 import { createCliRunner, createOpener, SpawnService } from './spawn/spawn';
 import { runnableClaudeBin } from './claude-bin';
 import { AttachmentStore } from './spawn/attachments';
@@ -49,6 +50,14 @@ import { DictationService } from './dictation/dictation';
 import { createWhisperTranscriber, findWhisper } from './dictation/whisper';
 import { DeliveryIndex } from './deliveries/deliveries';
 import { FileFetcher } from './deliveries/fetcher';
+import { WorldClient } from './world/client';
+import { createWorldRoutes } from './world/http';
+import { WorldService } from './world/service';
+import { WorldSettingsStore } from './world/settings';
+import { OwnerSocial } from './world/social';
+import { BuildingTokens } from './world/tokens';
+import { BuildingUplink } from './world/uplink';
+import { WorldViewer } from './world/viewer';
 
 const config = loadConfig();
 const startedAt = Date.now();
@@ -80,6 +89,22 @@ const updates = new UpdateChecker({
   onChange: () => late.office?.markDirty(),
 });
 updates.load();
+// Habblaud World (server/world/): a conta e o personagem neste computador. Sem HABBLAUD_WORLD_URL fica desligado (nada
+// sai do computador); HABBLAUD_WORLD=0 esconde tudo (rotas 404 e nada na interface).
+const worldStore = new WorldSettingsStore(join(config.dataDir, 'world.json'));
+if (config.world.enabled && config.world.url) worldStore.load();
+// O social leve do dono (world/social.ts): likes do dia, "enquanto você estava fora", batidas na porta e bloqueados.
+const worldSocial = config.world.enabled ? new OwnerSocial({ session: () => worldStore.get()?.deviceId, onChange: () => late.office?.markDirty() }) : undefined;
+const world = config.world.enabled
+  ? new WorldService({
+      config: config.world,
+      terminal: config.terminal,
+      store: worldStore,
+      client: config.world.url ? new WorldClient({ baseUrl: config.world.url, version: config.version }) : undefined,
+      onChange: () => late.office?.markDirty(),
+      social: worldSocial,
+    })
+  : undefined;
 const accounts = new AccountsService({
   dirs: config.claudeDirs,
   home: config.home,
@@ -102,6 +127,7 @@ const office = new Office({
   messages: config.messages ? () => late.messages?.reachable() ?? new Set() : undefined,
   ptys: () => (late.ptys ? { status: late.ptys.status(), list: late.ptys.list() } : { status: { enabled: false, reason: late.ptyOff ?? tr('desligado') }, list: [] }),
   updates: () => updates.status(),
+  world: () => world?.meta() ?? { enabled: false, configured: false, state: 'off' },
 });
 // Fontes de agentes, uma por ferramenta (sources/source.ts): a do Claude Code e, depois dela, a do Codex (quando há
 // pastas do Codex; HABBLAUD_CODEX=0 desliga), com o histórico dela no HistorySet abaixo e as contas registradas por
@@ -123,6 +149,42 @@ const hub = new Hub(office, {
 // "Meu dia": amostra o escritório a cada segundo e persiste em <dataDir>/stats/ (ver history/daystats.ts).
 const stats = new DayStatsService({ dir: join(config.dataDir, 'stats'), snapshot: () => hub.current() });
 stats.load();
+// O prédio no Habblaud World (world/uplink.ts): só com HABBLAUD_WORLD_URL. Conecta sozinho com a conta aprovada, o
+// personagem criado, a trava do terminal e sem pausa; o pacote sai só da projeção (shared/world/projection.ts).
+const worldTokens = new BuildingTokens({ stats });
+const worldUplink =
+  world && config.world.url
+    ? new BuildingUplink({
+        url: worldSocketUrl(config.world.url),
+        version: config.version,
+        build: () => {
+          const b = readBuildInfo(config.rootDir);
+          return { commit: b.commit, dirty: b.dirty };
+        },
+        locale: () => getLocale() as WorldLocale,
+        store: worldStore,
+        canAct: () => config.terminal,
+        agents: () => office.list(),
+        subscribe: (cb) => office.onChange(cb),
+        booting: () => office.isBooting(),
+        tokens: () => worldTokens.read(),
+        lastFile: join(config.dataDir, 'world-last-uplink.json'),
+        onGoodbye: (reason) => world.goodbye(reason),
+        onLeft: () => world.leftElsewhere(),
+        onChange: () => office.markDirty(),
+      })
+    : undefined;
+if (world && worldUplink) world.attachUplink(worldUplink);
+// A cena Mundo (world/viewer.ts): a cidade pela mesma conexão do prédio, só com a cena aberta no navegador.
+const worldViewer = worldUplink ? new WorldViewer() : undefined;
+if (worldUplink && worldViewer) {
+  worldViewer.attach(worldUplink);
+  worldUplink.attachCity(worldViewer);
+}
+if (worldUplink && worldSocial) {
+  worldSocial.attach(worldUplink);
+  worldUplink.attachOwner(worldSocial);
+}
 // Terminal: só existe com bind local (ver terminalOffReason em config.ts).
 // Cada agente com o parser da ferramenta dele (o do Claude Code por padrão).
 const terminals = config.terminal
@@ -266,6 +328,7 @@ permissions?.start();
 messages?.start();
 stats.start();
 updates.start();
+worldUplink?.start();
 const ticker = setInterval(() => {
   try {
     office.tick();
@@ -311,6 +374,7 @@ const api = createApiHandler({
   stats,
   updates,
   remote: config.remote ? { is: isRemoteRequest, allows: (f) => config.remote!.allow.has(f) } : undefined,
+  world: world ? createWorldRoutes(world, worldViewer, worldSocial) : undefined,
 });
 
 const server = http.createServer();
@@ -455,6 +519,18 @@ server.listen(config.port, config.host, () => {
           : tr('   Mensagens ao Codex: sem o binário do Codex (codex no PATH ou HABBLAUD_CODEX_BIN); o auxiliar npm run codex:bridge também serve.'),
     );
   }
+  if (config.world.warning) log.warn(`   ${config.world.warning}.`);
+  log.info(
+    !world
+      ? tr('   Habblaud World: escondido (HABBLAUD_WORLD=0).')
+      : !config.world.url
+        ? tr('   Habblaud World: desligado (sem HABBLAUD_WORLD_URL).')
+        : tr('   Habblaud World: {0}, conta neste computador: {1}{2}.', [
+            config.world.url,
+            world.state(),
+            config.terminal ? '' : tr(' (só leitura: a trava do terminal está desligada)'),
+          ]),
+  );
   log.info(
     updates.enabled
       ? tr('   Versão nova: verificando as releases de github.com/{0} a cada 6 h.', [config.repo])
@@ -478,6 +554,9 @@ function shutdown(signal: string): void {
   messages?.stop();
   ptys?.stopAll();
   updates.stop();
+  worldViewer?.stop();
+  worldUplink?.stop();
+  world?.stop();
   names.flush();
   void closeVite?.();
   remoteListener?.close();

@@ -8,12 +8,15 @@ import { loadWorldAssets, type WorldAssets } from './assets';
 import { Camera, overviewFrame } from './camera';
 import { createDebug, type WorldDebug } from './debug';
 import { BUILDING_H, COL_W } from './constants';
+import { RECEPTION_ID } from './layout/core';
 import { inRect } from './layout/geometry';
 import { attachInput, type Hit } from './input';
+import type { AgentInfo } from '../../../shared/types';
 import { rebaseSnapshot } from './playback';
 import { Overlay } from './render/overlay';
 import { Renderer } from './render/renderer';
-import { Sim } from './sim/sim';
+import { Sim, type VisitLight } from './sim/sim';
+import { NO_INTENT, VISITOR_ID, visitorInfo, type VisitorIntent } from './sim/visitor';
 import { SoundCues } from './sound-cues';
 
 export * from './api';
@@ -21,11 +24,38 @@ export type { WorldDebug } from './debug';
 
 const art: ArtModule = artModule;
 
-export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): WorldApi & { debug: WorldDebug } {
+/** O que a cena Visita usa do mundo dela (createWorld com `visit: true`). */
+export interface VisitWorld {
+  /** O meu personagem entra pelo elevador (null tira). */
+  setVisitor(me: { name: string; look: 'f' | 'm'; parts?: AgentInfo['parts'] } | null): void;
+  /** O teclado: para onde o visitante anda. */
+  setIntent(intent: VisitorIntent): void;
+  /** Luzes do prédio (apagado, discreto, ao vivo). */
+  setLight(mode: VisitLight): void;
+  /** Perto de um elevador, livre para sair? */
+  atExit(): boolean;
+  /** Anda até o elevador mais perto, entra e some; `done` quando a porta fecha. */
+  exit(done: () => void): boolean;
+  /** Posição do visitante na tela (px CSS), para a dica "Sair (E)"; null fora da tela ou sem visitante. */
+  visitorScreen(): { x: number; y: number } | null;
+  /** O quadro da parede da recepção na tela (px CSS): o lugar do quadro de carimbos da portaria; null fora da tela. */
+  boardScreen(): { x: number; y: number; w: number; h: number } | null;
+}
+
+export interface CreateWorldOptions {
+  /**
+   * Visita a um prédio do mundo (cena Visita): `Sim` sem nada que dependa do tempo do status (SimMode.visit), o
+   * visitante andando com o teclado e o clique (a câmera o segue) e as carteiras da vida social na chave `world:`.
+   */
+  visit?: boolean;
+}
+
+export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore, o: CreateWorldOptions = {}): WorldApi & { debug: WorldDebug; visit: VisitWorld } {
   let options: WorldOptions = { ...DEFAULT_WORLD_OPTIONS };
+  const visitMode = !!o.visit;
   const camera = new Camera();
   // Simulação e desenho são recriados quando o timelapse entra, pula ou sai (rebuild).
-  let sim = new Sim(art, () => options);
+  let sim = new Sim(art, () => options, undefined, { visit: visitMode });
   let renderer = new Renderer(canvas, art, sim, camera);
   let overlay = new Overlay(renderer.ctx, sim, renderer, camera);
   let assets: WorldAssets | null = null;
@@ -44,6 +74,9 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
   let raf = 0;
   let lastTs = 0;
   let hiddenAt = 0;
+  /** Escritório fora da tela (cidade aberta): sem laço de desenho nem teclado da câmera. */
+  let suspended = false;
+  let suspendedAt = 0;
   let userMoved = false;
   let framed = false;
   let lastCols = -1;
@@ -118,7 +151,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
   };
 
   const focusAgent = (id: string, opts: { follow?: boolean } = {}) => {
-    const ch = sim.chars.get(id);
+    const ch = sim.person(id);
     if (!ch) return;
     userMoved = true;
     const zoom = Math.max(camera.zoom, camera.snapZoom(3));
@@ -153,7 +186,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
     let bestDepth = -Infinity;
     const slack = Math.max(1, 3 / camera.zoom);
     for (const [id, h] of renderer.heads) {
-      if (!h.visible) continue;
+      if (!h.visible || id === VISITOR_ID) continue;
       if (w.x < h.bx - slack || w.x > h.bx + h.bw + slack || w.y < h.by - slack || w.y > h.by + h.bh + slack) continue;
       if (h.depth > bestDepth) {
         bestDepth = h.depth;
@@ -174,9 +207,22 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
     hoverCbs.forEach((cb) => cb(id));
   };
 
+  /** Visita: um toque no chão leva o visitante até lá (num agente, abre o cartão dele). */
+  const visitClick = (hit: Hit, at: { x: number; y: number }) => {
+    if (hit?.type === 'agent') return setSelection(hit);
+    setSelection(null);
+    const w = camera.screenToWorld(at.x, at.y);
+    if (sim.visitorWalkTo(Math.floor(w.x / TILE), Math.floor(w.y / TILE))) followVisitor();
+  };
+  const followVisitor = () => {
+    if (!sim.visitor) return;
+    userMoved = true;
+    camera.follow = VISITOR_ID;
+  };
+
   const detachInput = attachInput(canvas, camera, {
     pick,
-    click: (hit) => setSelection(hit),
+    click: (hit, at) => (visitMode ? visitClick(hit, at) : setSelection(hit)),
     doubleClick: (hit) => {
       if (hit?.type === 'agent') {
         setSelection(hit);
@@ -194,6 +240,8 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
     },
     overview: () => overview(true),
     zoomStep,
+    active: () => !suspended,
+    keys: () => !visitMode,
   });
 
   // ------------------------------------------------------------------ dados
@@ -252,7 +300,9 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
           framed = true;
         } else if (!userMoved) overview(true);
       }
-      const followCh = camera.follow ? sim.chars.get(camera.follow) : undefined;
+      // visita: andando pelo teclado, a câmera vai junto
+      if (visitMode && sim.visitor && (sim.visitorIntent.dx || sim.visitorIntent.dy) && camera.follow !== VISITOR_ID) followVisitor();
+      const followCh = camera.follow ? sim.person(camera.follow) : undefined;
       if (camera.follow && !followCh) camera.follow = null;
       camera.update(real, followCh ? camera.centerFor(followCh.x, followCh.y - 12, camera.zoom) : null, realDt);
       renderer.frame(now, dt, options, { agent: selection?.type === 'agent' ? selection.id : null, room: selection?.type === 'room' ? selection.id : null, hover });
@@ -273,6 +323,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
   };
 
   const onVisibility = () => {
+    if (suspended) return;
     if (document.hidden) {
       hiddenAt = Date.now();
       return;
@@ -320,7 +371,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
   const rebuild = () => {
     // As carteiras ao vivo gravam a cada 5 s: não perde o que mudou desde a última vez (no replay, não grava nada).
     sim.social.wallets.save(Date.now());
-    sim = new Sim(art, () => options, playback ? null : undefined);
+    sim = new Sim(art, () => options, playback ? null : undefined, { visit: visitMode });
     renderer = new Renderer(canvas, art, sim, camera);
     if (assets) renderer.setAssets(assets);
     if (playback) {
@@ -397,6 +448,22 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
       soundCbs.add(cb);
       return () => void soundCbs.delete(cb);
     },
+    setSuspended: (on) => {
+      if (on === suspended) return;
+      suspended = on;
+      if (on) {
+        cancelAnimationFrame(raf);
+        suspendedAt = Date.now();
+        setHover(null);
+        mouse = null;
+        return;
+      }
+      lastTs = 0;
+      if (suspendedAt && Date.now() - suspendedAt > 5000) sim.fastForward(playback ? worldNow : Date.now());
+      suspendedAt = 0;
+      hiddenAt = 0;
+      raf = requestAnimationFrame(loop);
+    },
     destroy: () => {
       cancelAnimationFrame(raf);
       abort.abort();
@@ -412,6 +479,41 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
     },
     get debug() {
       return debug;
+    },
+    visit: {
+      setVisitor: (me) => {
+        if (!visitMode) return;
+        sim.setVisitor(me ? visitorInfo(me, Date.now()) : null, Date.now());
+      },
+      setIntent: (intent) => {
+        sim.visitorIntent = visitMode ? { ...intent } : { ...NO_INTENT };
+      },
+      setLight: (mode) => {
+        if (!visitMode || sim.visitLight === mode) return;
+        sim.visitLight = mode;
+        sim.applyVisitLight(Date.now());
+      },
+      atExit: () => visitMode && !!sim.visitorElevator(),
+      exit: (done) => {
+        if (!visitMode || !sim.visitorExit(done)) return false;
+        followVisitor();
+        return true;
+      },
+      visitorScreen: () => {
+        const h = renderer.heads.get(VISITOR_ID);
+        if (!h || !h.visible) return null;
+        const p = camera.worldToScreen(h.x, h.y - 2);
+        if (p.x < 0 || p.y < 0 || p.x > camera.viewW || p.y > camera.viewH) return null;
+        return p;
+      },
+      boardScreen: () => {
+        const r = visitMode ? renderer.paintingRect(RECEPTION_ID) : null;
+        if (!r) return null;
+        const a = camera.worldToScreen(r.x, r.y);
+        const b = camera.worldToScreen(r.x + r.w, r.y + r.h);
+        if (b.x < 0 || b.y < 0 || a.x > camera.viewW || a.y > camera.viewH) return null;
+        return { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y };
+      },
     },
   };
 }

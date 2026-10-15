@@ -421,7 +421,8 @@ export class Renderer {
         if (fs?.front) push(K.FurnFront, f.ay + 0.5, f, vis, s);
       }
     }
-    for (const ch of this.sim.chars.values()) {
+    // os agentes e, na visita, o visitante
+    for (const ch of this.sim.people()) {
       const head = this.headOf(ch);
       head.visible = false;
       if (ch.inside || ch.alpha <= 0.01 || now < ch.hiddenUntil) continue;
@@ -532,7 +533,7 @@ export class Renderer {
 
   /** Remove entradas de personagens que já saíram. */
   pruneHeads(): void {
-    for (const id of this.heads.keys()) if (!this.sim.chars.has(id)) this.heads.delete(id);
+    for (const id of this.heads.keys()) if (!this.sim.person(id)) this.heads.delete(id);
   }
 
   roomInSlot(slot: number): RoomState | undefined {
@@ -706,6 +707,22 @@ export class Renderer {
       return { x: b.x + 3, y: b.y + 3, w: b.w - 6, h: b.h - 6 };
     })();
     return { x: o.x + r.x, y: o.y + r.y, w: r.w, h: r.h };
+  }
+
+  /**
+   * Retângulo (px de mundo) do quadro (`painting`) da parede de uma área, pintado junto com as paredes: a cena Visita
+   * põe o quadro de carimbos da portaria em cima do da recepção.
+   */
+  paintingRect(areaId: string): { x: number; y: number; w: number; h: number } | null {
+    const vis = this.areas.get(areaId);
+    const it = vis?.layout.wallItems.find((x) => x.kind === 'painting');
+    if (!vis || !it) return null;
+    const w = toWallVis(it, vis.id);
+    const s = wallSprites(this.art, 'painting', it.variant === 'wide' ? undefined : it.variant, 0, w.seed);
+    if (!s) return null;
+    const o = wallItemOrigin(w, s.base);
+    const b = opaqueBounds(s.base.canvas);
+    return { x: o.x + b.x, y: o.y + b.y, w: b.w, h: b.h };
   }
 
   /** Luminância média da área de texto da placa (para escolher a cor do texto). */
@@ -930,6 +947,8 @@ export class Renderer {
    * mesa ao lado).
    */
   private drawCobwebs(now: number): void {
+    // visita: nenhum tempo veio do mundo, então nada de teia
+    if (this.sim.visit) return;
     const { ctx } = this;
     for (const ch of this.sim.chars.values()) {
       if (ch.mode !== 'shell' || !ch.shellSince || ch.leaving || !ch.seated || ch.atSpot !== ch.homeSpot) continue;

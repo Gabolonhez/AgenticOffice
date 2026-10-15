@@ -93,6 +93,11 @@ export interface WorldApi {
   setPlayback?(p: WorldPlayback | null): void;
   /** (Opcional, aditivo) Sons do ambiente: teclado de quem trabalha à vista, elevador, rodas. */
   onSound?(cb: (cue: SoundCue) => void): () => void;
+  /**
+   * (Opcional, aditivo) Escritório fora da tela (a cena da cidade está aberta): para o desenho e o teclado da
+   * câmera; ao voltar, a simulação avança o tempo que passou (como com a aba em segundo plano).
+   */
+  setSuspended?(suspended: boolean): void;
   destroy(): void;
 }
 
