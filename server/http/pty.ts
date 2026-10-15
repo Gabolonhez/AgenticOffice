@@ -14,7 +14,7 @@ import { isLoopbackHost } from './guard';
 import { tr } from '../../shared/i18n';
 
 /** /api/agents/:id/(stop|takeover) (ids nunca contêm '/'). */
-const AGENT_ACTION_ROUTE = /^\/api\/agents\/([^/]+)\/(stop|takeover)$/;
+const AGENT_ACTION_ROUTE = /^\/api\/agents\/([^/]+)\/(stop|takeover|vscode)$/;
 
 function isLoopbackAddress(addr: string | undefined): boolean {
   if (!addr) return false;
@@ -74,6 +74,9 @@ export function createPtyRoutes(ptys: PtyManager): (req: IncomingMessage, res: S
       if (method !== 'POST') return notAllowed(res, 'POST');
       const body = (await readJson(req)) as Record<string, unknown>;
       const id = decode(action[1]);
+      if (action[2] === 'vscode') {
+        return sendJson(res, 200, { path: ptys.editorPath(id) });
+      }
       if (action[2] === 'stop') {
         await ptys.stop(id);
         return noContent(res);

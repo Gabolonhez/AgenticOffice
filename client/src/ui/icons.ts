@@ -275,6 +275,19 @@ export const ICONS = {
     ],
     { '#': 'currentColor', s: '#f7c76b' },
   ),
+  // Colchetes de código "</>" (abrir a pasta no VS Code).
+  code: pixelIcon([
+    '..........',
+    '...#..#...',
+    '..#....#..',
+    '.#..##..#.',
+    '#...##...#',
+    '.#..##..#.',
+    '..#....#..',
+    '...#..#...',
+    '..........',
+    '..........',
+  ]),
   // Janela de terminal com o prompt ">_".
   terminal: pixelIcon([
     '##########',

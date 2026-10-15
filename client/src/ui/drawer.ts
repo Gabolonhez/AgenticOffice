@@ -42,7 +42,8 @@ import { access } from '../net/access';
 import { PermissionCard } from './permission';
 import { canRenameRoom } from './roomrename';
 import { accountChipLabel, accountProvider, CODEX_LIVE_HINT, codexApprovalLabel, providerOf } from './provider';
-import { ptyControllable } from './ptyapi';
+import { openInVscode, ptyControllable } from './ptyapi';
+import { isDemoId } from '../../../shared/timeline';
 import { createAgentRow, updateAgentRow } from './rows';
 import { SocialSection } from './social';
 import { TERMINAL_UNAVAILABLE_HINT, type TerminalControl } from './terminal';
@@ -215,6 +216,7 @@ class AgentView {
   private statusSince: HTMLElement;
   private followBtn: HTMLButtonElement;
   private termBtn: HTMLButtonElement;
+  private codeBtn: HTMLButtonElement;
   private termLabel: HTMLElement;
   /** Por que o terminal não abre: no celular não há hover para ler o title, então o toque mostra o motivo aqui. */
   private termWhy: HTMLElement;
@@ -299,11 +301,14 @@ class AgentView {
     const centerBtn = h('button', { class: 'ui-btn', type: 'button', title: tr('Levar a câmera até o agente'), on: { click: () => ctx.focusSelection() } });
     centerBtn.innerHTML = ICONS.center;
     centerBtn.append(h('span', { text: tr('Centralizar') }));
+    this.codeBtn = h('button', { class: 'ui-btn', type: 'button', title: tr('Abrir a pasta do projeto no VS Code'), on: { click: () => this.openCode() } });
+    this.codeBtn.innerHTML = ICONS.code;
+    this.codeBtn.append(h('span', { text: tr('VS Code') }));
     const statusRow = h(
       'div',
       { class: 'ui-status' },
       h('span', { class: 'ui-status__label' }, this.dot, this.statusText, this.statusSince),
-      h('span', { class: 'ui-status__actions' }, this.followBtn, centerBtn),
+      h('span', { class: 'ui-status__actions' }, this.followBtn, centerBtn, this.codeBtn),
     );
 
     // Terminal: a conversa da sessão como o Claude Code mostra, ao vivo (só com acesso local).
@@ -488,6 +493,12 @@ class AgentView {
     this.historyReplay = replaying;
     this.historyAt = at;
     return replaying ? at : undefined;
+  }
+
+  /** Abre a pasta do projeto deste agente no VS Code (o servidor resolve a pasta pelo id). */
+  private openCode(): void {
+    if (!this.id) return;
+    openInVscode(this.id).catch((err: unknown) => this.ctx.announce(err instanceof Error ? err.message : String(err)));
   }
 
   /** Abre (ou fecha) o terminal deste agente; desligado sem acesso local ou depois que ele saiu. */
@@ -694,6 +705,8 @@ class AgentView {
     const router = this.ctx.terminals;
     const available = (router ? router.available : !!this.ctx.store.snapshot?.meta.terminal) && access().terminal;
     const open = (router ? router.openAgentId : this.terminal.agentId) === this.id;
+    // Só local, com o terminal interativo ligado (mesma rota/trava) e agente real (não demo).
+    setHidden(this.codeBtn, !this.pty.enabled || !access().terminal || !this.id || isDemoId(this.id));
     // Interativo: o Claude Code roda aqui (pty) ou roda noutro terminal e dá para assumir pela janela.
     const readOnly = !!this.ctx.store.snapshot?.meta.terminal;
     const kind = !this.id ? '' : router?.interactive(this.id) ? 'interativo' : !readOnly && this.pty.enabled && ptyControllable(this.last) ? 'em outro terminal' : 'ao vivo';

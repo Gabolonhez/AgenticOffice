@@ -42,6 +42,15 @@ export async function stopAgent(agentId: string): Promise<void> {
   await postPty(`/api/agents/${encodeURIComponent(agentId)}/stop`, {});
 }
 
+/**
+ * Abre a pasta do agente no VS Code (o servidor descobre a pasta pelo id; nunca mandamos caminho). O link vscode://
+ * sai do navegador porque é ele quem recebeu o clique: só assim o Windows deixa o VS Code vir para frente.
+ */
+export async function openInVscode(agentId: string): Promise<void> {
+  const r = await postPty<{ path: string }>(`/api/agents/${encodeURIComponent(agentId)}/vscode`, {});
+  if (r?.path) window.location.href = `vscode://file/${encodeURI(r.path.replace(/\\/g, '/'))}`;
+}
+
 export async function closePty(id: string): Promise<void> {
   await postPty(`/api/pty/${encodeURIComponent(id)}/close`, {});
 }

@@ -364,3 +364,22 @@ describe('carregar o node-pty e achar o claude', () => {
     }),
   );
 });
+
+describe('PtyManager.editorPath', () => {
+  it('devolve a pasta que o escritório conhece para o agente', () => {
+    expect(setup().manager.editorPath(`acc:${PID}`)).toBe(tmpdir());
+  });
+
+  it('recusa agente desconhecido, sem pasta ou com pasta inexistente', () => {
+    const status = (f: () => unknown) => {
+      try {
+        f();
+      } catch (err) {
+        return (err as PtyError).status;
+      }
+    };
+    expect(status(() => setup().manager.editorPath('acc:1'))).toBe(404);
+    expect(status(() => setup({ agent: { cwd: undefined } }).manager.editorPath(`acc:${PID}`))).toBe(409);
+    expect(status(() => setup({ agent: { cwd: join(tmpdir(), 'nao-existe-habblaud') } }).manager.editorPath(`acc:${PID}`))).toBe(400);
+  });
+});

@@ -247,6 +247,24 @@ export class PtyManager {
   }
 
   /**
+   * Pasta do agente para o navegador abrir no VS Code (link vscode://). Quem abre é o navegador, não o servidor: o
+   * Windows não deixa um processo em segundo plano trazer a janela para frente. A pasta vem do escritório e tem de existir.
+   */
+  editorPath(agentId: string): string {
+    const agent = this.opts.agent(agentId);
+    if (!agent) throw new PtyError(404, tr('agente não encontrado'));
+    if (!agent.cwd) throw new PtyError(409, tr('não sei a pasta desta sessão'));
+    let isDir = false;
+    try {
+      isDir = statSync(agent.cwd).isDirectory();
+    } catch {
+      // tratado abaixo
+    }
+    if (!isDir) throw new PtyError(400, tr('pasta não encontrada: {0}', [agent.cwd]));
+    return agent.cwd;
+  }
+
+  /**
    * Assume uma sessão aberta noutro terminal: encerra o processo de lá, espera ele sair e continua a mesma
    * conversa aqui (`claude --resume <sessão>`, na pasta e na conta originais). O que pode impedir a sessão nova
    * (pasta, conta, limite) é conferido antes de encerrar a de lá; pedidos repetidos esperam o primeiro.
