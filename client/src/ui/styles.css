@@ -10997,3 +10997,50 @@ html.is-replay #world {
 .ui-world-chip__visitors[hidden] {
   display: none;
 }
+
+/* Fila do VBoards (ui/vboards.ts): contador na barra do topo e a lista de subtarefas. */
+.ui-counter.ui-counter--vboards {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  color: var(--ui-accent);
+  background: color-mix(in srgb, var(--ui-accent) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ui-accent) 40%, transparent);
+}
+
+.ui-counter.ui-counter--vboards:hover {
+  background: color-mix(in srgb, var(--ui-accent) 20%, transparent);
+}
+
+.ui-vboards__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 360px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ui-vboards__item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--ui-line);
+  background: var(--ui-bg-soft);
+}
+
+.ui-vboards__text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ui-vboards__actions {
+  display: flex;
+  gap: 6px;
+}

@@ -23,10 +23,12 @@ vi.mock('./toasts');
 vi.mock('./version');
 vi.mock('./update');
 vi.mock('./viewport');
+vi.mock('./vboards');
 vi.mock('./topbar', () => ({ TopBar: class {
   panelGroup = { prepend() {} };
   addPanelButton() {}
   addStatus() {}
+  addCounter() {}
   render() {}
 } }));
 

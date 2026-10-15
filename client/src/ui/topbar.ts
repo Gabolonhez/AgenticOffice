@@ -150,6 +150,12 @@ export class TopBar implements UiComponent {
     );
   }
 
+  /** Acrescenta um contador antes do "precisa de você" (ex.: a fila do VBoards). */
+  addCounter(el: HTMLElement): void {
+    const waiting = this.counters.get('waiting')!.el;
+    waiting.parentElement?.insertBefore(el, waiting);
+  }
+
   /** Acrescenta um selo à linha de status da marca, depois da versão (ex.: o chip do Habblaud World). */
   addStatus(el: HTMLElement): void {
     this.status.append(el);

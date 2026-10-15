@@ -37,6 +37,7 @@ import { Toasts } from './toasts';
 import { UpdateToaster } from './version';
 import { TopBar } from './topbar';
 import { UpdateBanner } from './update';
+import { VBoardsPanel } from './vboards';
 import { InviteCard } from './world/invite-card';
 import { WorldChip } from './world/world-chip';
 import { WorldSocialNotifier } from './world/away-summary';
@@ -264,6 +265,10 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
     };
   }
   help = new HelpDialog();
+  // Fila do VBoards: subtarefas do quadro do time esperando um agente (contador ao lado do "precisa de você").
+  const vboards = new VBoardsPanel(ctx);
+  topbar.addCounter(vboards.button);
+  root.append(vboards.el);
   const day = new DayLauncher(ctx, (el) => root.append(el));
   topbar.addPanelButton(day.button);
   // Botão direito numa sala (lista lateral ou escritório): renomear.
@@ -288,7 +293,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   }));
   drawer.onLayoutChange = () => applyLayout();
 
-  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster, invite, worldChip];
+  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster, invite, worldChip, vboards];
   if (scene) components.push(scene);
   root.append(worldSocial.el);
   components.push(worldSocial);

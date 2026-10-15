@@ -22,6 +22,8 @@ import { AUDIO_BODY_MAX, type DictationService } from '../dictation/dictation';
 import type { DeliveryIndex } from '../deliveries/deliveries';
 import type { FileFetcher } from '../deliveries/fetcher';
 import { HOST_WAIT_MS } from '../host-wait';
+import { ptyRequestProblem } from './pty';
+import type { VBoardsService } from '../vboards/vboards';
 
 export interface ApiDeps {
   office: Office;
@@ -94,6 +96,8 @@ export interface ApiDeps {
    * local com Host local: pela porta do celular, nem com login (403 `local_only`).
    */
   world?: (req: IncomingMessage, res: ServerResponse, url: URL) => void;
+  /** Fila do VBoards (GET /api/vboards, POST /api/vboards/start {id, folder?}; vboards/vboards.ts). Ausente = desligado. */
+  vboards?: Pick<VBoardsService, 'list' | 'begin'>;
 }
 
 /** GET /api/agents/:id/terminal (ids nunca contêm '/'). */
@@ -526,6 +530,26 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
         if (info) sendJson(res, 200, info);
         else sendJson(res, 404, { error: tr('pedido desconhecido') });
       } else methodNotAllowed(res, path === '/api/spawn' ? 'GET, POST' : 'GET');
+      return true;
+    }
+    if (path === '/api/vboards' || path.startsWith('/api/vboards/')) {
+      // Mostra a fila do time e abre agentes no computador: só pelo próprio computador (a trava do terminal interativo).
+      const vb = deps.vboards;
+      const problem = isRemote(req) ? tr('o VBoards só é usado pelo próprio computador (http://localhost)') : ptyRequestProblem(req);
+      if (!vb) sendJson(res, 404, { error: tr('rota desconhecida') });
+      else if (problem) sendJson(res, 403, { error: problem });
+      else if (path === '/api/vboards') {
+        if (!isRead) methodNotAllowed(res, 'GET');
+        else vb.list().then((tasks) => sendJson(res, 200, { tasks }), (err) => fail(res, err));
+      } else if (path === '/api/vboards/start') {
+        if (method !== 'POST') methodNotAllowed(res, 'POST');
+        else
+          readJson(req)
+            .then((body) => vb.begin(body))
+            .then((r) => ('spawn' in r ? sendJson(res, 201, r.spawn) : sendJson(res, r.status, { error: r.error })))
+            .catch((err) => fail(res, err));
+      } else sendJson(res, 404, { error: tr('rota desconhecida') });
+      if (!vb || problem) req.resume();
       return true;
     }
     if (path === '/api/dictation' || path.startsWith('/api/dictation/')) {

@@ -59,6 +59,7 @@ import { OwnerSocial } from './world/social';
 import { BuildingTokens } from './world/tokens';
 import { BuildingUplink } from './world/uplink';
 import { WorldViewer } from './world/viewer';
+import { lastReply, loadVBoardsConfig, VBoardsService } from './vboards/vboards';
 
 const config = loadConfig();
 const startedAt = Date.now();
@@ -319,6 +320,35 @@ const ptys = spawnPty
 late.ptys = ptys;
 late.ptyOff = ptyOff;
 
+// Pastas conhecidas: projetos recentes do histórico e as salas (as sugeridas no Novo agente).
+const knownFolders = async (limit?: number) => {
+  const snap = hub.current();
+  const last = new Map<string, number>();
+  for (const a of snap.agents) last.set(a.roomId, Math.max(last.get(a.roomId) ?? 0, a.lastEventAt ?? 0));
+  const rooms = snap.rooms.filter((r) => !isDemoId(r.id)).map((r) => ({ path: r.path, lastAt: last.get(r.id) ?? 0 }));
+  return recentFolders(history ? await history.list().catch(() => []) : [], rooms, limit);
+};
+// Ponte com o VBoards (vboards/vboards.ts): git config --global vboards.url/vboards.token/user.email ou
+// HABBLAUD_VBOARDS_URL/_TOKEN/_EMAIL; HABBLAUD_VBOARDS=0 desliga. A fila só é buscada com o Novo agente ligado.
+const vboardsConfig = await loadVBoardsConfig(process.env);
+const vboards =
+  'off' in vboardsConfig
+    ? undefined
+    : new VBoardsService({
+        config: vboardsConfig,
+        agents: () => office.list(),
+        roomPath: (id) => office.roomPath(id),
+        folders: async () => (await knownFolders(100)).map((f) => f.path),
+        spawn,
+        reply: (id) => {
+          const path = agents.transcriptPathOf(id);
+          return path ? lastReply(path, agents.parserFor(id)) : undefined;
+        },
+        booting: () => office.isBooting(),
+        file: join(config.dataDir, 'vboards-links.json'),
+      });
+vboards?.load();
+
 if (config.demo) office.setDemo(true);
 // As fontes síncronas (a do Claude Code) terminam o boot aqui, antes de o hub começar a transmitir.
 void agents.start();
@@ -333,6 +363,7 @@ messages?.start();
 stats.start();
 updates.start();
 worldUplink?.start();
+vboards?.start();
 const ticker = setInterval(() => {
   try {
     office.tick();
@@ -367,13 +398,8 @@ const api = createApiHandler({
   dictation,
   deliveries,
   files: deliveryFiles,
-  spawnFolders: async () => {
-    const snap = hub.current();
-    const last = new Map<string, number>();
-    for (const a of snap.agents) last.set(a.roomId, Math.max(last.get(a.roomId) ?? 0, a.lastEventAt ?? 0));
-    const rooms = snap.rooms.filter((r) => !isDemoId(r.id)).map((r) => ({ path: r.path, lastAt: last.get(r.id) ?? 0 }));
-    return recentFolders(history ? await history.list().catch(() => []) : [], rooms);
-  },
+  spawnFolders: () => knownFolders(),
+  vboards,
   codexLive,
   stats,
   updates,
@@ -523,6 +549,11 @@ server.listen(config.port, config.host, () => {
           : tr('   Mensagens ao Codex: sem o binário do Codex (codex no PATH ou HABBLAUD_CODEX_BIN); o auxiliar npm run codex:bridge também serve.'),
     );
   }
+  log.info(
+    'off' in vboardsConfig
+      ? tr('   VBoards: {0}.', [vboardsConfig.off])
+      : tr('   VBoards: ligado ({0}){1}.', [vboardsConfig.base, spawn ? '' : tr('; só os todos (a fila precisa do Novo agente)')]),
+  );
   if (config.world.warning) log.warn(`   ${config.world.warning}.`);
   log.info(
     !world
@@ -561,6 +592,7 @@ function shutdown(signal: string): void {
   worldViewer?.stop();
   worldUplink?.stop();
   world?.stop();
+  vboards?.stop();
   names.flush();
   void closeVite?.();
   remoteListener?.close();
