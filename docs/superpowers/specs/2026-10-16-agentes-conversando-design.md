@@ -37,6 +37,10 @@ frontline-rush para: …"; "Ana (Orquestrador) quer mandar para Bia (Dev): …")
 
 - **O agente aberto por outro nasce em "pedir aprovação"**, qualquer que seja o modo de quem pediu (Claude). Codex e
   Antigravity não têm aprovação por ação (Base): nascem no automático, e o cartão diz o provedor antes da aprovação.
+- **Substitui a decisão da Base** "Orquestrador segue a permissão do agente (no automático abrirá agentes sozinho)":
+  pela regra acima, nem no automático ele delega sem o cartão. O texto pronto do papel lista as ferramentas, diz que
+  toda delegação precisa de aprovação e pede um plano curto antes; quem ainda tem o texto antigo no `roles.json` recebe
+  o novo (texto editado pelo usuário fica como está).
 - **Pasta**: só pastas que o escritório conhece; sem pasta, a de quem pede.
 - **Papel**: pelo id ou pelo nome (sem diferenciar maiúsculas).
 - **MCP sempre ligado no Claude do chat**: o servidor `habblaud` entra por `--mcp-config` em todas as rodadas. No

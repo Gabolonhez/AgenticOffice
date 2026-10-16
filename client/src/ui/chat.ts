@@ -28,6 +28,12 @@ function fillItem(el: HTMLElement, i: ChatItem): void {
   el.className = i.kind === 'tool' ? 'ui-chat__tool' : `ui-chat__item ui-chat__item--${i.kind}`;
   switch (i.kind) {
     case 'user':
+      // Mensagem de outro agente (delegação aprovada pelo usuário): mostra quem mandou.
+      if (i.from) {
+        el.classList.add('is-from-agent');
+        el.replaceChildren(h('span', { class: 'ui-chat__from', text: tr('De {0}', [i.from.name]) }), document.createTextNode(i.text));
+      } else setText(el, i.text);
+      return;
     case 'assistant':
       setText(el, i.text);
       return;

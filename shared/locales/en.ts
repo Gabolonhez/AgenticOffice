@@ -3417,4 +3417,5 @@ export const EN: Readonly<Record<string, string>> = {
   "Sem resposta do usuário a tempo ({0}).": "No answer from the user in time ({0}).",
   "Pediu a {0}": "Asked {0}",
   "Pedido de {0}": "Request from {0}",
+  "De {0}": "From {0}",
 };

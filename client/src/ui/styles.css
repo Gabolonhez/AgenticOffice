@@ -11076,6 +11076,18 @@ html.is-replay #world {
   border: 1px solid rgba(124, 200, 255, 0.35);
 }
 
+.ui-chat__item--user.is-from-agent {
+  align-self: flex-start;
+}
+
+.ui-chat__from {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ui-muted);
+}
+
 .ui-chat__item--assistant {
   background: var(--ui-bg-soft);
   border: 1px solid var(--ui-line);
