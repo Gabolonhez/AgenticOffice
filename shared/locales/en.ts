@@ -3301,4 +3301,7 @@ export const EN: Readonly<Record<string, string>> = {
   "VBoards: não deu para gravar {0} ({1}).": "VBoards: couldn't write {0} ({1}).",
   "A CLI terminou sem resposta (código {0})": "The CLI exited without a reply (code {0})",
   "O Antigravity não respondeu. Faça login rodando `agy` num terminal.": "Antigravity didn't reply. Sign in by running `agy` in a terminal.",
+  "A rodada foi interrompida porque o servidor reiniciou.": "The turn was interrupted because the server restarted.",
+  "O nome do papel precisa ter de 1 a {0} caracteres.": "The role name must be 1 to {0} characters.",
+  "O texto do papel precisa ter de 1 a {0} caracteres.": "The role text must be 1 to {0} characters.",
 };
