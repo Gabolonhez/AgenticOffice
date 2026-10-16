@@ -3318,4 +3318,8 @@ export const EN: Readonly<Record<string, string>> = {
   "Tempo da rodada esgotado ({0} min).": "Turn time limit reached ({0} min).",
   "aprovação": "approval",
   "{0} não encontrado no PATH": "{0} not found on PATH",
+  "Agente não encontrado.": "Agent not found.",
+  "Muitos pedidos de aprovação abertos.": "Too many open approval requests.",
+  "Sem resposta a tempo.": "No answer in time.",
+  "Recusado pelo usuário no AgenticOffice: {0}": "Denied by the user in AgenticOffice: {0}",
 };

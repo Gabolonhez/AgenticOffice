@@ -3319,4 +3319,8 @@ export const ES: Readonly<Record<string, string>> = {
   "Tempo da rodada esgotado ({0} min).": "Tiempo de la ronda agotado ({0} min).",
   "aprovação": "aprobación",
   "{0} não encontrado no PATH": "{0} no encontrado en el PATH",
+  "Agente não encontrado.": "Agente no encontrado.",
+  "Muitos pedidos de aprovação abertos.": "Demasiadas solicitudes de aprobación abiertas.",
+  "Sem resposta a tempo.": "Sin respuesta a tiempo.",
+  "Recusado pelo usuário no AgenticOffice: {0}": "Rechazado por el usuario en AgenticOffice: {0}",
 };
