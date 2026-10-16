@@ -234,8 +234,8 @@ export class ChatService {
     if (!rt) return undefined;
     let entry!: Runtime['queue'][number];
     const result = new Promise<DeliverResult>((done) => (entry = { text, from, done }));
-    if (rt.proc || rt.rec.running) rt.queue.push(entry);
-    else this.startDelivered(rt, entry);
+    rt.queue.push(entry);
+    this.runQueued(rt);
     return {
       result,
       cancel: () => {
@@ -461,10 +461,20 @@ export class ChatService {
     return full;
   }
 
-  private startDelivered(rt: Runtime, q: Runtime['queue'][number]): void {
-    if (overLimit(rt.rec.spend, rt.rec.limits)) return q.done({ ok: false, error: tr('O agente atingiu o limite de custo ou de tokens.') });
-    rt.waiter = q.done;
-    this.runTurn(rt, q.text, q.from);
+  /** Agente livre: roda a próxima mensagem da fila. Quem espera sempre recebe um fim (limite, CLI que não abriu). */
+  private runQueued(rt: Runtime): void {
+    while (!rt.proc && !rt.rec.running && rt.queue.length) {
+      const q = rt.queue.shift()!;
+      if (overLimit(rt.rec.spend, rt.rec.limits)) {
+        q.done({ ok: false, error: tr('O agente atingiu o limite de custo ou de tokens.') });
+        continue;
+      }
+      rt.waiter = q.done;
+      this.runTurn(rt, q.text, q.from);
+      if (rt.proc || rt.rec.running) return;
+      delete rt.waiter;
+      q.done(this.turnResult(rt));
+    }
   }
 
   /** Como terminou a rodada que acabou de fechar, para quem mandou a mensagem. */
@@ -638,8 +648,7 @@ export class ChatService {
       delete rt.waiter;
       waiter?.(this.turnResult(rt));
       for (const cb of this.turnEndListeners) cb(rec.agentId);
-      const next = rt.queue.shift();
-      if (next && !rt.proc && !rec.running) this.startDelivered(rt, next);
+      this.runQueued(rt);
     });
   }
 

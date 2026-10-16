@@ -309,6 +309,20 @@ describe('chat: mensagens entre agentes (deliver)', () => {
     expect(chat.deliver('chat:x', 'a', from)).toBeUndefined();
   });
 
+  it('quem espera sempre recebe um fim: CLI sumiu ou limite estourado com várias na fila', async () => {
+    let bin = true;
+    const { chat, spawned } = setup({ bins: () => (bin ? { file: 'claude.exe', prefix: [] } : undefined) });
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi', limits: { maxTokens: 1 } }));
+    const a = chat.deliver(id, 'a', from)!;
+    const b = chat.deliver(id, 'b', from)!;
+    spawned[0].proc.finish(fixture('claude-turn.jsonl')); // gasta mais que 1 token: bloqueado
+    expect(await a.result).toMatchObject({ ok: false });
+    expect(await b.result).toMatchObject({ ok: false });
+    chat.setLimits(id, {});
+    bin = false;
+    expect(await chat.deliver(id, 'c', from)!.result).toMatchObject({ ok: false });
+  });
+
   it('lista os agentes do chat com nome, papel, pasta e status', async () => {
     const { chat, office } = setup();
     const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi', roleId: 'dev', name: 'Bia' }));
