@@ -14,7 +14,7 @@ setQuiet(true);
 
 const CWD = '/projetos/loja';
 
-function setup(opts: { tailBytes?: number } = {}) {
+function setup(opts: { tailBytes?: number; ignoreSession?: (sessionId: string) => boolean } = {}) {
   const tmp = tempDir();
   const home = tmp.dir;
   const dir = join(home, '.claude');
@@ -41,7 +41,7 @@ function setup(opts: { tailBytes?: number } = {}) {
   });
   late.office = office;
   const alive = new Set<number>();
-  const watcher = new ClaudeWatcher({ accounts, office, inDocker: false, now, isAlive: (pid) => alive.has(pid), watch: false, tailBytes: opts.tailBytes });
+  const watcher = new ClaudeWatcher({ accounts, office, inDocker: false, now, isAlive: (pid) => alive.has(pid), watch: false, tailBytes: opts.tailBytes, ignoreSession: opts.ignoreSession });
   const notices: Notice[] = [];
 
   const ctx = {
@@ -742,5 +742,19 @@ describe('ClaudeWatcher — shell lançado no começo de um transcript maior que
       c.watcher.stop();
       c.tmp.cleanup();
     }
+  });
+});
+
+describe('agente do chat não aparece em dobro', () => {
+  it('sessão do chat (claude -p grava sessions/<pid>.json) é ignorada pelo watcher', () => {
+    const sid = '80aa7451-3f3d-455c-aea0-72f7149af416';
+    const c = setup({ ignoreSession: (s) => s === sid });
+    c.openSession(4242, sid, { entrypoint: 'sdk-cli' });
+    c.watcher.boot();
+    expect(c.office.get('.claude:4242')).toBeUndefined();
+    const plain = setup();
+    plain.openSession(4242, sid, { entrypoint: 'sdk-cli' });
+    plain.watcher.boot();
+    expect(plain.office.get('.claude:4242')).toBeDefined();
   });
 });

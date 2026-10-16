@@ -24,7 +24,7 @@ afterEach(() => {
   cleanups = [];
 });
 
-function setup(opts: { names?: string[]; noLocks?: boolean; env?: (dirs: string[]) => NodeJS.ProcessEnv } = {}) {
+function setup(opts: { names?: string[]; noLocks?: boolean; env?: (dirs: string[]) => NodeJS.ProcessEnv; ignoreSession?: (sessionId: string) => boolean } = {}) {
   const homes = (opts.names ?? ['.codex']).map((n) => codexHome(n));
   const home = homes[0];
   cleanups.push(...homes.map((h) => h.cleanup));
@@ -44,7 +44,7 @@ function setup(opts: { names?: string[]; noLocks?: boolean; env?: (dirs: string[
   });
   late.office = office;
   const dirs = homes.map((h) => h.dir);
-  const source = new CodexSource({ accounts, office, dirs, env: opts.env?.(dirs) ?? {}, home: home.home, now, watch: false });
+  const source = new CodexSource({ accounts, office, dirs, env: opts.env?.(dirs) ?? {}, home: home.home, now, watch: false, ignoreSession: opts.ignoreSession });
   // Para antes de apagar as pastas (nenhum ciclo agendado roda depois).
   cleanups.unshift(() => source.stop());
   const notices: Notice[] = [];
@@ -622,5 +622,16 @@ describe('scanPrefix do Codex', () => {
       warn.mockRestore();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('fonte do Codex: agente do chat', () => {
+  it('thread aberto pelo chat (ignoreSession) não entra no escritório', () => {
+    const ctx = setup({ ignoreSession: (s) => s === T });
+    const t0 = ctx.now();
+    ctx.home.rollout(T, [R.meta(T, { at: t0 - 50_000, cwd: '/projetos/loja' }), R.taskStarted('turn1', t0 - 48_000)]);
+    ctx.home.lock(T, t0 - 60_000);
+    ctx.source.boot();
+    expect(ctx.agent()).toBeUndefined();
   });
 });

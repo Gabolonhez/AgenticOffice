@@ -102,6 +102,8 @@ export interface CodexSourceOptions {
   tailBytes?: number;
   /** Desliga o fs.watch (testes). */
   watch?: boolean;
+  /** Thread que outro dono já mostra (o chat do escritório roda `codex exec`). */
+  ignoreSession?: (threadId: string) => boolean;
 }
 
 interface CodexAccount {
@@ -401,6 +403,7 @@ export class CodexSource implements AgentSource, CodexLive {
 
   private wanted(t: ThreadTracker, now: number, via?: 'lock' | 'recent' | 'hook'): boolean {
     if (t.kind === 'internal') return false;
+    if (this.opts.ignoreSession?.(t.threadId)) return false;
     const hookRecent = t.lastHookAt !== undefined && now - t.lastHookAt < HOOK_PRESENCE_MS;
     // SessionEnd: fecha, a não ser que algo novo tenha acontecido depois.
     if (t.endedAt !== undefined) {

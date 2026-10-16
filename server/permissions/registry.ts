@@ -91,7 +91,7 @@ export interface RegistryOptions {
   maxPending?: number;
 }
 
-export type SkipReason = 'no-viewers' | 'unknown-session' | 'unsupported-tool' | 'too-many';
+export type SkipReason = 'no-viewers' | 'unknown-session' | 'unsupported-tool' | 'too-many' | 'chat-agent';
 export type RegisterResult = { id: string; expiresAt: number } | { skip: SkipReason };
 export type ReleaseReason = 'terminal' | 'answered' | 'expired' | 'orphan' | 'gone' | 'unwatched' | 'shutdown';
 
@@ -132,6 +132,8 @@ interface Pending {
   info: PermissionRequestInfo;
   /** Pedido do Codex (sem a busca da resposta no transcript). */
   codex?: boolean;
+  /** Pedido do chat do escritório (registerChat): não há terminal onde ser respondido, e espera a página abrir. */
+  chat?: boolean;
   /** Pergunta (AskUserQuestion): o formato de `tool_input.questions`, por posição (undefined = entrada inválida). */
   askFormat?: Array<AskFormat | undefined>;
   agentId: string;
@@ -404,6 +406,8 @@ export class PermissionRegistry {
       ? this.resolveCodexAgent(req.sessionId, req.agentId, req.agentType, this.opts.codexAccount?.(req.account, req.codexHome) ?? req.account)
       : this.resolveAgent(req.sessionId, req.agentId, req.agentType);
     if (!target) return { skip: 'unknown-session' };
+    // Agente do chat: o pedido vem pelo permission tool dele (registerChat); o hook do plugin sai sem decidir.
+    if (this.opts.office.get(target.id)?.chat) return { skip: 'chat-agent' };
     if (this.size >= this.maxPending) return { skip: 'too-many' };
 
     const now = this.now();
@@ -445,6 +449,29 @@ export class PermissionRegistry {
     }
     this.opts.office.markDirty();
     return { id, expiresAt: info.expiresAt + EXPIRY_GRACE_MS };
+  }
+
+  /**
+   * Pedido de um agente do chat (o permission tool dele chamou o servidor). Vale sem página aberta: o pedido espera
+   * a página abrir, e o chat mostra o mesmo cartão.
+   */
+  registerChat(p: { agentId: string; sessionId: string; tool: string; input: Record<string, unknown>; timeoutMs: number }): { id: string; expiresAt: number } | { skip: 'too-many' } {
+    if (this.size >= this.maxPending) return { skip: 'too-many' };
+    const now = this.now();
+    const id = `p-${now.toString(36)}-${++this.seq}-${randomBytes(9).toString('base64url')}`;
+    const desc = describeTool(p.tool, p.input);
+    const view = toolView(p.tool, p.input, this.opts.office.get(p.agentId)?.roomId ?? '');
+    const info: PermissionRequestInfo = { id, tool: p.tool, title: view.title, text: desc.text, icon: desc.icon, createdAt: now, expiresAt: now + p.timeoutMs };
+    if (view.input) info.input = view.input;
+    if (view.inputKind) info.inputKind = view.inputKind;
+    // "Aprovar e não perguntar de novo" (sugestão 0): vale para esta conversa, guardado pelo chat (alwaysAllow).
+    const cmd = typeof p.input.command === 'string' ? p.input.command.trim().split(/\s+/)[0] : '';
+    info.suggestions = [{ index: 0, rules: [cmd ? `${p.tool}(${cmd}:*)` : p.tool], destination: 'session' }];
+    this.pending.set(id, { info, chat: true, agentId: p.agentId, sessionId: p.sessionId, signature: '', lastScanAt: 0, waiters: new Set(), idleSince: now });
+    this.opts.office.addActivity(p.agentId, { id: `${p.agentId}#perm:${id}`, at: now, kind: 'wait', icon: '🔐', text: truncate(tr('Pede permissão: {0}', [desc.text]), 46), detail: view.title, tool: 'PermissionRequest' }, false);
+    this.opts.office.noticePermission(p.agentId, desc.text);
+    this.opts.office.markDirty();
+    return { id, expiresAt: info.expiresAt };
   }
 
   /** Detalhe completo de um pedido em aberto (com os argumentos), ou undefined. */
@@ -557,6 +584,7 @@ export class PermissionRegistry {
       if (now >= p.info.expiresAt + EXPIRY_GRACE_MS) this.release(p, 'expired');
       else if (!p.waiters.size && now - p.idleSince >= this.orphanMs) this.release(p, 'orphan');
       else if (!present(this.opts.office.get(p.agentId))) this.release(p, 'gone');
+      else if (p.chat) continue;
       else if (unwatched && p.info.expiresAt - p.info.createdAt > DEFAULT_TIMEOUT_MS) this.release(p, 'unwatched');
       // No Codex o terminal só pede a aprovação depois que o hook termina: não há resposta dada lá para procurar.
       else if (p.codex) continue;

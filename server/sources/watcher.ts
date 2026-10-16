@@ -56,6 +56,8 @@ export interface WatcherOptions {
   isAlive?: (pid: number) => boolean;
   /** Desliga o fs.watch (testes). */
   watch?: boolean;
+  /** Sessão que outro dono já mostra (o chat do escritório roda `claude -p`, que também grava sessions/<pid>.json). */
+  ignoreSession?: (sessionId: string) => boolean;
 }
 
 /** cwd -> nome da pasta em projects/ (todo caractere não alfanumérico vira "-"). */
@@ -277,6 +279,7 @@ export class ClaudeWatcher implements AgentSource {
       if (res.error) info.error = res.error;
       this.sourceInfo.set(acc.dir, info);
       for (const entry of res.entries) {
+        if (this.opts.ignoreSession?.(entry.sessionId)) continue;
         const key = `${acc.id}:${entry.pid}`;
         seen.add(key);
         try {

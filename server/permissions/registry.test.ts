@@ -518,3 +518,23 @@ describe('peças puras', () => {
     }
   });
 });
+
+describe('pedidos do chat do escritório', () => {
+  it('o hook de um agente do chat sai sem decidir (o pedido vai pelo permission tool)', () => {
+    const { office, registry } = setup({ viewers: 1 });
+    office.addMain({ id: 'chat:1', account: '', sessionId: 'S', cwd: '/p/loja', role: '', startedAt: 0, status: 'working', chat: true });
+    expect(registry.register(hookInput({ session_id: 'S', tool_input: { command: 'ls' } }))).toEqual({ skip: 'chat-agent' });
+  });
+
+  it('registerChat vale sem página aberta, aparece no snapshot e a decisão resolve a espera', async () => {
+    const { office, registry } = setup({ viewers: 0 });
+    office.addMain({ id: 'chat:1', account: '', sessionId: 'S', cwd: '/p/loja', role: '', startedAt: 0, status: 'working', chat: true });
+    const r = registry.registerChat({ agentId: 'chat:1', sessionId: 'S', tool: 'Bash', input: { command: 'git push' }, timeoutMs: 300_000 });
+    expect('id' in r).toBe(true);
+    const id = 'id' in r ? r.id : '';
+    expect(registry.snapshot().get('chat:1')?.id).toBe(id);
+    const w = registry.wait(id, 10_000)!;
+    expect(registry.decide(id, { behavior: 'allow' })).toBe('ok');
+    expect(await w.result).toMatchObject({ status: 'decided', behavior: 'allow' });
+  });
+});
