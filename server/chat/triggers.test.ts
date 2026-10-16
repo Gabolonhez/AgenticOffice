@@ -137,6 +137,16 @@ describe('gatilhos: aprovação', () => {
     expect(svc.history()[0]).toMatchObject({ outcome: 'approved', agentId: 'chat:new' });
   });
 
+  it('"Testar agora" numa regra desligada também só roda se aprovado', async () => {
+    const { svc, chat, cards } = setup();
+    const r = rule(svc.create({ name: 'R', enabled: false, when: { kind: 'interval', minutes: 15 }, do: { kind: 'send', agentId: 'chat:bia', message: 'oi' } }));
+    svc.test(r.id);
+    expect(chat.deliver).not.toHaveBeenCalled();
+    cards[0].answer({ answer: 'allow' });
+    await flush();
+    expect(chat.deliver).toHaveBeenCalledTimes(1);
+  });
+
   it('recusa e prazo: nada roda, histórico registra', async () => {
     const { svc, chat, cards } = setup();
     const r = rule(svc.create({ name: 'R', when: { kind: 'interval', minutes: 15 }, do: { kind: 'send', agentId: 'chat:bia', message: 'oi {{hora}}' } }));

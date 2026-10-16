@@ -55,5 +55,6 @@ espera são juntados (o histórico conta quantos). "Testar agora" também só cr
   modificação a cada 10 s. O observador é injetado nos testes.
 - Agente terminou: mensagem mandada por um gatilho também conta (a pessoa aprova cada passo, então não há laço sem
   ela). O agente da própria regra não existe no chat, então não dispara nada.
-- Regra desligada ou apagada com cartão pendente: o cartão some e o disparo fica "expirado".
+- Regra desligada ou apagada com cartão pendente: o cartão some e o disparo fica "expirado". "Testar agora" vale também
+  com a regra desligada (para conferir antes de ligar).
 - O agente aberto pelo gatilho usa a permissão escolhida na regra (a pessoa viu e aprovou no cartão).

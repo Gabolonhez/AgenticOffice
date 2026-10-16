@@ -431,7 +431,8 @@ export class TriggerService {
     if (a.answer === 'deny') return this.end(firing, 'denied', a.message || undefined);
     if (a.answer === 'too-many') return this.end(firing, 'failed', tr('Muitos pedidos de aprovação abertos.'));
     if (a.answer !== 'allow') return this.end(firing, 'expired', rule?.enabled ? undefined : tr('Gatilho desligado.'));
-    if (!rule?.enabled) return this.end(firing, 'expired', tr('Gatilho desligado.'));
+    // Desligar já tira o cartão; "Testar agora" numa regra desligada roda se aprovado.
+    if (!rule) return this.end(firing, 'expired', tr('gatilho não encontrado'));
     if (plan.kind === 'open') {
       const r = this.deps.chat.open(plan.req, { agentId: `trigger:${ruleId}`, name: tr('Gatilho "{0}"', [rule.name]) });
       if (!('agentId' in r)) return this.end(firing, 'failed', r.reason);
