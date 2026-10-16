@@ -356,6 +356,9 @@ export class SpawnPanel {
     setHidden(this.otherBtn, this.chatMode);
     setHidden(this.attachBtn, this.chatMode);
     if (this.chatMode && this.typing) this.showOther(false);
+    // No chat o pedido é a primeira mensagem do agente: obrigatório.
+    this.prompt.placeholder = this.chatMode ? tr('O que o agente deve fazer (obrigatório)') : tr('O que o agente deve fazer (opcional)');
+    this.prompt.required = this.chatMode;
   }
 
   /** Conta e aprovação conforme o agente escolhido (só o Claude pede aprovação ação por ação). */

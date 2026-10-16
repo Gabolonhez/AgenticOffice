@@ -3411,4 +3411,5 @@ export const FR: Readonly<Record<string, string>> = {
   "Nota criada": "Note créée",
   "Nota apagada": "Note supprimée",
   "Alternar entre o escritório e o quadro (cartões, linhas e notas)": "Basculer entre le bureau et le tableau (cartes, liens et notes)",
+  "O que o agente deve fazer (obrigatório)": "Ce que l'agent doit faire (obligatoire)",
 };
