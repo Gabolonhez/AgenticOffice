@@ -1,0 +1,93 @@
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { ChatView } from '../../shared/chat';
+import { createChatRoutes, type ChatRouteDeps } from './http';
+import type { ChatRecord } from './store';
+
+const servers: http.Server[] = [];
+afterEach(() => {
+  for (const s of servers.splice(0)) {
+    s.closeAllConnections();
+    s.close();
+  }
+});
+
+async function start() {
+  const afters: number[] = [];
+  const rec = { agentId: 'chat:1', permission: 'auto', cwd: 'C:\\proj', folder: 'C:\\proj', alwaysAllow: [], providerSessionId: 'S' } as unknown as ChatRecord;
+  const chat = {
+    tokenOwner: (t: string) => (t === 'tok-1' ? 'chat:1' : t === 'tok-2' ? 'chat:2' : undefined),
+    record: (id: string) => (id === 'chat:1' ? rec : undefined),
+    view: (id: string, after?: number) => {
+      afters.push(after ?? 0);
+      return id === 'chat:1' ? ({ agentId: id, provider: 'claude', items: [], state: { phase: 'idle', spentUsd: 0, spentTokens: 0, limits: {} }, lastSeq: 0 } as ChatView) : undefined;
+    },
+    open: () => ({ agentId: 'chat:9' }),
+  } as unknown as ChatRouteDeps['chat'];
+  const routes = createChatRoutes({ chat, folders: () => [], accounts: () => [] });
+  const server = http.createServer((req, res) => routes(req, res, new URL(req.url ?? '/', 'http://x')));
+  servers.push(server);
+  await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
+  return { port: (server.address() as AddressInfo).port, afters };
+}
+
+function raw(port: number, path: string, opts: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<{ status: number; body: string }> {
+  return new Promise((ok, fail) => {
+    const req = http.request({ host: '127.0.0.1', port, path, method: opts.method ?? 'GET', headers: { host: `localhost:${port}`, ...opts.headers } }, (res) => {
+      let body = '';
+      res.on('data', (c) => (body += c));
+      res.on('end', () => ok({ status: res.statusCode ?? 0, body }));
+    });
+    req.on('error', fail);
+    req.end(opts.body);
+  });
+}
+
+const json = { 'content-type': 'application/json' };
+
+describe('chat: rotas HTTP', () => {
+  it('só pelo próprio computador: Host de rede ou Origin de fora dão 403', async () => {
+    const { port } = await start();
+    const lan = await raw(port, '/api/chat/agents', { method: 'POST', headers: { ...json, host: '192.168.0.10' }, body: '{}' });
+    expect(lan.status).toBe(403);
+    expect(JSON.parse(lan.body).error).toBe('abra o Habblaud por http://localhost para usar o terminal interativo');
+    const evil = await raw(port, '/api/chat/agents', { method: 'POST', headers: { ...json, origin: 'http://evil' }, body: '{}' });
+    expect(evil.status).toBe(403);
+  });
+
+  it('MCP exige o Bearer do próprio agente', async () => {
+    const { port } = await start();
+    const call = JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'approve', arguments: { tool_name: 'Bash', input: { command: 'ls' } } } });
+    const path = `/api/chat/mcp/${encodeURIComponent('chat:1')}`;
+    expect((await raw(port, path, { method: 'POST', headers: json, body: call })).status).toBe(401);
+    expect((await raw(port, path, { method: 'POST', headers: { ...json, authorization: 'Bearer tok-2' }, body: call })).status).toBe(401);
+    const ok = await raw(port, path, { method: 'POST', headers: { ...json, authorization: 'Bearer tok-1' }, body: call });
+    expect(ok.status).toBe(200);
+    expect(JSON.parse(ok.body)).toEqual({ jsonrpc: '2.0', id: 2, result: { content: [{ type: 'text', text: '{"behavior":"allow","updatedInput":{"command":"ls"}}' }] } });
+    const note = await raw(port, path, { method: 'POST', headers: { ...json, authorization: 'Bearer tok-1' }, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
+    expect(note.status).toBe(202);
+    expect((await raw(port, path, { headers: { authorization: 'Bearer tok-1' } })).status).toBe(405);
+  });
+
+  it('a conversa vem a partir do seq pedido', async () => {
+    const { port, afters } = await start();
+    const r = await raw(port, `/api/chat/agents/${encodeURIComponent('chat:1')}?after=3`);
+    expect(r.status).toBe(200);
+    expect(afters).toEqual([3]);
+    expect((await raw(port, '/api/chat/agents/chat%3Ax')).status).toBe(404);
+  });
+
+  it('corpo grande demais dá 413', async () => {
+    const { port } = await start();
+    const r = await raw(port, '/api/chat/agents', { method: 'POST', headers: json, body: JSON.stringify({ prompt: 'x'.repeat(300 * 1024) }) });
+    expect(r.status).toBe(413);
+  });
+
+  it('abrir devolve 201 com o id', async () => {
+    const { port } = await start();
+    const r = await raw(port, '/api/chat/agents', { method: 'POST', headers: json, body: JSON.stringify({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }) });
+    expect(r.status).toBe(201);
+    expect(JSON.parse(r.body)).toEqual({ agentId: 'chat:9' });
+  });
+});

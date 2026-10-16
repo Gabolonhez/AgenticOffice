@@ -3345,4 +3345,11 @@ export const FR: Readonly<Record<string, string>> = {
   "A pasta do projeto tem mudanças sem commit; faça commit ou guarde antes de juntar.": "Le dossier du projet a des modifications non commitées ; commitez ou mettez-les de côté avant de fusionner.",
   "Não deu para commitar o trabalho da cópia: {0}": "Impossible de commiter le travail de la copie : {0}",
   "Conflito ao juntar; nada foi alterado no projeto.": "Conflit lors de la fusion ; rien n'a été modifié dans le projet.",
+  "Chat com agentes desligado: inicie o servidor com HABBLAUD_PTY=1.": "Le chat avec les agents est désactivé : lancez le serveur avec HABBLAUD_PTY=1.",
+  "Chat com agentes indisponível no Docker: rode o servidor direto no computador.": "Le chat avec les agents est indisponible dans Docker : lancez le serveur directement sur l'ordinateur.",
+  "Cópia descartada.": "Copie supprimée.",
+  "Cópia juntada ao projeto.": "Copie fusionnée dans le projet.",
+  "Este agente não tem cópia isolada aberta.": "Cet agent n'a pas de copie isolée ouverte.",
+  "Trabalho do agente {0}": "Travail de l'agent {0}",
+  "não autorizado": "non autorisé",
 };

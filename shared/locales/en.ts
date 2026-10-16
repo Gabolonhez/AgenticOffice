@@ -3328,4 +3328,11 @@ export const EN: Readonly<Record<string, string>> = {
   "A pasta do projeto tem mudanças sem commit; faça commit ou guarde antes de juntar.": "The project folder has uncommitted changes; commit or stash them before merging.",
   "Não deu para commitar o trabalho da cópia: {0}": "Couldn't commit the copy's work: {0}",
   "Conflito ao juntar; nada foi alterado no projeto.": "Conflict while merging; nothing was changed in the project.",
+  "Chat com agentes desligado: inicie o servidor com HABBLAUD_PTY=1.": "Agent chat is off: start the server with HABBLAUD_PTY=1.",
+  "Chat com agentes indisponível no Docker: rode o servidor direto no computador.": "Agent chat is unavailable in Docker: run the server directly on the computer.",
+  "Cópia descartada.": "Copy discarded.",
+  "Cópia juntada ao projeto.": "Copy merged into the project.",
+  "Este agente não tem cópia isolada aberta.": "This agent has no open isolated copy.",
+  "Trabalho do agente {0}": "Work by agent {0}",
+  "não autorizado": "unauthorized",
 };

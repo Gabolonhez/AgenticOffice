@@ -398,6 +398,8 @@ export interface AccessInfo {
    * com Host local. Ausente em servidores antigos.
    */
   world?: boolean;
+  /** Pode abrir e conversar com agentes pelo chat do escritório (/api/chat/*): só pelo próprio computador. */
+  chat?: boolean;
 }
 
 export interface FeedItem {

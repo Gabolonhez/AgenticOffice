@@ -60,6 +60,9 @@ import { BuildingTokens } from './world/tokens';
 import { BuildingUplink } from './world/uplink';
 import { WorldViewer } from './world/viewer';
 import { lastReply, loadVBoardsConfig, VBoardsService } from './vboards/vboards';
+import { createChatRoutes } from './chat/http';
+import { ChatService } from './chat/service';
+import { createWorktreeOps } from './chat/worktree';
 
 const config = loadConfig();
 const startedAt = Date.now();
@@ -81,7 +84,7 @@ const roomAliases = new RoomAliases(join(config.dataDir, 'rooms.json'));
 roomAliases.load();
 
 // Office, contas e fontes de agentes se referenciam (avisos de mudança / fontes): ligação tardia.
-const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; ptys?: PtyManager; ptyOff?: string } = {};
+const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; ptys?: PtyManager; ptyOff?: string; chat?: ChatService } = {};
 // Versão nova: consulta a release mais recente no GitHub a cada 6 h (HABBLAUD_UPDATE_CHECK=0 desliga).
 const updates = new UpdateChecker({
   current: config.version,
@@ -134,10 +137,13 @@ const office = new Office({
 // Fontes de agentes, uma por ferramenta (sources/source.ts): a do Claude Code e, depois dela, a do Codex (quando há
 // pastas do Codex; HABBLAUD_CODEX=0 desliga), com o histórico dela no HistorySet abaixo e as contas registradas por
 // ela mesma (accounts.setProviderAccounts). `codex` também recebe os eventos dos hooks do Codex (CodexLive).
-const claude = new ClaudeWatcher({ accounts, office, inDocker: config.inDocker });
+// Agentes do chat do escritório (server/chat) rodam `claude -p`/`codex exec`, que também aparecem nas fontes: o chat já
+// os mostra, então as fontes os ignoram (closure: o chat é criado mais abaixo).
+const ignoreChatSession = (s: string) => late.chat?.isChatSession(s) ?? false;
+const claude = new ClaudeWatcher({ accounts, office, inDocker: config.inDocker, ignoreSession: ignoreChatSession });
 const agents = new SourceSet([claude]);
 const codexDirs = config.codex ? discoverCodexDirs(process.env, config.home) : [];
-const codex = codexDirs.length ? new CodexSource({ accounts, office, dirs: codexDirs, env: process.env, home: config.home }) : undefined;
+const codex = codexDirs.length ? new CodexSource({ accounts, office, dirs: codexDirs, env: process.env, home: config.home, ignoreSession: ignoreChatSession }) : undefined;
 if (codex) agents.add(codex);
 // Antigravity IDE (só leitura): quando a pasta das conversas existe; HABBLAUD_ANTIGRAVITY=0 desliga.
 const antigravityConversations = antigravityDir(config.home);
@@ -372,6 +378,45 @@ const ticker = setInterval(() => {
   }
 }, 250);
 
+// Chat com agentes (server/chat): abre Claude Code, Codex e Antigravity sem tela e conversa pelo escritório. Fora do
+// Docker e com HABBLAUD_PTY=1 (abre processos na máquina, a mesma escolha do terminal interativo).
+const chatOff = config.inDocker
+  ? tr('Chat com agentes indisponível no Docker: rode o servidor direto no computador.')
+  : !ptyOptIn
+    ? tr('Chat com agentes desligado: inicie o servidor com HABBLAUD_PTY=1.')
+    : undefined;
+// As pastas conhecidas são assíncronas (histórico); o chat consulta a última lista, renovada a cada 30 s.
+let chatFolders: Array<{ path: string; name?: string }> = [];
+const refreshChatFolders = () =>
+  void knownFolders(100)
+    .then((f) => (chatFolders = f))
+    .catch(() => {});
+const chat = chatOff
+  ? undefined
+  : new ChatService({
+      office,
+      dataDir: config.dataDir,
+      port: config.port,
+      knownFolders: () => chatFolders.map((f) => f.path),
+      accounts,
+      worktrees: createWorktreeOps(config.dataDir),
+    });
+late.chat = chat;
+const chatRoutes = chat
+  ? createChatRoutes({
+      chat,
+      registry: permissions ?? undefined,
+      folders: () => (refreshChatFolders(), chatFolders),
+      accounts: () => accounts.allEntries().map((a) => ({ id: a.id, provider: a.provider, short: accounts.find(a.id)?.detected.name })),
+      worktrees: createWorktreeOps(config.dataDir),
+    })
+  : undefined;
+if (chat) {
+  chat.start();
+  refreshChatFolders();
+  setInterval(refreshChatFolders, 30_000).unref();
+}
+
 const api = createApiHandler({
   renameRoom: (id, name) => {
     const path = office.roomPath(id);
@@ -400,6 +445,8 @@ const api = createApiHandler({
   files: deliveryFiles,
   spawnFolders: () => knownFolders(),
   vboards,
+  chat: chatRoutes,
+  chatOff,
   codexLive,
   stats,
   updates,

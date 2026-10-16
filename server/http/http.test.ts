@@ -438,3 +438,19 @@ describe('guarda de Host/Origin', () => {
     expect(originAllowed('file://', 'localhost:4747', allowed)).toBe(false);
   });
 });
+
+describe('chat com agentes desligado', () => {
+  it('sem o chat (Docker): /api/access diz chat:false e as rotas explicam o motivo', async () => {
+    const env = await start();
+    try {
+      const access = (await (await fetch(`${env.base}/api/access`)).json()) as { chat?: boolean };
+      expect(access.chat).toBe(false);
+      const r = await fetch(`${env.base}/api/chat/options`);
+      expect(r.status).toBe(403);
+      expect(((await r.json()) as { error: string }).error).toBe('Chat com agentes indisponível no Docker: rode o servidor direto no computador.');
+    } finally {
+      await env.close();
+      env.cleanup();
+    }
+  });
+});

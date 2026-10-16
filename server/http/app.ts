@@ -59,6 +59,9 @@ export interface ApiDeps {
    * Ausente = desligado (sem HABBLAUD_PTY=1, Docker, sem node-pty ou sem bind local).
    */
   pty?: (req: IncomingMessage, res: ServerResponse, path: string) => void;
+  /** Chat com agentes (/api/chat/*, server/chat/http.ts). Ausente = desligado; `chatOff` diz o motivo. */
+  chat?: (req: IncomingMessage, res: ServerResponse, url: URL) => void;
+  chatOff?: string;
   /**
    * Fonte do Codex ao vivo: recebe os eventos dos hooks do Codex (POST /api/codex/events, server/codex/http.ts). Sem
    * ela a rota responde {ok: false}. Só com Host local e, fora do Docker, conexão pelo loopback (os eventos só observam:
@@ -403,6 +406,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
           terminal: !!terminals && trusted(req, 'terminal'),
           spawn: !!deps.spawn && trusted(req, 'spawn'),
           world: !!deps.world && !!deps.terminal && !remote && isLoopbackHost(req.headers.host),
+          chat: !!deps.chat && !remote && isLoopbackHost(req.headers.host),
         };
         sendJson(res, 200, access);
       }
@@ -453,6 +457,17 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       } else {
         deps.permissions(req, res, path);
       }
+      return true;
+    }
+    if (path === '/api/chat' || path.startsWith('/api/chat/')) {
+      // Abre processos na máquina: nunca pela porta remota (o resto da trava fica em chat/http.ts).
+      if (isRemote(req)) {
+        req.resume();
+        sendJson(res, 403, { error: tr('o terminal interativo só pode ser usado no próprio computador') });
+      } else if (!deps.chat) {
+        req.resume();
+        sendJson(res, 403, { error: deps.chatOff ?? tr('Chat com agentes indisponível no Docker: rode o servidor direto no computador.') });
+      } else deps.chat(req, res, url);
       return true;
     }
     if (path === '/api/pty' || path.startsWith('/api/pty/') || AGENT_ACTION_ROUTE.test(path)) {
