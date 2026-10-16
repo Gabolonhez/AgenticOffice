@@ -11165,3 +11165,61 @@ html.is-replay #world {
   background: rgba(0, 0, 0, 0.32);
   color: var(--ui-text);
 }
+
+/* Novo agente pelo chat (ui/spawn.ts): o agente no topo e o resto em "Mais opções", fechado. */
+.ui-spawn__chat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ui-spawn__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11.5px;
+  color: var(--ui-muted);
+}
+
+.ui-spawn__more > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ui-accent);
+}
+
+.ui-spawn__more[open] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ui-spawn__perm {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.ui-spawn__perm legend {
+  padding: 0 4px;
+  color: var(--ui-muted);
+  font-size: 11.5px;
+}
+
+.ui-spawn__perm label,
+.ui-spawn__check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.ui-spawn__perm input[type='radio'],
+.ui-spawn__check input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+}

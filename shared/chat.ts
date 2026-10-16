@@ -23,3 +23,18 @@ export interface ChatState {
 export interface ChatView { agentId: string; provider: Provider; items: ChatItem[]; state: ChatState; lastSeq: number }
 export const CHAT_TEXT_MAX = 8000; // igual ao SPAWN_PROMPT_MAX
 export const CHAT_TOOL_OUTPUT_MAX = 4000; // por item, depois de maskSecrets
+
+/** Abrir um agente pelo chat (POST /api/chat/agents). */
+export interface ChatOpenRequest {
+  folder: string;
+  provider: Provider;
+  account?: string;
+  model?: string;
+  roleId?: string;
+  permission?: ChatPermission;
+  isolated?: boolean;
+  limits?: ChatLimits;
+  name?: string;
+  prompt: string;
+  vboardsTaskId?: string;
+}

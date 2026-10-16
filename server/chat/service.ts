@@ -5,7 +5,7 @@ import { execFile, spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { CHAT_TEXT_MAX, CHAT_TOOL_OUTPUT_MAX, type ChatItem, type ChatLimits, type ChatPermission, type ChatState, type ChatView } from '../../shared/chat';
+import { CHAT_TEXT_MAX, CHAT_TOOL_OUTPUT_MAX, type ChatItem, type ChatLimits, type ChatOpenRequest, type ChatState, type ChatView } from '../../shared/chat';
 import { describeTool, maskSecrets, truncate } from '../../shared/activity';
 import { tr } from '../../shared/i18n';
 import type { Provider } from '../../shared/types';
@@ -21,19 +21,7 @@ import { ChatStore, type ChatRecord } from './store';
 import type { ChatDriver, ChatEvent, TurnSpec, WorktreeOps } from './types';
 import { addUsage, overLimit, remainingUsd } from './usage';
 
-export interface ChatOpenRequest {
-  folder: string;
-  provider: Provider;
-  account?: string;
-  model?: string;
-  roleId?: string;
-  permission?: ChatPermission;
-  isolated?: boolean;
-  limits?: ChatLimits;
-  name?: string;
-  prompt: string;
-  vboardsTaskId?: string;
-}
+export type { ChatOpenRequest };
 export type ChatOpenResult = { agentId: string } | { error: 'invalid' | 'unavailable' | 'too-many'; reason: string };
 export interface ChatProcess {
   pid?: number;
