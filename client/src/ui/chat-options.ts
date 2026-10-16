@@ -1,6 +1,7 @@
 // Campos de abrir agente pelo chat (agente + "Mais opções": conta, modelo, papel, permissão, cópia isolada, limites e
-// nome), usados pela janela de Novo agente (ui/spawn.ts) e pela lista (ui/runs.ts). Opções do servidor em
-// GET /api/chat/options.
+// nome), usados pela janela de Novo agente (ui/spawn.ts), pela lista (ui/runs.ts) e pelos gatilhos (ui/triggers.ts).
+// Opções do servidor em GET /api/chat/options.
+import type { ChatOpenRequest } from '../../../shared/chat';
 import { tr } from '../../../shared/i18n';
 import type { Provider } from '../../../shared/types';
 import { askDisabledReason, defaultForm, providerLabel, type OpenForm } from './spawn-model';
@@ -125,6 +126,21 @@ export class ChatOptionsFields {
       name: this.agentName.value,
       prompt,
     };
+  }
+
+  /** Preenche com opções guardadas (editar um gatilho); depois do load(). */
+  set(o: Partial<ChatOpenRequest>): void {
+    if (o.provider && this.data?.providers.some((p) => p.id === o.provider)) this.provider.value = o.provider;
+    this.sync();
+    this.account.value = o.account ?? '';
+    this.model.value = o.model ?? '';
+    this.role.value = o.roleId ?? '';
+    (o.permission === 'ask' && !this.permAsk.disabled ? this.permAsk : this.permAuto).checked = true;
+    this.isolated.checked = !!o.isolated;
+    this.limitUsd.value = o.limits?.maxCostUsd ? String(o.limits.maxCostUsd) : '';
+    this.limitTokens.value = o.limits?.maxTokens ? String(o.limits.maxTokens) : '';
+    this.limitMinutes.value = o.limits?.maxTurnMinutes ? String(o.limits.maxTurnMinutes) : '';
+    this.agentName.value = o.name ?? '';
   }
 
   roleName(id: string | undefined): string {

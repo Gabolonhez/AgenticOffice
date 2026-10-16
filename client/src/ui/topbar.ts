@@ -1,6 +1,7 @@
 // Barra superior: marca, conexão, contadores, uso por conta e botões de controle.
 import { access } from '../net/access';
 import { RunsPanel } from './runs';
+import { TriggersPanel } from './triggers';
 import { SpawnPanel } from './spawn';
 import type { UiComponent, UiContext } from './context';
 import { h, iconButton, setAttr, setHidden, setText, setTitle, setVariant } from './dom';
@@ -52,6 +53,8 @@ export class TopBar implements UiComponent {
   private readonly spawnPanel: SpawnPanel;
   private readonly runsBtn: HTMLButtonElement;
   private readonly runsPanel: RunsPanel;
+  private readonly triggersBtn: HTMLButtonElement;
+  private readonly triggersPanel: TriggersPanel;
   /** Grupo dos botões de painéis (feed, configurações, ajuda); o histórico entra aqui (ui/index.ts). */
   readonly panelGroup: HTMLElement;
 
@@ -122,6 +125,12 @@ export class TopBar implements UiComponent {
     this.runsBtn.setAttribute('aria-haspopup', 'dialog');
     this.runsBtn.hidden = true;
     window.addEventListener('habblaud:run-list', (e) => this.runsPanel.openWith((e as CustomEvent<{ folder: string; items: Array<{ text: string; vboardsTaskId: string }> }>).detail, this.runsBtn));
+    // Gatilhos (ui/triggers.ts): só com o chat ligado; cada disparo vira um cartão de aprovação.
+    this.triggersPanel = new TriggersPanel(ctx);
+    ctx.root.append(this.triggersPanel.el);
+    this.triggersBtn = iconButton(ICONS.bolt, tr('Gatilhos: quando algo acontecer, propor abrir ou avisar um agente'), () => this.triggersPanel.toggle(this.triggersBtn), 'ui-btn-triggers');
+    this.triggersBtn.setAttribute('aria-haspopup', 'dialog');
+    this.triggersBtn.hidden = true;
     this.version = new VersionChip(ctx, this.settingsBtn);
     this.status = h('div', { class: 'ui-topbar__status' }, this.pill, this.version.el, this.demoBadge);
     const viewGroup = h(
@@ -136,6 +145,7 @@ export class TopBar implements UiComponent {
       { class: 'ui-btn-group', role: 'group', attrs: { 'aria-label': tr('Painéis') } },
       this.spawnBtn,
       this.runsBtn,
+      this.triggersBtn,
       this.timelapseBtn,
       this.feedBtn,
       this.settingsBtn,
@@ -233,6 +243,7 @@ export class TopBar implements UiComponent {
     this.version.render();
     setHidden(this.spawnBtn, !access().spawn || store.mock || store.replaying);
     setHidden(this.runsBtn, !access().chat || store.mock || store.replaying);
+    setHidden(this.triggersBtn, !access().chat || store.mock || store.replaying);
 
     this.sidebarBtn.setAttribute('aria-pressed', String(this.ctx.isPanelOpen('sidebar')));
     this.feedBtn.setAttribute('aria-pressed', String(this.ctx.isPanelOpen('feed')));

@@ -11045,6 +11045,51 @@ html.is-replay #world {
   gap: 6px;
 }
 
+/* Gatilhos (ui/triggers.ts): reaproveita o visual da lista; dias da semana, prévia e histórico. */
+.ui-trig__days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 0;
+  padding: 4px 0 0;
+  border: 0;
+  font-size: 12px;
+}
+
+.ui-trig__preview {
+  margin: 0;
+  padding: 6px 8px;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  border-radius: 4px;
+  background: var(--ui-surface-2, rgba(127, 127, 127, 0.12));
+}
+
+.ui-trig__history {
+  padding-left: 0;
+  list-style: none;
+}
+
+.ui-trig__firing {
+  display: flex;
+  flex-direction: column;
+}
+
+.ui-trig__firing.is-approved {
+  color: var(--ui-ok, #3fb950);
+}
+
+.ui-trig__firing.is-failed {
+  color: var(--ui-danger, #f85149);
+}
+
+.ui-runs__run.is-off {
+  opacity: 0.6;
+}
+
 /* Rodar lista (ui/runs.ts): montar, confirmar e acompanhar um agente por item. */
 .ui-runs {
   width: 380px;
