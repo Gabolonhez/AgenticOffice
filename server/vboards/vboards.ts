@@ -5,14 +5,15 @@
 // - conclusão: o agente aberto para a subtarefa fica ligado a ela (<dataDir>/vboards-links.json, sobrevive a um
 //   reinício); quando ele termina o turno depois de ter trabalhado, ou a sessão acaba, a subtarefa vira 'done' com a
 //   última resposta como resumo (ou 'failed', se nunca trabalhou). Uma vez por subtarefa;
-// - todos: a lista de tarefas (AgentInfo.tasks) dos agentes principais do Claude Code vai para o card do projeto
-//   (POST /api/agent-tasks/todos), com ~15 s de calma e só quando mudou.
+// - conversas: cada agente principal do Claude Code (fora os ligados a uma subtarefa) vira um item no card do projeto
+//   (POST /api/agent-tasks/todos): o título da conversa, done quando terminou o turno depois de trabalhar, com o
+//   resumo da última resposta. ~15 s de calma e só quando mudou.
 // O token só vai no cabeçalho Authorization: nunca em log, snapshot ou página. Git sem shell (execFile).
 import { execFile } from 'node:child_process';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { maskSecrets } from '../../shared/activity';
 import { tr } from '../../shared/i18n';
-import type { AgentInfo, TaskItem } from '../../shared/types';
+import type { AgentInfo } from '../../shared/types';
 import { errMsg, log } from '../log';
 import { FileTail } from '../sources/tail';
 import type { TerminalParser } from '../sources/terminal';
@@ -138,8 +139,16 @@ export function decideCompletion(link: Pick<TaskLink, 'worked'>, agent: Pick<Age
   return worked && agent.status === 'idle' ? 'done' : undefined;
 }
 
-export function todoPayload(tasks: readonly TaskItem[]): Array<{ text: string; done: boolean }> {
-  return tasks.map((t) => ({ text: t.title, done: t.status === 'completed' }));
+/** Item da conversa no card: o título, feito ou não e, feito, o resumo. */
+export interface ConversationItem {
+  text: string;
+  done: boolean;
+  summary?: string;
+}
+
+/** Título da conversa para o VBoards: mascarado e cortado em 200 caracteres. */
+export function conversationText(title: string | undefined): string | undefined {
+  return maskSecrets(title ?? '').trim().slice(0, 200).trim() || undefined;
 }
 
 /** Resumo para o VBoards: mascarado e cortado. */
@@ -150,26 +159,24 @@ export function summaryText(text: string | undefined): string | undefined {
 }
 
 /**
- * Debounce dos todos por agente: devolve quem mudou e está calmo há TODOS_QUIET_MS (e difere do último envio).
+ * Debounce por agente: devolve quem mudou e está calmo há TODOS_QUIET_MS (e difere do último envio).
  * `posted` marca o que o VBoards aceitou.
  */
 export class TodoTracker {
   private readonly state = new Map<string, { sig: string; since: number; posted?: string }>();
 
-  due(agents: ReadonlyArray<Pick<AgentInfo, 'id' | 'tasks'>>, now: number): Array<{ id: string; sig: string; todos: Array<{ text: string; done: boolean }> }> {
-    const out: Array<{ id: string; sig: string; todos: Array<{ text: string; done: boolean }> }> = [];
+  due(entries: ReadonlyArray<{ id: string; item: ConversationItem }>, now: number): Array<{ id: string; sig: string; item: ConversationItem }> {
+    const out: Array<{ id: string; sig: string; item: ConversationItem }> = [];
     const seen = new Set<string>();
-    for (const a of agents) {
-      seen.add(a.id);
-      if (!a.tasks.length) continue;
-      const todos = todoPayload(a.tasks);
-      const sig = JSON.stringify(todos);
-      const cur = this.state.get(a.id);
+    for (const { id, item } of entries) {
+      seen.add(id);
+      const sig = JSON.stringify(item);
+      const cur = this.state.get(id);
       if (!cur || cur.sig !== sig) {
-        this.state.set(a.id, { sig, since: now, posted: cur?.posted });
+        this.state.set(id, { sig, since: now, posted: cur?.posted });
         continue;
       }
-      if (cur.posted !== sig && now - cur.since >= TODOS_QUIET_MS) out.push({ id: a.id, sig, todos });
+      if (cur.posted !== sig && now - cur.since >= TODOS_QUIET_MS) out.push({ id, sig, item });
     }
     for (const id of [...this.state.keys()]) if (!seen.has(id)) this.state.delete(id);
     return out;
@@ -235,6 +242,8 @@ export class VBoardsService {
   private tasks: AgentTask[] = [];
   private links: TaskLink[] = [];
   private readonly todos = new TodoTracker();
+  /** Agentes de conversa (sem subtarefa) que já trabalharam. */
+  private readonly worked = new Set<string>();
   private readonly cards = new Map<string, { card?: string; at: number }>();
   private pollTimer?: ReturnType<typeof setTimeout>;
   private checkTimer?: ReturnType<typeof setInterval>;
@@ -340,7 +349,7 @@ export class VBoardsService {
     return { spawn: r.spawn };
   }
 
-  /** Liga agentes, conclui subtarefas e manda os todos. */
+  /** Liga agentes, conclui subtarefas e manda as conversas. */
   async check(): Promise<void> {
     if (this.checking || this.opts.booting?.()) return;
     this.checking = true;
@@ -432,17 +441,27 @@ export class VBoardsService {
   }
 
   private async syncTodos(): Promise<void> {
-    const agents = this.opts.agents().filter((a) => a.kind === 'main' && (a.provider ?? 'claude') === 'claude' && a.status !== 'offline');
-    for (const d of this.todos.due(agents, this.now())) {
+    const linked = new Set(this.links.map((l) => l.agentId));
+    const agents = this.opts.agents().filter((a) => a.kind === 'main' && (a.provider ?? 'claude') === 'claude' && a.status !== 'offline' && !linked.has(a.id));
+    const entries: Array<{ id: string; item: ConversationItem }> = [];
+    for (const a of agents) {
+      const text = conversationText(a.title);
+      if (!text) continue;
+      if (hasWorked(a)) this.worked.add(a.id);
+      const done = decideCompletion({ worked: this.worked.has(a.id) }, a) === 'done';
+      const summary = done ? summaryText(this.opts.reply?.(a.id)) : undefined;
+      entries.push({ id: a.id, item: { text, done, ...(summary ? { summary } : {}) } });
+    }
+    for (const d of this.todos.due(entries, this.now())) {
       const agent = agents.find((a) => a.id === d.id);
       const path = agent && this.opts.roomPath(agent.roomId);
       if (!path) continue;
       const repo = cardName({ path, card: await this.cardOf(path) });
       try {
-        await this.call('/api/agent-tasks/todos', { email: this.opts.config.email, repo, todos: d.todos });
+        await this.call('/api/agent-tasks/todos', { email: this.opts.config.email, repo, todos: [d.item] });
         this.todos.posted(d.id, d.sig);
       } catch (err) {
-        log.warnOnce(`vboards:todos:${errMsg(err)}`, tr('VBoards: falha ao mandar os todos ({0}).', [errMsg(err)]));
+        log.warnOnce(`vboards:todos:${errMsg(err)}`, tr('VBoards: falha ao mandar as conversas ({0}).', [errMsg(err)]));
       }
     }
   }

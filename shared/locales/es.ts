@@ -3298,6 +3298,6 @@ export const ES: Readonly<Record<string, string>> = {
   "Tarefa do VBoards (card {0}):": "Tarea de VBoards (tarjeta {0}):",
   "VBoards: {0}": "VBoards: {0}",
   "VBoards: falha ao atualizar a tarefa ({0}); tento de novo.": "VBoards: no se pudo actualizar la tarea ({0}); se reintentará.",
-  "VBoards: falha ao mandar os todos ({0}).": "VBoards: no se pudieron enviar los todos ({0}).",
+  "VBoards: falha ao mandar as conversas ({0}).": "VBoards: no se pudieron enviar las conversaciones ({0}).",
   "VBoards: não deu para gravar {0} ({1}).": "VBoards: no se pudo guardar {0} ({1}).",
 };

@@ -59,25 +59,19 @@ describe('conclusão da subtarefa', () => {
   });
 });
 
-describe('todos', () => {
-  const agent = (id: string, titles: Array<[string, boolean]>) => ({
-    id,
-    tasks: titles.map(([title, done], i) => ({ id: String(i), title, status: done ? ('completed' as const) : ('pending' as const) })),
-  });
-  it('espera a lista ficar calma, manda uma vez e de novo só quando muda', () => {
+describe('debounce das conversas', () => {
+  it('espera ficar calmo, manda uma vez e de novo só quando muda', () => {
     const t = new TodoTracker();
-    const a = agent('a', [['x', false]]);
-    expect(t.due([a], 0)).toEqual([]);
-    expect(t.due([a], TODOS_QUIET_MS - 1)).toEqual([]);
-    const due = t.due([a], TODOS_QUIET_MS);
-    expect(due).toEqual([{ id: 'a', sig: expect.any(String), todos: [{ text: 'x', done: false }] }]);
+    const x = [{ id: 'a', item: { text: 'x', done: false } }];
+    expect(t.due(x, 0)).toEqual([]);
+    expect(t.due(x, TODOS_QUIET_MS - 1)).toEqual([]);
+    const due = t.due(x, TODOS_QUIET_MS);
+    expect(due).toEqual([{ id: 'a', sig: expect.any(String), item: { text: 'x', done: false } }]);
     t.posted('a', due[0].sig);
-    expect(t.due([a], TODOS_QUIET_MS * 3)).toEqual([]);
-    const b = agent('a', [['x', true]]);
-    expect(t.due([b], 100_000)).toEqual([]);
-    expect(t.due([b], 100_000 + TODOS_QUIET_MS)[0].todos).toEqual([{ text: 'x', done: true }]);
-    // Volta ao que já foi mandado: nada a mandar (falha no envio continua pendente).
-    expect(t.due([agent('e', [])], 0)).toEqual([]);
+    expect(t.due(x, TODOS_QUIET_MS * 3)).toEqual([]);
+    const y = [{ id: 'a', item: { text: 'x', done: true, summary: 's' } }];
+    expect(t.due(y, 100_000)).toEqual([]);
+    expect(t.due(y, 100_000 + TODOS_QUIET_MS)[0].item).toEqual({ text: 'x', done: true, summary: 's' });
   });
 });
 
@@ -96,6 +90,7 @@ describe('serviço', () => {
     });
     const submit = vi.fn(() => ({ spawn: { id: 'sp1', folder: '/p/payposts-web', status: 'queued' as const } }));
     let agents: AgentInfo[] = [];
+    let replyText = `Pronto. token sk-ant-api03-${'a'.repeat(40)} ${'x'.repeat(3000)}`;
     const svc = new VBoardsService({
       config: cfg,
       agents: () => agents,
@@ -103,11 +98,11 @@ describe('serviço', () => {
       folders: async () => ['/p/payposts-web', '/p/outro'],
       cardOf: async (f) => (f.endsWith('payposts-web') ? 'PostsBuilder' : undefined),
       spawn: { submit, get: () => ({ id: 'sp1', folder: '/p/payposts-web', status: over.spawnStatus ?? 'opened' }) },
-      reply: () => `Pronto. token sk-ant-api03-${'a'.repeat(40)} ${'x'.repeat(3000)}`,
+      reply: () => replyText,
       fetch: fetchMock as unknown as typeof fetch,
       now: () => now,
     });
-    return { svc, calls, submit, setAgents: (a: AgentInfo[]) => (agents = a), tick: (ms: number) => (now += ms) };
+    return { svc, calls, submit, setAgents: (a: AgentInfo[]) => (agents = a), tick: (ms: number) => (now += ms), setReply: (t: string) => (replyText = t) };
   }
 
   it('lista, inicia só com a pasta do servidor, manda running, liga o agente e conclui uma vez', async () => {
@@ -156,14 +151,50 @@ describe('serviço', () => {
     expect(statuses).toEqual(['running', 'failed']);
   });
 
-  it('todos do agente principal vão para o card da pasta (vboards.card)', async () => {
+  it('uma conversa = um item no card da pasta (vboards.card): título, done e resumo', async () => {
+    const { svc, calls, setAgents, tick, setReply } = setup();
+    const posts = () => calls.filter((c) => c.url.endsWith('/todos')).map((c) => JSON.parse(String(c.init.body)));
+    const settle = async () => {
+      await svc.check();
+      tick(TODOS_QUIET_MS);
+      await svc.check();
+      await svc.check();
+    };
+    const item = (done: boolean, summary?: string) => ({ email: 'eu@x', repo: 'PostsBuilder', todos: [{ text: 'Clone do jogo Real War', done, ...(summary ? { summary } : {}) }] });
+
+    setAgents([mainAgent({ status: 'working' })]);
+    await settle();
+    expect(posts()).toEqual([]); // sem título: nada
+
+    setAgents([mainAgent({ status: 'working', title: '  Clone do jogo Real War ' })]);
+    await settle();
+    expect(posts()).toEqual([item(false)]);
+
+    setAgents([mainAgent({ status: 'idle', title: 'Clone do jogo Real War' })]);
+    setReply('Primeiro resumo');
+    await settle();
+    expect(posts()).toEqual([item(false), item(true, 'Primeiro resumo')]);
+
+    setAgents([mainAgent({ status: 'working', title: 'Clone do jogo Real War' })]);
+    await settle();
+    setAgents([mainAgent({ status: 'idle', title: 'Clone do jogo Real War' })]);
+    setReply('Segundo resumo');
+    await settle();
+    expect(posts().at(-1)).toEqual(item(true, 'Segundo resumo'));
+    expect(posts()).toHaveLength(4);
+  });
+
+  it('agente ligado a uma subtarefa não vira item de conversa', async () => {
     const { svc, calls, setAgents, tick } = setup();
-    setAgents([mainAgent({ tasks: [{ id: '1', title: 'Escrever testes', status: 'completed' }] })]);
+    await svc.poll();
+    svc.stop();
+    await svc.begin({ id: 'c1:s1' });
+    setAgents([mainAgent({ status: 'working', title: 'Corrigir o login', startedAt: 101_000 })]);
+    tick(5_000);
     await svc.check();
     tick(TODOS_QUIET_MS);
     await svc.check();
     await svc.check();
-    const posts = calls.filter((c) => c.url.endsWith('/todos')).map((c) => JSON.parse(String(c.init.body)));
-    expect(posts).toEqual([{ email: 'eu@x', repo: 'PostsBuilder', todos: [{ text: 'Escrever testes', done: true }] }]);
+    expect(calls.filter((c) => c.url.endsWith('/todos'))).toEqual([]);
   });
 });
