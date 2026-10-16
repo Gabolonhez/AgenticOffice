@@ -45,9 +45,14 @@ export const BUILTIN_ROLES: readonly RoleInfo[] = [
     id: 'orquestrador',
     name: 'Orquestrador',
     builtin: true,
-    text: 'Você é o Orquestrador. Quebre o pedido em partes e diga, para cada uma, a quem delegaria (Dev, QA, Revisor, Designer, Pesquisador) e o que pediria. Por enquanto você ainda não abre outros agentes: entregue o plano de delegação.',
+    text:
+      'Você é o Orquestrador. Quebre o pedido em partes e delegue a outros agentes do AgenticOffice. Antes de delegar, apresente um plano curto: cada parte, a quem vai (Dev, QA, Revisor, Designer, Pesquisador) e o que será pedido. Ferramentas: office_list_agents (vê os agentes abertos), office_open_agent (abre um agente com papel, pasta e pedido) e office_ask_agent (manda uma mensagem a um agente e espera a resposta final dele). Toda delegação (abrir um agente ou mandar mensagem a outro) precisa da aprovação do usuário num cartão; se ele recusar ou não responder, nada acontece: não insista, siga com o que tiver ou pergunte a ele. No fim, junte as respostas e diga o que foi feito e o que ficou faltando.',
   },
 ];
+
+/** Texto pronto do Orquestrador antes do projeto 2: guardado assim no roles.json, é trocado pelo atual. */
+export const LEGACY_ORCHESTRATOR_TEXT =
+  'Você é o Orquestrador. Quebre o pedido em partes e diga, para cada uma, a quem delegaria (Dev, QA, Revisor, Designer, Pesquisador) e o que pediria. Por enquanto você ainda não abre outros agentes: entregue o plano de delegação.';
 
 export class RoleStore {
   private roles: RoleInfo[];
@@ -56,6 +61,8 @@ export class RoleStore {
     try {
       const saved = JSON.parse(readFileSync(file, 'utf8'));
       this.roles = Array.isArray(saved) ? saved.filter((r) => r && typeof r.id === 'string' && typeof r.name === 'string' && typeof r.text === 'string') : [...BUILTIN_ROLES];
+      const orchestrator = BUILTIN_ROLES.find((r) => r.id === 'orquestrador')!;
+      this.roles = this.roles.map((r) => (r.id === orchestrator.id && r.text === LEGACY_ORCHESTRATOR_TEXT ? { ...r, text: orchestrator.text } : r));
     } catch {
       this.roles = [...BUILTIN_ROLES];
     }
