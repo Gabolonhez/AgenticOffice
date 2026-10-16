@@ -102,7 +102,8 @@ export class ChatPanel {
       this.status,
       h('div', { class: 'ui-chat__row' }, this.stopBtn, this.mergeBtn, this.discardBtn),
       this.limitRow,
-      h('div', { class: 'ui-chat__row' }, this.box, this.sendBtn),
+      // No celular a caixa fica presa no rodapé da gaveta, como a das mensagens (styles.css, .ui-chat__compose).
+      h('div', { class: 'ui-chat__row ui-chat__compose' }, this.box, this.sendBtn),
       this.error,
     );
     this.paint();

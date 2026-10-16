@@ -11630,3 +11630,92 @@ html.is-replay #world {
 .ui-root.is-city .ui-btn-canvas {
   display: none !important;
 }
+
+/* ------------------------------------------------------------------ Chat pelo celular
+   Chat, Novo agente (com "Mais opções"), Rodar lista, Gatilhos e Quadro com o dedo: alvos de 40 px no toque, popovers
+   do chat em folha de tela cheia e a caixa do chat presa no rodapé da gaveta (mesmo padrão da .ui-sec--msg). */
+@media (pointer: coarse) {
+  .ui-chat .ui-btn,
+  .ui-spawn .ui-btn,
+  .ui-chat__limit,
+  .ui-chat__input,
+  .ui-spawn select,
+  .ui-spawn input:not([type='checkbox']):not([type='radio']),
+  .ui-runs__link,
+  .ui-spawn__more > summary,
+  .ui-spawn__perm label,
+  .ui-spawn__check {
+    min-height: 40px;
+  }
+
+  .ui-spawn__more > summary {
+    display: flex;
+    align-items: center;
+  }
+
+  .ui-spawn__perm input[type='radio'],
+  .ui-spawn__check input[type='checkbox'] {
+    width: 20px;
+    height: 20px;
+  }
+
+  .ui-chat__tool > summary {
+    padding: 10px 0;
+  }
+
+  .ui-popover.ui-spawn .ui-popover__head .ui-icon-btn,
+  .ui-canvas__tools .ui-icon-btn,
+  .ui-cnote .ui-cnote__btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .ui-cnote__bar {
+    height: 40px;
+  }
+
+  /* O círculo da cor continua pequeno; a área de toque cresce pela borda transparente. */
+  .ui-cnote__color {
+    box-sizing: content-box;
+    padding: 11px;
+    background-clip: content-box;
+  }
+}
+
+@media (max-width: 600px) {
+  /* Fica abaixo da barra de cima (que continua à vista) até o rodapé; sobrepõe o top calculado pelo JS. */
+  .ui-popover.ui-spawn {
+    top: calc(var(--top-h) + var(--gap)) !important;
+    bottom: calc(var(--gap) + env(safe-area-inset-bottom, 0px)) !important;
+    width: auto;
+    height: auto;
+    max-height: none;
+    overscroll-behavior: contain;
+  }
+
+  /* A lista de itens rola com a folha (a de pastas mantém o limite: com muitas, o pedido sumiria lá embaixo). */
+  .ui-popover.ui-spawn .ui-runs__items {
+    max-height: none;
+  }
+
+  .ui-runs__row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .ui-chat__list {
+    overscroll-behavior: contain;
+  }
+
+  .ui-chat__compose {
+    position: sticky;
+    bottom: -20px;
+    z-index: 2;
+    flex-wrap: nowrap;
+    margin: 0 -16px;
+    padding: 10px 16px 14px;
+    background: var(--ui-bg-solid);
+    border-top: 1px solid var(--ui-line);
+    box-shadow: 0 -12px 24px rgba(5, 7, 12, 0.35);
+  }
+}

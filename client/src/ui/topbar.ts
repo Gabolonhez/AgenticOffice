@@ -241,7 +241,8 @@ export class TopBar implements UiComponent {
 
     this.usage.render();
     this.version.render();
-    setHidden(this.spawnBtn, !access().spawn || store.mock || store.replaying);
+    // O chat também abre agentes por este formulário (celular com "chat" liberado e sem "spawn", por exemplo).
+    setHidden(this.spawnBtn, !(access().spawn || access().chat) || store.mock || store.replaying);
     setHidden(this.runsBtn, !access().chat || store.mock || store.replaying);
     setHidden(this.triggersBtn, !access().chat || store.mock || store.replaying);
 
