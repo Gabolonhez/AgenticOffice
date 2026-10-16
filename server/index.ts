@@ -346,7 +346,11 @@ const vboards =
         roomPath: (id) => office.roomPath(id),
         folders: async () => (await knownFolders(100)).map((f) => f.path),
         spawn,
+        // Com o chat (fora do Docker e com HABBLAUD_PTY=1), o "Iniciar" abre o agente por ele (o chat nasce mais abaixo).
+        chat: !config.inDocker && ptyOptIn ? { open: (raw: unknown) => late.chat?.open(raw) ?? { error: 'unavailable', reason: tr('Chat com agentes indisponível no Docker: rode o servidor direto no computador.') } } : undefined,
         reply: (id) => {
+          const fromChat = late.chat?.lastReply(id);
+          if (fromChat) return fromChat;
           const path = agents.transcriptPathOf(id);
           return path ? lastReply(path, agents.parserFor(id)) : undefined;
         },

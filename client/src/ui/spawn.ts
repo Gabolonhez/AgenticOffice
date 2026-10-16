@@ -138,6 +138,8 @@ export class SpawnPanel {
   private files: PendingFile[] = [];
   /** Chat com agentes (server/chat) ligado: o agente roda pelo escritório e as opções ficam em "Mais opções". */
   private chatMode = false;
+  /** Task do VBoards que esta janela vai iniciar ("Iniciar" do VBoards com o chat ligado). */
+  private vboardsTask: string | undefined;
   private chatProviders: ChatProviderOption[] = [];
   private chatAccounts: ChatAccountOption[] = [];
   private readonly chatBox: HTMLElement;
@@ -303,7 +305,18 @@ export class SpawnPanel {
     if (!matchMedia('(pointer: coarse)').matches) this.prompt.focus();
   }
 
+  /** "Iniciar" do VBoards: abre a janela preenchida com a pasta e a tarefa; o envio inicia a task pelo chat. */
+  openWith(p: { folder: string; prompt: string; vboardsTaskId: string }, anchor: HTMLElement): void {
+    if (!this.isOpen) this.toggle(anchor);
+    this.vboardsTask = p.vboardsTaskId;
+    this.prompt.value = p.prompt;
+    if (!this.folders.some((f) => f.path === p.folder)) this.setFolders([{ path: p.folder, name: p.folder.split(/[\\/]/).pop() || p.folder, lastAt: 0 }, ...this.folders]);
+    this.pick(p.folder);
+    this.say(tr('Tarefa do VBoards: ao começar, ela fica ligada a este agente.'));
+  }
+
   hide(): void {
+    this.vboardsTask = undefined;
     this.dictate.cancel();
     if (typeof this.el.hidePopover === 'function' && this.isOpen) this.el.hidePopover();
     this.el.classList.remove('is-open');
@@ -385,7 +398,9 @@ export class SpawnPanel {
     this.submitBtn.disabled = true;
     try {
       this.say(tr('Começando no computador…'));
-      const r = await api<{ agentId: string }>('/api/chat/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) });
+      const r = this.vboardsTask
+        ? await api<{ agentId: string }>('/api/vboards/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: this.vboardsTask, folder, chat: req }) })
+        : await api<{ agentId: string }>('/api/chat/agents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) });
       this.prompt.value = '';
       writePref(folder);
       this.say('');

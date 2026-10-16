@@ -561,7 +561,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
         else
           readJson(req)
             .then((body) => vb.begin(body))
-            .then((r) => ('spawn' in r ? sendJson(res, 201, r.spawn) : sendJson(res, r.status, { error: r.error })))
+            .then((r) => ('spawn' in r ? sendJson(res, 201, r.spawn) : 'agentId' in r ? sendJson(res, 201, { agentId: r.agentId }) : sendJson(res, r.status, { error: r.error })))
             .catch((err) => fail(res, err));
       } else sendJson(res, 404, { error: tr('rota desconhecida') });
       if (!vb || problem) req.resume();

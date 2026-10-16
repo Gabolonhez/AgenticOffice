@@ -108,6 +108,8 @@ export class TopBar implements UiComponent {
     this.spawnPanel = new SpawnPanel(ctx);
     ctx.root.append(this.spawnPanel.el);
     this.spawnBtn = iconButton(ICONS.newAgent, tr('Novo agente: começa uma sessão do Claude Code no computador'), () => this.spawnPanel.toggle(this.spawnBtn), 'ui-btn-spawn');
+    // "Iniciar" do VBoards com o chat ligado (ui/vboards.ts): a janela abre preenchida para escolher agente e opções.
+    window.addEventListener('habblaud:vboards-start', (e) => this.spawnPanel.openWith((e as CustomEvent<{ folder: string; prompt: string; vboardsTaskId: string }>).detail, this.spawnBtn));
     this.spawnBtn.setAttribute('aria-haspopup', 'dialog');
     this.spawnBtn.hidden = true;
     this.version = new VersionChip(ctx, this.settingsBtn);

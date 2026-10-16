@@ -186,6 +186,12 @@ export class VBoardsPanel implements UiComponent {
   private async begin(t: VBoardsTask, folder: string): Promise<void> {
     if (this.busy) return;
     if (!folder) return this.say(tr('Escolha a pasta do projeto.'), true);
+    if (access().chat) {
+      // Com o chat: a janela de novo agente abre preenchida (agente, papel, permissão...) e inicia a task.
+      const prompt = `${tr('Tarefa do VBoards (card {0}):', [t.cardTitle])} ${t.text}`;
+      window.dispatchEvent(new CustomEvent('habblaud:vboards-start', { detail: { folder, prompt, vboardsTaskId: t.id } }));
+      return;
+    }
     this.busy = t.id;
     this.renderList();
     this.say(tr('Começando no computador…'));

@@ -80,7 +80,7 @@ describe('serviço', () => {
   const mainAgent = (p: Partial<AgentInfo>): AgentInfo =>
     ({ id: 'acc:1', kind: 'main', roomId: 'r1', name: 'Ana', look: 'f', role: '', sessionId: 's', account: 'acc', status: 'idle', recent: [], tasks: [], startedAt: 2_000, lastEventAt: 0, statusSince: 0, stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 }, seed: 1, ...p }) as AgentInfo;
 
-  function setup(over: { spawnStatus?: 'opened' | 'failed' } = {}) {
+  function setup(over: { spawnStatus?: 'opened' | 'failed'; chat?: boolean } = {}) {
     let now = 100_000;
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -89,6 +89,7 @@ describe('serviço', () => {
       return new Response(JSON.stringify(body), { status: 200 });
     });
     const submit = vi.fn(() => ({ spawn: { id: 'sp1', folder: '/p/payposts-web', status: 'queued' as const } }));
+    const open = vi.fn(() => ({ agentId: 'chat:1' }));
     let agents: AgentInfo[] = [];
     let replyText = `Pronto. token sk-ant-api03-${'a'.repeat(40)} ${'x'.repeat(3000)}`;
     const svc = new VBoardsService({
@@ -99,10 +100,11 @@ describe('serviço', () => {
       cardOf: async (f) => (f.endsWith('payposts-web') ? 'PostsBuilder' : undefined),
       spawn: { submit, get: () => ({ id: 'sp1', folder: '/p/payposts-web', status: over.spawnStatus ?? 'opened' }) },
       reply: () => replyText,
+      ...(over.chat ? { chat: { open } } : {}),
       fetch: fetchMock as unknown as typeof fetch,
       now: () => now,
     });
-    return { svc, calls, submit, setAgents: (a: AgentInfo[]) => (agents = a), tick: (ms: number) => (now += ms), setReply: (t: string) => (replyText = t) };
+    return { svc, calls, submit, open, setAgents: (a: AgentInfo[]) => (agents = a), tick: (ms: number) => (now += ms), setReply: (t: string) => (replyText = t) };
   }
 
   it('lista, inicia só com a pasta do servidor, manda running, liga o agente e conclui uma vez', async () => {
@@ -138,6 +140,47 @@ describe('serviço', () => {
     expect(done[0].status).toBe('done');
     expect(done[0].summary).toHaveLength(SUMMARY_MAX);
     expect(done[0].summary).not.toContain('sk-ant-api03-aaaa');
+  });
+
+  it('com o chat: Iniciar abre pelo chat, o link já nasce com o agente e conclui com a resposta dele', async () => {
+    const { svc, calls, submit, open, setAgents, setReply } = setup({ chat: true });
+    await svc.poll();
+    svc.stop();
+    expect(await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web', chat: { provider: 'codex', model: 'x' } })).toEqual({ agentId: 'chat:1' });
+    expect(submit).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledWith({ provider: 'codex', model: 'x', folder: '/p/payposts-web', prompt: 'Tarefa do VBoards (card Posts Builder): Corrigir o login', vboardsTaskId: 'c1:s1' });
+    setReply('Feito: login corrigido.');
+    setAgents([mainAgent({ id: 'chat:1', chat: true, status: 'idle', stats: { toolCalls: 1, tokensIn: 10, tokensOut: 5, subagents: 0 } })]);
+    await svc.check();
+    await flush();
+    const updates = calls.filter((c) => c.url.endsWith('/update')).map((c) => JSON.parse(String(c.init.body)));
+    expect(updates.map((u) => u.status)).toEqual(['running', 'done']);
+    expect(updates[1].summary).toBe('Feito: login corrigido.');
+  });
+
+  it('com o chat: o pedido editado na janela vale no lugar do texto da tarefa', async () => {
+    const { svc, open } = setup({ chat: true });
+    await svc.poll();
+    svc.stop();
+    await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web', chat: { provider: 'claude', prompt: 'Corrija o login e rode os testes' } });
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Corrija o login e rode os testes', vboardsTaskId: 'c1:s1' }));
+  });
+
+  it('agente do chat ligado a uma task não vira item de conversa; um solto vira um item só', async () => {
+    const { svc, calls, setAgents, tick } = setup({ chat: true });
+    await svc.poll();
+    svc.stop();
+    await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web' });
+    const worked = { toolCalls: 1, tokensIn: 10, tokensOut: 5, subagents: 0 };
+    setAgents([mainAgent({ id: 'chat:1', chat: true, title: 'Corrigir o login', status: 'working', stats: worked }), mainAgent({ id: 'chat:2', chat: true, title: 'Ajustar o paywall', status: 'working', stats: worked })]);
+    for (let i = 0; i < 2; i++) {
+      await svc.check();
+      tick(TODOS_QUIET_MS);
+      await svc.check();
+    }
+    await flush();
+    const posts = calls.filter((c) => c.url.endsWith('/todos')).map((c) => JSON.parse(String(c.init.body)).todos[0].text);
+    expect(posts).toEqual(['Ajustar o paywall']);
   });
 
   it('spawn que falhou: failed, sem agente', async () => {

@@ -228,6 +228,8 @@ export interface VBoardsServiceOptions {
   folders: () => Promise<string[]>;
   /** Novo agente; ausente = a fila não é buscada (dá para iniciar só com ele). */
   spawn?: { submit(raw: unknown): SpawnSubmit; get(id: string): SpawnInfo | undefined };
+  /** Chat do escritório (server/chat): com ele, o "Iniciar" abre o agente pelo chat em vez do Novo agente. */
+  chat?: { open(raw: unknown): { agentId: string } | { error: string; reason: string } };
   /** Última resposta do agente (transcript). */
   reply?: (agentId: string) => string | undefined;
   booting?: () => boolean;
@@ -327,10 +329,11 @@ export class VBoardsService {
   }
 
   /** "Iniciar": a pasta vem do próprio servidor (a única que combina, ou uma das conhecidas escolhida na página). */
-  async begin(raw: unknown): Promise<{ spawn: SpawnInfo } | { status: number; error: string }> {
+  async begin(raw: unknown): Promise<{ spawn: SpawnInfo } | { agentId: string } | { status: number; error: string }> {
     const body = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
     const spawn = this.opts.spawn;
-    if (!spawn) return { status: 403, error: tr('novo agente pelo escritório desligado') };
+    const chat = this.opts.chat;
+    if (!spawn && !chat) return { status: 403, error: tr('novo agente pelo escritório desligado') };
     const task = this.tasks.find((t) => taskId(t) === body.id);
     if (!task) return { status: 404, error: tr('tarefa do VBoards desconhecida: atualize a lista') };
     if (this.links.some((l) => l.id === body.id)) return { status: 409, error: tr('esta tarefa já foi iniciada') };
@@ -341,7 +344,18 @@ export class VBoardsService {
     // Dois cliques durante a espera acima: só o primeiro abre.
     if (this.links.some((l) => l.id === body.id)) return { status: 409, error: tr('esta tarefa já foi iniciada') };
     const prompt = `${tr('Tarefa do VBoards (card {0}):', [task.cardTitle])} ${task.text}`;
-    const r = spawn.submit({ folder: picked, prompt });
+    if (chat) {
+      // Pelo chat: o agente já tem id, então o link nasce ligado a ele (sem casar por pasta e horário).
+      const extra = body.chat && typeof body.chat === 'object' ? (body.chat as Record<string, unknown>) : {};
+      const asked = typeof extra.prompt === 'string' && extra.prompt.trim() ? extra.prompt : prompt;
+      const r = chat.open({ ...extra, folder: picked, prompt: asked, vboardsTaskId: taskId(task) });
+      if (!('agentId' in r)) return { status: r.error === 'invalid' ? 400 : r.error === 'too-many' ? 429 : 409, error: r.reason };
+      this.links.push({ id: taskId(task), cardId: task.cardId, subtaskId: task.subtaskId, folder: picked, session: '', spawnId: '', agentId: r.agentId, startedAt: this.now(), state: 'running' });
+      this.save();
+      void this.report();
+      return { agentId: r.agentId };
+    }
+    const r = spawn!.submit({ folder: picked, prompt });
     if (!('spawn' in r)) return { status: r.error === 'invalid' ? 400 : r.error === 'too-many' ? 429 : 409, error: r.reason };
     this.links.push({ id: taskId(task), cardId: task.cardId, subtaskId: task.subtaskId, folder: picked, session: sessionName(prompt), spawnId: r.spawn.id, startedAt: this.now(), state: 'running' });
     this.save();

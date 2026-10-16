@@ -3375,4 +3375,5 @@ export const EN: Readonly<Record<string, string>> = {
   "padrão da ferramenta": "tool default",
   "sem limite": "no limit",
   "sorteado": "random",
+  "Tarefa do VBoards: ao começar, ela fica ligada a este agente.": "VBoards task: once started, it is linked to this agent.",
 };
