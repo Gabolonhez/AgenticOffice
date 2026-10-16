@@ -341,6 +341,9 @@ export function toolView(name: string, input: Rec, cwd?: string): ToolView {
       const first = Array.isArray(input.questions) ? str(rec(input.questions[0])?.question) : undefined;
       return { title: titled('AskUserQuestion', first), ...textInput(questionsText(input.questions)) };
     }
+    // Cartão de gatilho (server/chat/triggers.ts): o nome da regra e o que roda, inteiro.
+    case 'Gatilho':
+      return { title: titled('Gatilho', s('regra')), ...textInput(s('detalhe')) };
     case 'ExitPlanMode':
       return { title: 'ExitPlanMode', ...textInput(s('plan')) };
     case 'SubagentHandback':
