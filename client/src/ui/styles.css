@@ -11045,6 +11045,103 @@ html.is-replay #world {
   gap: 6px;
 }
 
+/* Rodar lista (ui/runs.ts): montar, confirmar e acompanhar um agente por item. */
+.ui-runs {
+  width: 380px;
+  max-width: calc(100vw - 16px);
+}
+
+.ui-runs__view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ui-runs__items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.ui-runs__run .ui-runs__items {
+  padding-left: 0;
+  list-style: none;
+}
+
+.ui-runs__item {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  column-gap: 4px;
+}
+
+.ui-runs__mark {
+  text-align: center;
+  color: var(--ui-muted);
+}
+
+.ui-runs__item.is-done .ui-runs__mark {
+  color: var(--ui-ok, #3fb950);
+}
+
+.ui-runs__item.is-failed .ui-runs__mark {
+  color: var(--ui-danger, #f85149);
+}
+
+.ui-runs__item.is-running .ui-runs__mark {
+  color: var(--ui-accent);
+}
+
+.ui-runs__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ui-accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.ui-runs__summary-text {
+  grid-column: 2;
+  color: var(--ui-muted);
+  font-size: 11px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ui-runs__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.ui-runs__row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 6px;
+}
+
+.ui-runs__row dt {
+  color: var(--ui-muted);
+}
+
+.ui-runs__row dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Chat com agentes abertos pelo escritório (ui/chat.ts). */
 .ui-chat {
   display: flex;

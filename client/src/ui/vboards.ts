@@ -51,6 +51,9 @@ export class VBoardsPanel implements UiComponent {
   /** Pasta escolhida na página por tarefa (sobrevive às atualizações da lista). */
   private readonly picked = new Map<string, string>();
   private busy?: string;
+  /** Tarefas marcadas para "Rodar como lista" (só com o chat ligado). */
+  private readonly marked = new Set<string>();
+  private readonly listBtn: HTMLButtonElement;
   private shown = '';
   private off = false;
 
@@ -67,6 +70,7 @@ export class VBoardsPanel implements UiComponent {
     );
     this.list = h('ul', { class: 'ui-vboards__list' });
     this.status = h('p', { class: 'ui-rename__hint ui-spawn__status', attrs: { role: 'status', 'aria-live': 'polite' } });
+    this.listBtn = h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow', type: 'button', hidden: true, on: { click: () => this.runAsList() } }, tr('Rodar como lista'));
     this.el = h(
       'div',
       { class: 'ui-popover ui-spawn ui-vboards', role: 'dialog', tabIndex: -1, attrs: { 'aria-label': tr('Tarefas do VBoards'), id: 'ui-vboards', popover: 'auto' } },
@@ -75,6 +79,7 @@ export class VBoardsPanel implements UiComponent {
         'div',
         { class: 'ui-set-group ui-spawn__body' },
         this.list,
+        this.listBtn,
         h('p', { class: 'ui-rename__hint', text: tr('"Iniciar" começa um agente do Claude Code na pasta do projeto com a subtarefa como pedido. Quando ele terminar, a subtarefa é concluída no VBoards com a última resposta como resumo.') }),
         this.status,
       ),
@@ -153,6 +158,28 @@ export class VBoardsPanel implements UiComponent {
     if (!force && sig === this.shown) return;
     this.shown = sig;
     this.list.replaceChildren(...tasks.map((t) => this.item(t)));
+    this.syncListBtn();
+  }
+
+  private marks(): VBoardsTask[] {
+    return this.visible().filter((t) => this.marked.has(t.id));
+  }
+
+  private syncListBtn(): void {
+    const n = this.marks().length;
+    setHidden(this.listBtn, n < 2);
+    setText(this.listBtn, tr('Rodar como lista ({0})', [n]));
+  }
+
+  /** As marcadas viram os itens de uma lista (ui/runs.ts), que ainda passa pela confirmação. */
+  private runAsList(): void {
+    const tasks = this.marks();
+    if (tasks.length < 2) return;
+    const folder = tasks.map((t) => this.picked.get(t.id) ?? t.folder ?? '').find(Boolean) ?? '';
+    const items = tasks.map((t) => ({ text: `${tr('Tarefa do VBoards (card {0}):', [t.cardTitle])} ${t.text}`, vboardsTaskId: t.id }));
+    this.marked.clear();
+    this.hide();
+    window.dispatchEvent(new CustomEvent('habblaud:run-list', { detail: { folder, items } }));
   }
 
   private item(t: VBoardsTask): HTMLElement {
@@ -166,9 +193,17 @@ export class VBoardsPanel implements UiComponent {
     const go = h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow', type: 'button', on: { click: () => void this.begin(t, select.value) } }, busy ? tr('Iniciando…') : tr('Iniciar'));
     go.disabled = !!this.busy;
     const skip = h('button', { class: 'ui-btn ui-perm__btn', type: 'button', on: { click: () => this.ignore(t.id) } }, tr('Ignorar'));
+    const mark = h('input', { type: 'checkbox' });
+    mark.checked = this.marked.has(t.id);
+    mark.addEventListener('change', () => {
+      if (mark.checked) this.marked.add(t.id);
+      else this.marked.delete(t.id);
+      this.syncListBtn();
+    });
     return h(
       'li',
       { class: 'ui-vboards__item' },
+      access().chat ? h('label', { class: 'ui-spawn__check' }, mark, h('span', { text: tr('Marcar para rodar como lista') })) : null,
       h('span', { class: 'ui-spawn__folder-name', text: t.cardTitle || tr('(card sem título)') }),
       h('p', { class: 'ui-vboards__text', text: t.text }),
       select,

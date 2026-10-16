@@ -1,5 +1,6 @@
 // Barra superior: marca, conexão, contadores, uso por conta e botões de controle.
 import { access } from '../net/access';
+import { RunsPanel } from './runs';
 import { SpawnPanel } from './spawn';
 import type { UiComponent, UiContext } from './context';
 import { h, iconButton, setAttr, setHidden, setText, setTitle, setVariant } from './dom';
@@ -49,6 +50,8 @@ export class TopBar implements UiComponent {
   readonly settingsBtn: HTMLButtonElement;
   private readonly spawnBtn: HTMLButtonElement;
   private readonly spawnPanel: SpawnPanel;
+  private readonly runsBtn: HTMLButtonElement;
+  private readonly runsPanel: RunsPanel;
   /** Grupo dos botões de painéis (feed, configurações, ajuda); o histórico entra aqui (ui/index.ts). */
   readonly panelGroup: HTMLElement;
 
@@ -112,6 +115,13 @@ export class TopBar implements UiComponent {
     window.addEventListener('habblaud:vboards-start', (e) => this.spawnPanel.openWith((e as CustomEvent<{ folder: string; prompt: string; vboardsTaskId: string }>).detail, this.spawnBtn));
     this.spawnBtn.setAttribute('aria-haspopup', 'dialog');
     this.spawnBtn.hidden = true;
+    // Rodar lista (ui/runs.ts): só com o chat ligado; "Rodar como lista" do VBoards abre preenchido.
+    this.runsPanel = new RunsPanel(ctx);
+    ctx.root.append(this.runsPanel.el);
+    this.runsBtn = iconButton(ICONS.checklist, tr('Rodar lista: um agente novo por item, em sequência'), () => this.runsPanel.toggle(this.runsBtn), 'ui-btn-runs');
+    this.runsBtn.setAttribute('aria-haspopup', 'dialog');
+    this.runsBtn.hidden = true;
+    window.addEventListener('habblaud:run-list', (e) => this.runsPanel.openWith((e as CustomEvent<{ folder: string; items: Array<{ text: string; vboardsTaskId: string }> }>).detail, this.runsBtn));
     this.version = new VersionChip(ctx, this.settingsBtn);
     this.status = h('div', { class: 'ui-topbar__status' }, this.pill, this.version.el, this.demoBadge);
     const viewGroup = h(
@@ -125,6 +135,7 @@ export class TopBar implements UiComponent {
       'div',
       { class: 'ui-btn-group', role: 'group', attrs: { 'aria-label': tr('Painéis') } },
       this.spawnBtn,
+      this.runsBtn,
       this.timelapseBtn,
       this.feedBtn,
       this.settingsBtn,
@@ -221,6 +232,7 @@ export class TopBar implements UiComponent {
     this.usage.render();
     this.version.render();
     setHidden(this.spawnBtn, !access().spawn || store.mock || store.replaying);
+    setHidden(this.runsBtn, !access().chat || store.mock || store.replaying);
 
     this.sidebarBtn.setAttribute('aria-pressed', String(this.ctx.isPanelOpen('sidebar')));
     this.feedBtn.setAttribute('aria-pressed', String(this.ctx.isPanelOpen('feed')));
