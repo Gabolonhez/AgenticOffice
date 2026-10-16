@@ -15,6 +15,7 @@ import type { PanelName, TerminalRouter, UiComponent, UiContext } from './contex
 import { DayLauncher } from './daystats-launcher';
 import { RoomRenamer } from './roomrename';
 import { h } from './dom';
+import { CanvasView } from './canvas';
 import { Drawer } from './drawer';
 import { FeedPanel } from './feed';
 import { HelpDialog } from './help';
@@ -79,6 +80,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   let help: HelpDialog;
   let area: FreeArea;
   let timelapse: TimelapsePlayer;
+  let canvas: CanvasView;
   /** A seleção em curso partiu da UI (lista, feed, aviso...), não de um clique no canvas. */
   let uiSelecting = false;
   /** Botão Mundo e a ida e volta da cidade (só quando app.ts monta a cena). */
@@ -130,6 +132,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
         else city.zoomBy(action === 'zoomIn' ? 1.25 : 1 / 1.25);
         return;
       }
+      if (canvas.open) return canvas.camera(action);
       area.clearIntent();
       if (action === 'overview') world.overview();
       else world.zoomBy(action === 'zoomIn' ? 1.25 : 1 / 1.25);
@@ -251,6 +254,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
       const on = inCity();
       root.classList.toggle('is-city', on);
       if (on) {
+        canvas.toggle(false);
         if (terminal.isOpen) terminal.close();
         if (pty.isOpen) pty.close();
         if (ctx.isNarrow() && panels.sidebar) ctx.togglePanel('sidebar', false);
@@ -271,6 +275,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   root.append(vboards.el);
   const day = new DayLauncher(ctx, (el) => root.append(el));
   topbar.addPanelButton(day.button);
+  // Quadro: os agentes em cartões, alternando com a pixel art (atalho V).
+  canvas = new CanvasView(ctx);
+  topbar.addPanelButton(canvas.button);
   // Botão direito numa sala (lista lateral ou escritório): renomear.
   const renamer = new RoomRenamer(ctx);
   ctx.renameRoom = (id, at) => renamer.open(id, at);
@@ -284,7 +291,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   const scrim = h('div', { class: 'ui-scrim', attrs: { 'aria-hidden': 'true' }, on: { click: () => ctx.togglePanel('sidebar', false) } });
 
   root.classList.add('ui-root');
-  root.append(timelapse.vignette, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, invite.el, tip.el, settings.el, history.el, deliveries.el, help.el, renamer.el, live, splash.el);
+  root.append(timelapse.vignette, canvas.el, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, invite.el, tip.el, settings.el, history.el, deliveries.el, help.el, renamer.el, live, splash.el);
   area = new FreeArea(world, { root, topbar: topbar.el, sidebar: sidebar.el, drawer: drawer.el, feed: feed.el }, () => ({
     sidebar: panels.sidebar,
     feed: panels.feed,
@@ -293,7 +300,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   }));
   drawer.onLayoutChange = () => applyLayout();
 
-  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster, invite, worldChip, vboards];
+  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster, invite, worldChip, vboards, canvas];
   if (scene) components.push(scene);
   root.append(worldSocial.el);
   components.push(worldSocial);
@@ -445,6 +452,11 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
       case 'O':
         e.preventDefault();
         ctx.camera('overview');
+        break;
+      case 'v':
+      case 'V':
+        e.preventDefault();
+        canvas.toggle();
         break;
       case 'm':
       case 'M':

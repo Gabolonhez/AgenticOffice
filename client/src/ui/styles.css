@@ -11223,3 +11223,256 @@ html.is-replay #world {
   width: auto;
   margin: 0;
 }
+
+/* ------------------------------------------------------------------ Quadro (ui/canvas.ts) */
+/* Segunda vista: cartões dos agentes num plano infinito (arrastar move, roda/pinça aproxima), sobre a pixel art parada. */
+.ui-canvas {
+  position: fixed;
+  z-index: 5;
+  inset: var(--top-h) 0 0 0;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  background:
+    radial-gradient(circle, rgba(160, 176, 210, 0.12) 1px, transparent 1.5px) 0 0 / 24px 24px,
+    #11141b;
+}
+
+.ui-canvas:focus {
+  outline: none;
+}
+
+.ui-canvas.is-dragging,
+.ui-canvas.is-dragging * {
+  cursor: grabbing;
+}
+
+.ui-canvas__plane {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.ui-canvas__links {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.ui-canvas__links svg {
+  display: block;
+  overflow: visible;
+}
+
+.ui-canvas__link {
+  fill: none;
+  stroke: var(--ui-line-strong);
+  stroke-width: 2;
+}
+
+.ui-canvas__link.is-recent {
+  stroke: var(--ui-accent);
+  stroke-width: 3;
+  stroke-dasharray: 10 6;
+  animation: ui-canvas-flow 0.9s linear infinite;
+}
+
+@keyframes ui-canvas-flow {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+
+.ui-ccard {
+  --st: var(--st-idle);
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px 8px 4px;
+  overflow: hidden;
+  /* Opaco: notas por baixo não aparecem através do cartão. */
+  background: #141821;
+  border: 1px solid var(--ui-line-strong);
+  border-left: 4px solid var(--st);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 18px rgba(5, 7, 12, 0.35);
+}
+
+.ui-ccard.is-working,
+.ui-csub.is-working {
+  --st: var(--st-working);
+}
+.ui-ccard.is-waiting,
+.ui-csub.is-waiting {
+  --st: var(--st-waiting);
+}
+.ui-ccard.is-shell,
+.ui-csub.is-shell {
+  --st: var(--st-shell);
+}
+.ui-ccard.is-done,
+.ui-csub.is-done {
+  --st: var(--st-done);
+}
+.ui-ccard.is-offline,
+.ui-csub.is-offline {
+  --st: var(--st-offline);
+}
+
+.ui-ccard:has(> .ui-agent.is-selected) {
+  border-color: var(--ui-accent);
+  box-shadow:
+    0 0 0 2px var(--ui-accent-soft),
+    0 6px 18px rgba(5, 7, 12, 0.35);
+}
+
+.ui-ccard__room {
+  padding-left: 6px;
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--ui-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* O fio à esquerda dos chips é a ligação principal → subagentes. */
+.ui-ccard__subs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 46px;
+  margin-left: 18px;
+  padding-left: 8px;
+  overflow: hidden;
+  border-left: 2px solid var(--ui-line-strong);
+}
+
+.ui-csub {
+  --st: var(--st-idle);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 120px;
+  padding: 1px 7px 1px 2px;
+  font-size: 11px;
+  background: var(--ui-bg-soft);
+  border: 1px solid var(--st);
+  border-radius: 999px;
+}
+
+.ui-csub.is-selected {
+  background: var(--ui-accent-soft);
+}
+
+.ui-csub__name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ui-cnote {
+  --note: #ffe37a;
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  color: #1d2230;
+  background: var(--note);
+  border-radius: 4px;
+  box-shadow: 0 6px 16px rgba(5, 7, 12, 0.4);
+}
+.ui-cnote.is-pink {
+  --note: #ff9ec7;
+}
+.ui-cnote.is-blue {
+  --note: #9fd3ff;
+}
+.ui-cnote.is-green {
+  --note: #a8ec9c;
+}
+
+.ui-cnote__bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  height: 24px;
+  padding: 0 2px;
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 4px 4px 0 0;
+}
+
+.ui-cnote .ui-cnote__btn {
+  color: #1d2230;
+}
+
+.ui-cnote__color {
+  width: 14px;
+  height: 14px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 50%;
+}
+
+.ui-cnote__text {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 8px 8px;
+  font: 13px/1.35 var(--font-ui);
+  color: inherit;
+  background: transparent;
+  border: 0;
+  resize: none;
+  touch-action: pan-y;
+}
+
+.ui-cnote__text:focus-visible {
+  outline: 2px solid rgba(29, 34, 48, 0.5);
+  outline-offset: -2px;
+}
+
+.ui-canvas__tools {
+  /* No alto da área livre (fora dos painéis e da barra de cima, que no celular tem duas linhas). */
+  position: absolute;
+  top: calc(var(--free-top) - var(--top-h));
+  right: max(var(--free-right), 8px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 4px 4px;
+  cursor: default;
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius);
+}
+
+.ui-canvas__hint {
+  font-size: 11.5px;
+  color: var(--ui-muted);
+}
+
+@media (max-width: 900px) {
+  .ui-canvas__hint {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-canvas__link.is-recent {
+    animation: none;
+  }
+}
+
+.ui-root.is-city > .ui-canvas,
+.ui-root.is-city .ui-btn-canvas {
+  display: none !important;
+}

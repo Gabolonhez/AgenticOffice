@@ -312,6 +312,8 @@ export const ICONS = {
   chevronDown: pixelIcon(['#......#', '##....##', '.##..##.', '..####..', '...##...']),
   chevronUp: pixelIcon(['...##...', '..####..', '.##..##.', '##....##', '#......#']),
   arrowDown: pixelIcon(['...##...', '...##...', '...##...', '#######.', '.#####..', '..###...', '...#....'].map((r) => r.padEnd(8, '.'))),
+  /** Quadro (vista em cartões): dois cartões ligados por uma linha. */
+  board: pixelIcon(['####......', '#..#......', '####......', '.#........', '.#....####', '.#....#..#', '.######..#', '......####']),
   /** Cidade do Habblaud World (botão Mundo): prédios de alturas diferentes. */
   city: pixelIcon(['......##..', '..##..##..', '..##.####.', '####.#..#.', '#..#.####.', '####.#..#.', '#..#.####.', '####.#..#.', '##########']),
   /** O escritório (botão de volta da cidade): um prédio com porta. */
