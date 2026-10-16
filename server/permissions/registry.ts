@@ -455,11 +455,12 @@ export class PermissionRegistry {
    * Pedido de um agente do chat (o permission tool dele chamou o servidor). Vale sem página aberta: o pedido espera
    * a página abrir, e o chat mostra o mesmo cartão.
    */
-  registerChat(p: { agentId: string; sessionId: string; tool: string; input: Record<string, unknown>; timeoutMs: number }): { id: string; expiresAt: number } | { skip: 'too-many' } {
+  registerChat(p: { agentId: string; sessionId: string; tool: string; input: Record<string, unknown>; timeoutMs: number; text?: string }): { id: string; expiresAt: number } | { skip: 'too-many' } {
     if (this.size >= this.maxPending) return { skip: 'too-many' };
     const now = this.now();
     const id = `p-${now.toString(36)}-${++this.seq}-${randomBytes(9).toString('base64url')}`;
-    const desc = describeTool(p.tool, p.input);
+    // `text`: cartão de delegação (chat/delegation.ts), com o resumo pronto e nunca "sempre permitir".
+    const desc = p.text ? { text: truncate(maskSecrets(p.text), 400), icon: '🤝' } : describeTool(p.tool, p.input);
     const view = toolView(p.tool, p.input, this.opts.office.get(p.agentId)?.roomId ?? '');
     const info: PermissionRequestInfo = { id, tool: p.tool, title: view.title, text: desc.text, icon: desc.icon, createdAt: now, expiresAt: now + p.timeoutMs };
     if (view.input) info.input = view.input;
@@ -467,13 +468,19 @@ export class PermissionRegistry {
     // "Aprovar e não perguntar de novo" (sugestão 0): vale para esta conversa, guardado pelo chat (alwaysAllow).
     // Comando composto (&&, ;, |...) não ganha a sugestão: o primeiro termo não diz o que roda.
     const command = typeof p.input.command === 'string' ? p.input.command.trim() : undefined;
-    if (command === undefined) info.suggestions = [{ index: 0, rules: [p.tool], destination: 'session' }];
+    if (p.text) delete info.suggestions;
+    else if (command === undefined) info.suggestions = [{ index: 0, rules: [p.tool], destination: 'session' }];
     else if (command && !/&&|\|\||[;|`\n]|\$\(/.test(command)) info.suggestions = [{ index: 0, rules: [`${p.tool}(${command.split(/\s+/)[0]}:*)`], destination: 'session' }];
     this.pending.set(id, { info, chat: true, agentId: p.agentId, sessionId: p.sessionId, signature: '', lastScanAt: 0, waiters: new Set(), idleSince: now });
     this.opts.office.addActivity(p.agentId, { id: `${p.agentId}#perm:${id}`, at: now, kind: 'wait', icon: '🔐', text: truncate(tr('Pede permissão: {0}', [desc.text]), 46), detail: view.title, tool: 'PermissionRequest' }, false);
     this.opts.office.noticePermission(p.agentId, desc.text);
     this.opts.office.markDirty();
     return { id, expiresAt: info.expiresAt };
+  }
+
+  /** A rodada do agente do chat terminou ou parou: ninguém mais espera os pedidos dele. */
+  releaseAgent(agentId: string): void {
+    for (const p of [...this.pending.values()]) if (p.chat && p.agentId === agentId && !p.outcome) this.release(p, 'gone');
   }
 
   /** Detalhe completo de um pedido em aberto (com os argumentos), ou undefined. */

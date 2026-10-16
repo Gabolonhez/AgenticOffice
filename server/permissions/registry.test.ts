@@ -540,4 +540,17 @@ describe('pedidos do chat do escritório', () => {
     expect(registry.decide(id, { behavior: 'allow' })).toBe('ok');
     expect(await w.result).toMatchObject({ status: 'decided', behavior: 'allow' });
   });
+
+  it('registerChat de delegação: texto próprio, sem "sempre permitir"; releaseAgent solta os pedidos do agente', async () => {
+    const { office, registry } = setup({ viewers: 0 });
+    office.addMain({ id: 'chat:1', account: '', sessionId: 'S', cwd: '/p/loja', role: '', startedAt: 0, status: 'working', chat: true });
+    const r = registry.registerChat({ agentId: 'chat:1', sessionId: 'S', tool: 'Delegar', input: { mensagem: 'oi' }, timeoutMs: 300_000, text: 'Ana quer mandar para Bia: oi' });
+    const id = 'id' in r ? r.id : '';
+    expect(registry.detail(id)).toMatchObject({ text: 'Ana quer mandar para Bia: oi' });
+    expect(registry.detail(id)?.suggestions).toBeUndefined();
+    const w = registry.wait(id, 10_000)!;
+    registry.releaseAgent('chat:1');
+    expect(await w.result).toEqual({ status: 'released', reason: 'gone' });
+    expect(registry.snapshot().get('chat:1')).toBeUndefined();
+  });
 });
