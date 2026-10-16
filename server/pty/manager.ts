@@ -110,7 +110,7 @@ const MAIN_ID = /^(.+):(\d+)$/;
  * Variáveis que o Claude Code põe no ambiente das próprias ferramentas. Se o Habblaud foi iniciado de dentro
  * de uma sessão, o Claude aberto aqui se acharia uma sessão-filha (e desligaria o transcript).
  */
-const INHERITED_SESSION_VARS = [
+export const INHERITED_SESSION_VARS = [
   'CLAUDECODE',
   'AI_AGENT',
   'CLAUDE_PID',

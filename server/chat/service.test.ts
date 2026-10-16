@@ -1,0 +1,201 @@
+import { EventEmitter } from 'node:events';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Office } from '../model/office';
+import { NameStore } from '../model/names';
+import { ChatService, defaultKill, type ChatProcess, type ChatServiceDeps } from './service';
+
+const fixture = (n: string) => readFileSync(join(__dirname, 'fixtures', n), 'utf8').split(/\r?\n/).filter(Boolean);
+
+class FakeProc extends EventEmitter implements ChatProcess {
+  pid = 4242;
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  stdin = new PassThrough();
+  input = '';
+  constructor() {
+    super();
+    this.stdin.on('data', (d) => (this.input += String(d)));
+  }
+  finish(lines: string[], code = 0): void {
+    for (const l of lines) this.stdout.write(`${l}\n`);
+    this.stdout.end();
+    this.stderr.end();
+    setImmediate(() => this.emit('close', code));
+  }
+}
+
+interface Spawned { file: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; proc: FakeProc }
+
+function setup(over: Partial<ChatServiceDeps> = {}, dataDir = mkdtempSync(join(tmpdir(), 'hb-chatsvc-'))) {
+  const office = new Office({ names: new NameStore(null), version: '9', startedAt: 0, accounts: () => [], sources: () => [], accountName: () => undefined });
+  const spawned: Spawned[] = [];
+  const kills: number[] = [];
+  const finished: string[] = [];
+  let n = 0;
+  const deps: ChatServiceDeps = {
+    office,
+    dataDir,
+    port: 4747,
+    knownFolders: () => ['C:\\proj'],
+    accounts: { find: (id: string) => (id === '.claude-b' ? { id, provider: 'claude', dir: 'C:\\Users\\u\\.claude-b' } : undefined) } as unknown as ChatServiceDeps['accounts'],
+    bins: () => ({ file: 'claude.exe', prefix: [] }),
+    spawnProcess: (file, args, o) => {
+      const proc = new FakeProc();
+      spawned.push({ file, args, cwd: o.cwd, env: o.env, proc });
+      return proc;
+    },
+    kill: (pid) => kills.push(pid),
+    newId: () => String(++n),
+    platform: 'win32',
+    onFinish: (id) => finished.push(id),
+    ...over,
+  };
+  const chat = new ChatService(deps);
+  chat.start();
+  return { chat, office, spawned, kills, finished, dataDir };
+}
+
+const flush = () => new Promise((r) => setTimeout(r, 20));
+const idOf = (r: ReturnType<ChatService['open']>) => ('agentId' in r ? r.agentId : '');
+
+afterEach(() => vi.useRealTimers());
+
+describe('chat: ChatService', () => {
+  it('abre na pasta conhecida, entra no Office trabalhando e fixa o id da conversa', () => {
+    const { chat, office, spawned } = setup();
+    const r = chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' });
+    expect(r).toEqual({ agentId: 'chat:1' });
+    expect(office.get('chat:1')).toMatchObject({ kind: 'main', chat: true, status: 'working' });
+    expect(office.get('chat:1')?.provider).toBeUndefined(); // claude é o padrão
+    const args = spawned[0].args;
+    const sid = args[args.indexOf('--session-id') + 1];
+    expect(sid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(chat.isChatSession(sid)).toBe(true);
+    expect(spawned[0].cwd).toBe('C:\\proj');
+    expect(spawned[0].proc.input).toBe('oi');
+  });
+
+  it('pasta desconhecida é recusada sem abrir processo', () => {
+    const { chat, spawned } = setup();
+    expect(chat.open({ folder: 'C:\\outro', provider: 'claude', prompt: 'oi' })).toMatchObject({ error: 'invalid' });
+    expect(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: '' })).toMatchObject({ error: 'invalid' });
+    expect(spawned).toHaveLength(0);
+  });
+
+  it('rodada: itens, Office parado com os números e onFinish', async () => {
+    const { chat, office, spawned, finished } = setup();
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }));
+    spawned[0].proc.finish(fixture('claude-turn.jsonl'));
+    await flush();
+    const v = chat.view(id)!;
+    expect(v.items.map((i) => i.kind)).toEqual(['user', 'tool', 'tool', 'assistant', 'usage']);
+    expect(v.items.find((i) => i.kind === 'tool' && i.name === 'Bash')).toMatchObject({ error: true });
+    expect(v.state.phase).toBe('idle');
+    expect(office.get(id)).toMatchObject({ status: 'idle' });
+    expect(office.get(id)?.stats.tokensOut).toBe(590);
+    expect(finished).toEqual([id]);
+  });
+
+  it('retoma a mesma conversa e recusa mensagem durante a rodada', async () => {
+    const { chat, spawned } = setup();
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }));
+    expect(chat.send(id, { text: 'de novo' })).toBe('busy');
+    const sid = spawned[0].args[spawned[0].args.indexOf('--session-id') + 1];
+    spawned[0].proc.finish(fixture('claude-turn.jsonl'));
+    await flush();
+    expect(chat.send(id, { text: 'de novo' })).toBe('ok');
+    expect(spawned[1].args.slice(4, 6)).toEqual(['--resume', sid]);
+    expect(chat.send('chat:x', { text: 'a' })).toBe('not-found');
+  });
+
+  it('parar mata a árvore do processo e avisa no chat', async () => {
+    const { chat, spawned, kills } = setup();
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }));
+    expect(chat.stop(id)).toBe('ok');
+    expect(kills).toEqual([4242]);
+    spawned[0].proc.finish([], 1);
+    await flush();
+    expect(chat.view(id)!.items.at(-1)).toMatchObject({ kind: 'notice', text: 'Rodada interrompida.' });
+    expect(chat.stop(id)).toBe('idle');
+  });
+
+  it('kill padrão: taskkill /T /F no Windows, grupo do processo fora dele', () => {
+    const exec = vi.fn();
+    defaultKill(77, 'win32', exec);
+    expect(exec).toHaveBeenCalledWith('taskkill', ['/PID', '77', '/T', '/F']);
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    defaultKill(77, 'linux', exec);
+    expect(kill).toHaveBeenCalledWith(-77, 'SIGTERM');
+    kill.mockRestore();
+  });
+
+  it('tempo da rodada: para depois do limite', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { chat, spawned, kills } = setup();
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi', limits: { maxTurnMinutes: 1 } }));
+    vi.advanceTimersByTime(60_000);
+    expect(kills).toEqual([4242]);
+    vi.useRealTimers();
+    spawned[0].proc.finish([], 1);
+    await flush();
+    expect(chat.view(id)!.items.at(-1)).toMatchObject({ kind: 'notice', text: 'Tempo da rodada esgotado (1 min).' });
+  });
+
+  it('limite de custo bloqueia até aumentar; o restante vai para --max-budget-usd', async () => {
+    const { chat, spawned } = setup();
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi', limits: { maxCostUsd: 0.1 } }));
+    spawned[0].proc.finish(fixture('claude-turn.jsonl'));
+    await flush();
+    expect(chat.view(id)!.state.blocked).toBe('cost');
+    expect(chat.send(id, { text: 'mais' })).toBe('blocked');
+    expect(chat.setLimits(id, { maxCostUsd: 1 })).toBe('ok');
+    expect(chat.send(id, { text: 'mais' })).toBe('ok');
+    const a = spawned[1].args;
+    expect(Number(a[a.indexOf('--max-budget-usd') + 1])).toBeCloseTo(0.88994451);
+  });
+
+  it('env sem as variáveis da sessão de fora; conta escolhida vira CLAUDE_CONFIG_DIR', () => {
+    process.env.CLAUDECODE = '1';
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'cli';
+    process.env.CLAUDE_CODE_SESSION_ID = 'x';
+    const { chat, spawned } = setup();
+    chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi', account: '.claude-b' });
+    expect(spawned[0].env.CLAUDECODE).toBeUndefined();
+    expect(spawned[0].env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+    expect(spawned[0].env.CLAUDE_CODE_SESSION_ID).toBeUndefined();
+    expect(spawned[0].env.CLAUDE_CONFIG_DIR).toBe('C:\\Users\\u\\.claude-b');
+    delete process.env.CLAUDECODE;
+    delete process.env.CLAUDE_CODE_ENTRYPOINT;
+    delete process.env.CLAUDE_CODE_SESSION_ID;
+  });
+
+  it('depois de reiniciar, o agente volta parado com a mesma conversa', async () => {
+    const first = setup();
+    const id = idOf(first.chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }));
+    const sid = first.spawned[0].args[first.spawned[0].args.indexOf('--session-id') + 1];
+    first.spawned[0].proc.finish(fixture('claude-turn.jsonl'));
+    await flush();
+    const again = setup({}, first.dataDir);
+    expect(again.office.get(id)).toMatchObject({ status: 'idle', chat: true });
+    expect(again.chat.view(id)!.items.map((i) => i.kind)).toEqual(['user', 'tool', 'tool', 'assistant', 'usage']);
+    expect(again.chat.isChatSession(sid)).toBe(true);
+  });
+
+  it('segredo na saída de ferramenta chega mascarado', async () => {
+    const { chat, spawned } = setup();
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }));
+    const secret = 'sk-ant-api03-' + 'a'.repeat(40);
+    spawned[0].proc.finish([
+      JSON.stringify({ type: 'assistant', session_id: 's', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'cat .env' } }] } }),
+      JSON.stringify({ type: 'user', session_id: 's', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: `KEY=${secret}` }] } }),
+      JSON.stringify({ type: 'result', subtype: 'success', is_error: false, session_id: 's', total_cost_usd: 0, usage: {} }),
+    ]);
+    await flush();
+    const tool = chat.view(id)!.items.find((i) => i.kind === 'tool');
+    expect(tool && 'output' in tool ? tool.output : '').not.toContain(secret);
+  });
+});

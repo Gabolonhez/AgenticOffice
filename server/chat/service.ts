@@ -1,0 +1,555 @@
+// Chat com agentes abertos pelo escritório: cada mensagem do usuário é uma rodada da CLI do provedor sem tela
+// (drivers/), que retoma a mesma conversa pelo id. O agente aparece no Office como qualquer outro (AgentInfo.chat) e a
+// conversa fica em <dataDir>/chat/agents/ (store.ts), para voltar depois de reiniciar o servidor.
+import { execFile, spawn } from 'node:child_process';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { join, resolve } from 'node:path';
+import { createInterface } from 'node:readline';
+import { CHAT_TEXT_MAX, CHAT_TOOL_OUTPUT_MAX, type ChatItem, type ChatLimits, type ChatPermission, type ChatState, type ChatView } from '../../shared/chat';
+import { describeTool, maskSecrets, truncate } from '../../shared/activity';
+import { tr } from '../../shared/i18n';
+import type { Provider } from '../../shared/types';
+import type { AccountsService } from '../accounts/service';
+import type { Office } from '../model/office';
+import { INHERITED_SESSION_VARS } from '../pty/manager';
+import { resolveCliBin, type CliBin } from './bins';
+import { agyDriver } from './drivers/agy';
+import { claudeDriver } from './drivers/claude';
+import { codexDriver } from './drivers/codex';
+import { RoleStore } from './roles';
+import { ChatStore, type ChatRecord } from './store';
+import type { ChatDriver, ChatEvent, TurnSpec, WorktreeOps } from './types';
+import { addUsage, overLimit, remainingUsd } from './usage';
+
+export interface ChatOpenRequest {
+  folder: string;
+  provider: Provider;
+  account?: string;
+  model?: string;
+  roleId?: string;
+  permission?: ChatPermission;
+  isolated?: boolean;
+  limits?: ChatLimits;
+  name?: string;
+  prompt: string;
+  vboardsTaskId?: string;
+}
+export type ChatOpenResult = { agentId: string } | { error: 'invalid' | 'unavailable' | 'too-many'; reason: string };
+export interface ChatProcess {
+  pid?: number;
+  stdout: NodeJS.ReadableStream;
+  stderr: NodeJS.ReadableStream;
+  stdin: NodeJS.WritableStream;
+  on(e: 'close', cb: (code: number | null) => void): void;
+}
+export interface ChatServiceDeps {
+  office: Office;
+  dataDir: string;
+  port: number;
+  knownFolders: () => string[];
+  accounts: Pick<AccountsService, 'find'>;
+  bins?: (p: Provider) => CliBin | undefined;
+  spawnProcess?: (file: string, args: string[], o: { cwd: string; env: NodeJS.ProcessEnv }) => ChatProcess;
+  kill?: (pid: number) => void;
+  now?: () => number;
+  newId?: () => string;
+  platform?: NodeJS.Platform;
+  worktrees?: WorktreeOps;
+  onFinish?: (agentId: string) => void;
+}
+
+/** Um item novo, antes de ganhar seq e hora (Omit distributivo sobre a união). */
+type NewItem = ChatItem extends infer T ? (T extends ChatItem ? Omit<T, 'seq' | 'at'> : never) : never;
+
+export const MAX_CHAT_AGENTS = 8;
+const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'antigravity'];
+const DRIVERS: Record<Provider, ChatDriver> = { claude: claudeDriver, codex: codexDriver, antigravity: agyDriver };
+const CLI_NAMES: Record<Provider, string> = { claude: 'claude', codex: 'codex', antigravity: 'agy' };
+const NAME_MAX = 40;
+const STDERR_MAX = 4000;
+
+/** Encerra a rodada inteira: no Windows o `taskkill /T` leva junto os netos (codex.exe, shells das ferramentas). */
+export function defaultKill(
+  pid: number,
+  platform: NodeJS.Platform = process.platform,
+  exec: (file: string, args: string[]) => void = (file, args) => void execFile(file, args, { windowsHide: true }, () => {}),
+): void {
+  if (platform === 'win32') {
+    exec('taskkill', ['/PID', String(pid), '/T', '/F']);
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch {
+    // já saiu
+  }
+}
+
+interface Runtime {
+  rec: ChatRecord;
+  proc?: ChatProcess;
+  timer?: ReturnType<typeof setTimeout>;
+  stopReason?: string;
+  phase: ChatState['phase'];
+  tool?: string;
+  turnStart: number;
+  token: string;
+}
+
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
+}
+
+export function parseLimits(raw: unknown): ChatLimits | undefined {
+  if (raw === undefined) return {};
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: ChatLimits = {};
+  for (const k of ['maxCostUsd', 'maxTokens', 'maxTurnMinutes'] as const) {
+    if (o[k] === undefined || o[k] === null) continue;
+    const n = num(o[k]);
+    if (n === undefined) return undefined;
+    out[k] = n;
+  }
+  return out;
+}
+
+export class ChatService {
+  private readonly agents = new Map<string, Runtime>();
+  private readonly store: ChatStore;
+  readonly roles: RoleStore;
+  private readonly now: () => number;
+  private readonly platform: NodeJS.Platform;
+
+  constructor(private readonly deps: ChatServiceDeps) {
+    this.store = new ChatStore(join(deps.dataDir, 'chat', 'agents'));
+    this.roles = new RoleStore(join(deps.dataDir, 'chat', 'roles.json'));
+    this.now = deps.now ?? Date.now;
+    this.platform = deps.platform ?? process.platform;
+  }
+
+  /** Carrega as conversas guardadas e recoloca os agentes no Office, parados. */
+  start(): void {
+    for (const rec of this.store.load()) {
+      this.agents.set(rec.agentId, this.runtime(rec));
+      this.enterOffice(rec, 'idle');
+      this.store.save(rec);
+    }
+  }
+
+  providers(): Array<{ id: Provider; available: boolean; reason?: string; ask: boolean }> {
+    return PROVIDERS.map((id) => {
+      const available = !!this.bin(id);
+      return { id, available, ...(available ? {} : { reason: tr('{0} não encontrado no PATH', [CLI_NAMES[id]]) }), ask: id === 'claude' };
+    });
+  }
+
+  open(raw: unknown): ChatOpenResult {
+    const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<ChatOpenRequest>;
+    const invalid = (reason: string): ChatOpenResult => ({ error: 'invalid', reason });
+    const folder = typeof r.folder === 'string' ? this.knownFolder(r.folder) : undefined;
+    if (!folder) return invalid(tr('Pasta desconhecida: abra uma sessão nela antes.'));
+    const provider = r.provider;
+    if (!provider || !PROVIDERS.includes(provider)) return invalid(tr('Provedor inválido.'));
+    const prompt = typeof r.prompt === 'string' ? r.prompt.trim() : '';
+    if (!prompt || prompt.length > CHAT_TEXT_MAX) return invalid(tr('Escreva o pedido (até {0} caracteres).', [CHAT_TEXT_MAX]));
+    const limits = parseLimits(r.limits);
+    if (!limits) return invalid(tr('Limites inválidos.'));
+    if (r.roleId && !this.roles.get(r.roleId)) return invalid(tr('Papel não encontrado.'));
+    const name = typeof r.name === 'string' ? r.name.trim() : '';
+    if (name.length > NAME_MAX) return invalid(tr('Nome muito longo.'));
+    if (r.isolated && !this.deps.worktrees) return invalid(tr('Cópia isolada indisponível.'));
+    if (!this.bin(provider)) return { error: 'unavailable', reason: tr('{0} não encontrado no PATH', [CLI_NAMES[provider]]) };
+    if (this.agents.size >= MAX_CHAT_AGENTS) return { error: 'too-many', reason: tr('Já há {0} agentes do chat abertos; feche um antes.', [MAX_CHAT_AGENTS]) };
+
+    const agentId = `chat:${(this.deps.newId ?? randomUUID)()}`;
+    const rec: ChatRecord = {
+      v: 1,
+      agentId,
+      provider,
+      ...(typeof r.account === 'string' && r.account ? { account: r.account } : {}),
+      folder,
+      cwd: folder,
+      ...(typeof r.model === 'string' && r.model.trim() ? { model: r.model.trim() } : {}),
+      ...(r.roleId ? { roleId: r.roleId } : {}),
+      permission: provider === 'claude' && r.permission === 'ask' ? 'ask' : 'auto',
+      // O Claude aceita o id da conversa já na 1ª rodada; Codex e agy dão o deles no evento `session`.
+      ...(provider === 'claude' ? { providerSessionId: randomUUID() } : {}),
+      limits,
+      spend: { usd: 0, tokens: 0 },
+      items: [],
+      ...(typeof r.vboardsTaskId === 'string' && r.vboardsTaskId ? { vboardsTaskId: r.vboardsTaskId } : {}),
+      ...(name ? { name } : {}),
+      seed: randomBytes(4).readUInt32LE(0),
+      createdAt: this.now(),
+      alwaysAllow: [],
+    };
+    const rt = this.runtime(rec);
+    this.agents.set(agentId, rt);
+    this.enterOffice(rec, 'working');
+    if (name) this.deps.office.setCharacter(agentId, { name, seed: rec.seed, parts: {} });
+    if (r.isolated && this.deps.worktrees) {
+      rt.phase = 'thinking';
+      rec.running = true;
+      this.store.save(rec);
+      void this.deps.worktrees.create(folder, agentId, name || CLI_NAMES[provider]).then((w) => {
+        rec.running = false;
+        if ('error' in w) {
+          this.pushItem(rt, { kind: 'notice', level: 'error', text: w.error });
+          this.finishOffice(rt);
+          return;
+        }
+        rec.cwd = w.path;
+        rec.isolated = { branch: w.branch, path: w.path, base: w.base };
+        this.runTurn(rt, prompt);
+      });
+    } else {
+      this.runTurn(rt, prompt);
+    }
+    return { agentId };
+  }
+
+  send(agentId: string, raw: unknown): 'ok' | 'not-found' | 'busy' | 'blocked' | 'invalid' {
+    const rt = this.agents.get(agentId);
+    if (!rt) return 'not-found';
+    const text = typeof (raw as { text?: unknown })?.text === 'string' ? (raw as { text: string }).text.trim() : '';
+    if (!text || text.length > CHAT_TEXT_MAX) return 'invalid';
+    if (rt.proc || rt.rec.running) return 'busy';
+    if (overLimit(rt.rec.spend, rt.rec.limits)) return 'blocked';
+    this.runTurn(rt, text);
+    return 'ok';
+  }
+
+  stop(agentId: string): 'ok' | 'not-found' | 'idle' {
+    const rt = this.agents.get(agentId);
+    if (!rt) return 'not-found';
+    if (!rt.proc) return 'idle';
+    this.interrupt(rt, tr('Rodada interrompida.'));
+    return 'ok';
+  }
+
+  setLimits(agentId: string, raw: unknown): 'ok' | 'not-found' | 'invalid' {
+    const rt = this.agents.get(agentId);
+    if (!rt) return 'not-found';
+    const limits = parseLimits(raw);
+    if (!limits) return 'invalid';
+    rt.rec.limits = limits;
+    this.store.save(rt.rec);
+    this.deps.office.markDirty();
+    return 'ok';
+  }
+
+  view(agentId: string, after = 0): ChatView | undefined {
+    const rt = this.agents.get(agentId);
+    if (!rt) return undefined;
+    const { rec } = rt;
+    const blocked = overLimit(rec.spend, rec.limits);
+    const state: ChatState = {
+      phase: rt.phase,
+      ...(rt.tool ? { tool: rt.tool } : {}),
+      ...(blocked ? { blocked } : {}),
+      spentUsd: rec.spend.usd,
+      spentTokens: rec.spend.tokens,
+      limits: rec.limits,
+      ...(rec.isolated ? { isolated: { branch: rec.isolated.branch, ...(rec.isolated.merged ? { merged: true } : {}), ...(rec.isolated.discarded ? { discarded: true } : {}) } } : {}),
+    };
+    return { agentId, provider: rec.provider, items: rec.items.filter((i) => i.seq > after), state, lastSeq: rec.items.at(-1)?.seq ?? 0 };
+  }
+
+  close(agentId: string): 'ok' | 'not-found' | 'busy' {
+    const rt = this.agents.get(agentId);
+    if (!rt) return 'not-found';
+    if (rt.proc || rt.rec.running) return 'busy';
+    this.agents.delete(agentId);
+    this.store.remove(agentId);
+    this.deps.office.closeMain(agentId);
+    return 'ok';
+  }
+
+  isChatSession(sessionId: string): boolean {
+    for (const rt of this.agents.values()) if (rt.rec.providerSessionId === sessionId) return true;
+    return false;
+  }
+
+  lastReply(agentId: string): string | undefined {
+    const items = this.agents.get(agentId)?.rec.items ?? [];
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === 'assistant') return it.text;
+    }
+    return undefined;
+  }
+
+  tokenOwner(token: string): string | undefined {
+    for (const [id, rt] of this.agents) if (rt.token === token) return id;
+    return undefined;
+  }
+
+  record(agentId: string): ChatRecord | undefined {
+    return this.agents.get(agentId)?.rec;
+  }
+
+  addApproval(agentId: string, item: Omit<Extract<ChatItem, { kind: 'approval' }>, 'seq' | 'at'>): void {
+    const rt = this.agents.get(agentId);
+    if (!rt) return;
+    rt.phase = 'approval';
+    this.pushItem(rt, item);
+    this.deps.office.setStatus(agentId, 'waiting', tr('aprovação'));
+  }
+
+  /** O usuário respondeu um pedido de aprovação (o item fica com o resultado). */
+  resolveApproval(agentId: string, permissionId: string, outcome: 'allow' | 'deny'): void {
+    const rt = this.agents.get(agentId);
+    if (!rt) return;
+    const it = rt.rec.items.find((i) => i.kind === 'approval' && i.permissionId === permissionId);
+    if (it && it.kind === 'approval') it.outcome = outcome;
+    if (rt.proc) {
+      rt.phase = 'tool';
+      this.deps.office.setStatus(agentId, 'working');
+    }
+    this.store.save(rt.rec);
+    this.deps.office.markDirty();
+  }
+
+  /** Marca a cópia isolada como juntada/descartada (Task 11/12). */
+  markIsolated(agentId: string, change: { merged?: true; discarded?: true }, notice?: string): void {
+    const rt = this.agents.get(agentId);
+    if (!rt?.rec.isolated) return;
+    Object.assign(rt.rec.isolated, change);
+    if (notice) this.pushItem(rt, { kind: 'notice', level: 'info', text: notice });
+    else this.store.save(rt.rec);
+  }
+
+  // --- interno ---
+
+  private runtime(rec: ChatRecord): Runtime {
+    return { rec, phase: 'idle', turnStart: 0, token: randomBytes(24).toString('hex') };
+  }
+
+  private bin(p: Provider): CliBin | undefined {
+    return (this.deps.bins ?? ((x: Provider) => resolveCliBin(x)))(p);
+  }
+
+  private knownFolder(folder: string): string | undefined {
+    const norm = (p: string) => (this.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
+    const want = norm(folder);
+    return this.deps.knownFolders().find((f) => norm(f) === want);
+  }
+
+  private enterOffice(rec: ChatRecord, status: 'working' | 'idle'): void {
+    const role = rec.roleId ? (this.roles.get(rec.roleId)?.name ?? '') : '';
+    this.deps.office.addMain({
+      id: rec.agentId,
+      provider: rec.provider,
+      account: rec.account ?? '',
+      sessionId: rec.providerSessionId ?? rec.agentId,
+      cwd: rec.folder,
+      role,
+      startedAt: rec.createdAt,
+      status,
+      chat: true,
+    });
+    this.applyStats(rec);
+  }
+
+  private applyStats(rec: ChatRecord): void {
+    const first = rec.items.find((i) => i.kind === 'user');
+    let toolCalls = 0;
+    let tokensIn = 0;
+    let tokensOut = 0;
+    for (const i of rec.items) {
+      if (i.kind === 'tool') toolCalls++;
+      if (i.kind === 'usage') {
+        tokensIn += i.tokensIn;
+        tokensOut += i.tokensOut;
+      }
+    }
+    this.deps.office.applyTranscript(rec.agentId, {
+      ...(first && first.kind === 'user' ? { title: truncate(first.text.replace(/\s+/g, ' '), 60) } : {}),
+      tasks: [],
+      stats: { toolCalls, tokensIn, tokensOut, subagents: 0, ...(rec.spend.usd ? { costUSD: rec.spend.usd } : {}) },
+      ...(rec.model ? { model: rec.model } : {}),
+      lastAt: this.now(),
+    });
+  }
+
+  private pushItem(rt: Runtime, item: NewItem): ChatItem {
+    const full = { ...item, seq: (rt.rec.items.at(-1)?.seq ?? 0) + 1, at: this.now() } as ChatItem;
+    rt.rec.items.push(full);
+    this.store.save(rt.rec);
+    this.deps.office.markDirty();
+    return full;
+  }
+
+  private runTurn(rt: Runtime, prompt: string): void {
+    const { rec } = rt;
+    const bin = this.bin(rec.provider);
+    this.pushItem(rt, { kind: 'user', text: prompt });
+    if (!bin) {
+      this.pushItem(rt, { kind: 'notice', level: 'error', text: tr('{0} não encontrado no PATH', [CLI_NAMES[rec.provider]]) });
+      this.finishOffice(rt);
+      return;
+    }
+    const first = !rec.items.some((i) => i.kind === 'usage') && !(rec.provider !== 'claude' && rec.providerSessionId);
+    const spec: TurnSpec = {
+      folder: rec.cwd,
+      prompt,
+      first,
+      ...(rec.provider === 'claude' && first ? { sessionId: rec.providerSessionId } : {}),
+      ...(!first && rec.providerSessionId ? { resumeId: rec.providerSessionId } : {}),
+      ...(rec.model ? { model: rec.model } : {}),
+      ...(rec.roleId && this.roles.get(rec.roleId) ? { role: this.roles.get(rec.roleId)!.text } : {}),
+      permission: rec.permission,
+      ...(remainingUsd(rec.spend, rec.limits) !== undefined ? { budgetUsd: remainingUsd(rec.spend, rec.limits) } : {}),
+      ...(rec.provider === 'claude' && rec.permission === 'ask'
+        ? { mcp: { url: `http://127.0.0.1:${this.deps.port}/api/chat/mcp/${encodeURIComponent(rec.agentId)}`, token: rt.token } }
+        : {}),
+      ...(rec.account && this.deps.accounts.find(rec.account) ? { accountDir: this.deps.accounts.find(rec.account)!.dir } : {}),
+    };
+    const driver = DRIVERS[rec.provider];
+    const inv = driver.invocation(spec);
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const k of INHERITED_SESSION_VARS) delete env[k];
+    for (const [k, v] of Object.entries(inv.env)) if (v !== undefined) env[k] = v;
+    rec.running = true;
+    rt.phase = 'thinking';
+    rt.turnStart = this.now();
+    delete rt.stopReason;
+    this.store.save(rec);
+    this.deps.office.setStatus(rec.agentId, 'working');
+
+    const spawnProcess = this.deps.spawnProcess ?? ((file, args, o) => spawn(file, args, { cwd: o.cwd, env: o.env, shell: false, windowsHide: true, detached: this.platform !== 'win32' }));
+    let proc: ChatProcess;
+    try {
+      proc = spawnProcess(bin.file, [...bin.prefix, ...inv.args], { cwd: rec.cwd, env });
+    } catch (err) {
+      rec.running = false;
+      this.pushItem(rt, { kind: 'notice', level: 'error', text: maskSecrets(String((err as Error)?.message ?? err)) });
+      this.finishOffice(rt);
+      return;
+    }
+    rt.proc = proc;
+    proc.stdin.end(inv.stdin ?? '');
+
+    const parser = driver.parser();
+    let stderr = '';
+    proc.stderr.on('data', (d: Buffer | string) => {
+      if (stderr.length < STDERR_MAX) stderr += String(d);
+    });
+    const rl = createInterface({ input: proc.stdout, crlfDelay: Infinity });
+    const rlDone = new Promise<void>((ok) => rl.on('close', ok));
+    rl.on('line', (line) => {
+      for (const e of parser.line(line)) this.apply(rt, e);
+    });
+    if (rec.limits.maxTurnMinutes) {
+      const min = rec.limits.maxTurnMinutes;
+      rt.timer = setTimeout(() => this.interrupt(rt, tr('Tempo da rodada esgotado ({0} min).', [min])), min * 60_000);
+    }
+    proc.on('close', (code) => {
+      void rlDone.then(() => {
+        for (const e of parser.end(code, stderr)) this.apply(rt, e);
+        this.endTurn(rt);
+      });
+    });
+  }
+
+  private interrupt(rt: Runtime, reason: string): void {
+    if (!rt.proc || rt.stopReason) return;
+    rt.stopReason = reason;
+    rt.phase = 'stopping';
+    if (rt.proc.pid !== undefined) (this.deps.kill ?? ((pid: number) => defaultKill(pid, this.platform)))(rt.proc.pid);
+    this.deps.office.markDirty();
+  }
+
+  private apply(rt: Runtime, e: ChatEvent): void {
+    const { rec } = rt;
+    const id = rec.agentId;
+    switch (e.type) {
+      case 'session':
+        if (!rec.providerSessionId) {
+          rec.providerSessionId = e.id;
+          this.store.save(rec);
+        }
+        return;
+      case 'thinking':
+        if (rt.phase !== 'stopping') rt.phase = 'thinking';
+        return;
+      case 'text':
+        this.pushItem(rt, { kind: 'assistant', text: maskSecrets(e.text) });
+        return;
+      case 'notice':
+        this.pushItem(rt, { kind: 'notice', level: 'info', text: maskSecrets(e.text) });
+        return;
+      case 'tool': {
+        const input = maskSecrets(e.input);
+        this.pushItem(rt, { kind: 'tool', toolId: e.id, name: e.name, input });
+        if (rt.phase !== 'stopping') rt.phase = 'tool';
+        rt.tool = e.name;
+        const raw = /^(Bash|PowerShell|command)$/.test(e.name) ? { command: e.input } : { file_path: e.input };
+        this.deps.office.addActivity(id, { id: `${id}#${e.id}`, at: this.now(), tool: e.name, ...describeTool(e.name, raw) }, true);
+        this.deps.office.setStatus(id, 'working');
+        return;
+      }
+      case 'tool-result': {
+        const it = rec.items.find((i) => i.kind === 'tool' && i.toolId === e.id);
+        if (it && it.kind === 'tool') {
+          it.output = truncate(maskSecrets(e.output), CHAT_TOOL_OUTPUT_MAX);
+          if (e.error) it.error = true;
+          this.store.save(rec);
+          this.deps.office.markDirty();
+        }
+        return;
+      }
+      case 'usage': {
+        const { spend, turnUsd } = addUsage(rec.spend, e);
+        rec.spend = spend;
+        this.pushItem(rt, { kind: 'usage', tokensIn: e.tokensIn, tokensOut: e.tokensOut, ...(turnUsd !== undefined ? { costUsd: turnUsd } : {}), ms: this.now() - rt.turnStart });
+        return;
+      }
+      case 'done':
+        if (!e.ok && !rt.stopReason && e.error) this.pushItem(rt, { kind: 'notice', level: 'error', text: maskSecrets(e.error) });
+        return;
+    }
+  }
+
+  private endTurn(rt: Runtime): void {
+    const { rec } = rt;
+    if (rt.timer) clearTimeout(rt.timer);
+    delete rt.timer;
+    delete rt.proc;
+    rec.running = false;
+    if (rt.stopReason) this.pushItem(rt, { kind: 'notice', level: 'info', text: rt.stopReason });
+    const blocked = overLimit(rec.spend, rec.limits);
+    if (blocked) {
+      this.pushItem(rt, {
+        kind: 'notice',
+        level: 'error',
+        text: blocked === 'cost' ? tr('Limite de custo atingido: aumente o limite para continuar.') : tr('Limite de tokens atingido: aumente o limite para continuar.'),
+      });
+    }
+    void this.afterIsolatedTurn(rt).finally(() => {
+      this.finishOffice(rt);
+      this.deps.onFinish?.(rec.agentId);
+    });
+  }
+
+  private async afterIsolatedTurn(rt: Runtime): Promise<void> {
+    const w = rt.rec.isolated;
+    if (!w || !this.deps.worktrees || w.merged || w.discarded) return;
+    try {
+      const s = await this.deps.worktrees.summary(w);
+      if (s.stat) this.pushItem(rt, { kind: 'notice', level: 'info', text: s.stat });
+    } catch {
+      // o resumo é só informativo
+    }
+  }
+
+  private finishOffice(rt: Runtime): void {
+    rt.phase = 'idle';
+    delete rt.tool;
+    delete rt.stopReason;
+    this.store.save(rt.rec);
+    this.applyStats(rt.rec);
+    this.deps.office.setStatus(rt.rec.agentId, 'idle');
+  }
+}

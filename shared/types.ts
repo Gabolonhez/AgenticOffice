@@ -137,6 +137,8 @@ export interface AgentInfo {
   kind: AgentKind;
   /** Ferramenta do agente; ausente = 'claude'. */
   provider?: Provider;
+  /** Aberto pelo chat do escritório (server/chat): conversa pelo painel, sem terminal nem mensagens pelo plugin. */
+  chat?: true;
   /** Para subagentes: id do agente que o disparou. */
   parentId?: string;
   roomId: string;

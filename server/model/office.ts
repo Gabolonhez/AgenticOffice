@@ -107,6 +107,8 @@ export interface MainInput {
   startedAt: number;
   status: AgentStatus;
   waitingFor?: string;
+  /** Agente do chat do escritório (AgentInfo.chat). */
+  chat?: true;
 }
 
 export interface SubInput {
@@ -347,6 +349,7 @@ export class Office {
       seed: chosen?.seed ?? hash32(p.id),
     };
     if (p.provider && p.provider !== 'claude') info.provider = p.provider;
+    if (p.chat) info.chat = true;
     if (chosen) {
       info.custom = true;
       if (chosen.parts) info.parts = { ...chosen.parts };

@@ -34,6 +34,14 @@ export interface TurnSpec {
 
 export interface CliInvocation { args: string[]; stdin?: string; env: Record<string, string | undefined> }
 
+/** Cópia isolada do agente num git worktree (implementação em worktree.ts). */
+export interface WorktreeOps {
+  create(repo: string, agentId: string, label: string): Promise<{ path: string; branch: string; base: string } | { error: string }>;
+  summary(w: { path: string; base: string }): Promise<{ files: number; added: number; removed: number; commits: number; stat: string }>;
+  merge(repo: string, w: { path: string; branch: string }, message: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+  discard(repo: string, w: { path: string; branch: string }): Promise<{ ok: true } | { ok: false; reason: string }>;
+}
+
 export interface ChatDriver {
   readonly provider: Provider;
   invocation(spec: TurnSpec): CliInvocation;
