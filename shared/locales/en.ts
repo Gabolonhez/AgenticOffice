@@ -3322,4 +3322,10 @@ export const EN: Readonly<Record<string, string>> = {
   "Muitos pedidos de aprovação abertos.": "Too many open approval requests.",
   "Sem resposta a tempo.": "No answer in time.",
   "Recusado pelo usuário no AgenticOffice: {0}": "Denied by the user in AgenticOffice: {0}",
+  "A pasta não é um repositório git.": "The folder is not a git repository.",
+  "O repositório ainda não tem nenhum commit.": "The repository has no commits yet.",
+  "Não deu para criar a cópia isolada: {0}": "Couldn't create the isolated copy: {0}",
+  "A pasta do projeto tem mudanças sem commit; faça commit ou guarde antes de juntar.": "The project folder has uncommitted changes; commit or stash them before merging.",
+  "Não deu para commitar o trabalho da cópia: {0}": "Couldn't commit the copy's work: {0}",
+  "Conflito ao juntar; nada foi alterado no projeto.": "Conflict while merging; nothing was changed in the project.",
 };

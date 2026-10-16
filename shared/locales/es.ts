@@ -3323,4 +3323,10 @@ export const ES: Readonly<Record<string, string>> = {
   "Muitos pedidos de aprovação abertos.": "Demasiadas solicitudes de aprobación abiertas.",
   "Sem resposta a tempo.": "Sin respuesta a tiempo.",
   "Recusado pelo usuário no AgenticOffice: {0}": "Rechazado por el usuario en AgenticOffice: {0}",
+  "A pasta não é um repositório git.": "La carpeta no es un repositorio git.",
+  "O repositório ainda não tem nenhum commit.": "El repositorio todavía no tiene ningún commit.",
+  "Não deu para criar a cópia isolada: {0}": "No se pudo crear la copia aislada: {0}",
+  "A pasta do projeto tem mudanças sem commit; faça commit ou guarde antes de juntar.": "La carpeta del proyecto tiene cambios sin commit; haz commit o guárdalos antes de unir.",
+  "Não deu para commitar o trabalho da cópia: {0}": "No se pudo hacer commit del trabajo de la copia: {0}",
+  "Conflito ao juntar; nada foi alterado no projeto.": "Conflicto al unir; no se cambió nada en el proyecto.",
 };

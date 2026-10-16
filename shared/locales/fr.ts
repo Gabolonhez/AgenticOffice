@@ -3339,4 +3339,10 @@ export const FR: Readonly<Record<string, string>> = {
   "Muitos pedidos de aprovação abertos.": "Trop de demandes d'approbation ouvertes.",
   "Sem resposta a tempo.": "Pas de réponse à temps.",
   "Recusado pelo usuário no AgenticOffice: {0}": "Refusé par l'utilisateur dans AgenticOffice : {0}",
+  "A pasta não é um repositório git.": "Le dossier n'est pas un dépôt git.",
+  "O repositório ainda não tem nenhum commit.": "Le dépôt n'a encore aucun commit.",
+  "Não deu para criar a cópia isolada: {0}": "Impossible de créer la copie isolée : {0}",
+  "A pasta do projeto tem mudanças sem commit; faça commit ou guarde antes de juntar.": "Le dossier du projet a des modifications non commitées ; commitez ou mettez-les de côté avant de fusionner.",
+  "Não deu para commitar o trabalho da cópia: {0}": "Impossible de commiter le travail de la copie : {0}",
+  "Conflito ao juntar; nada foi alterado no projeto.": "Conflit lors de la fusion ; rien n'a été modifié dans le projet.",
 };
