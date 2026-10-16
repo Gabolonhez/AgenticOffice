@@ -10,6 +10,18 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Chat com agentes (AgenticOffice)
+
+- **Chat com agentes:** o "Novo agente" abre Claude Code, Codex ou Antigravity sem tela e a conversa acontece no painel
+  do agente (Enter envia, Parar, ferramentas recolhidas, uso e custo da rodada). A conversa continua depois de
+  reiniciar o servidor.
+- **Janela de abrir agente:** agente e modelo, conta, papel, permissão (automático ou pedir aprovação, só no Claude),
+  cópia isolada, limites de custo/tokens/tempo e nome, em "Mais opções".
+- **Papéis prontos:** Dev, QA, Revisor, Designer, Pesquisador e Orquestrador, editáveis, guardados em `~/.habblaud`.
+- **Cópia isolada:** o agente trabalha num git worktree num branch próprio; ao terminar, Juntar ou Descartar.
+- **VBoards:** o "Iniciar" abre a janela preenchida e inicia a task pelo chat.
+- **Docker:** o chat fica indisponível, com aviso; o resto segue igual.
+
 ### Habblaud World (em desenvolvimento, desligado por padrão)
 
 A base do Habblaud World, a cidade online onde cada Habblaud vira um prédio. Sem `HABBLAUD_WORLD_URL` o recurso fica

@@ -472,6 +472,21 @@ em `shared/world/city.ts` (fonte da verdade; o servidor do mundo guarda a cópia
   200 ms) e `close`; no modo demonstração, `FakeWorldStream` (20 prédios com o meu no lote (3,1), 5 pessoas andando
   nas calçadas e uma sentada num banco da praça, minimapa, `afk` depois de 60 s; `?perf=N` enche N lotes).
 
+## Chat com agentes
+
+`server/chat/` abre agentes sem tela e conversa com eles pelo escritório: cada mensagem é uma rodada da CLI do
+provedor (`claude -p --output-format stream-json`, `codex exec --json`, `agy --print= --output-format stream-json`),
+retomada pelo id da conversa. Liga fora do Docker e com `HABBLAUD_PTY=1`; as rotas (`/api/chat/*`) só valem pelo
+próprio computador.
+
+- **Executáveis:** do PATH, ou `HABBLAUD_CLAUDE_BIN`, `HABBLAUD_CODEX_BIN`, `HABBLAUD_AGY_BIN`. No Windows os shims
+  `.cmd` do npm viram o binário real (`claude.exe`, ou o `codex.js` pelo Node).
+- **Permissões:** no automático os três rodam com acesso total. "Pedir aprovação" só existe no Claude: o
+  `--permission-prompt-tool` chama este servidor (MCP por HTTP em `/api/chat/mcp/:id`, com token por agente) e o
+  pedido aparece no cartão de permissão.
+- **Dados:** conversas em `~/.habblaud/chat/agents/`, papéis em `~/.habblaud/chat/roles.json`, cópias isoladas em
+  `~/.habblaud/chat/worktrees/`. Nada é gravado no projeto do usuário (fora o metadado do `git worktree`).
+
 ## Variáveis de ambiente
 
 | Variável | Padrão | Uso |
