@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Abrir pelo escritório agentes do Claude Code, Codex e Antigravity e conversar com eles por um chat no painel do agente. A conversa é retomável e persistida. O personagem se anima no pixel-art. Por padrão o agente roda no automático, com uma trava para ações irreversíveis. Há papéis, cópia isolada (worktree), limites de custo e tempo, e o "Iniciar" do VBoards passa a abrir agentes por esta Base.
+**Goal:** Abrir pelo escritório agentes do Claude Code, Codex e Antigravity e conversar com eles por um chat no painel do agente. A conversa é retomável e persistida. O personagem se anima no pixel-art. Por padrão o agente roda no automático com acesso total (sem trava de ações irreversíveis, por decisão do usuário); "pedir aprovação" existe no Claude. Há papéis, cópia isolada (worktree), limites de custo e tempo, e o "Iniciar" do VBoards passa a abrir agentes por esta Base.
 
-**Architecture:** Um `ChatService` no servidor roda uma rodada por mensagem do usuário: dispara a CLI do provedor sem shell (`spawn` + argv, pedido por stdin ou `--print=`), lê o JSONL e retoma a mesma conversa pelo id. Os trechos específicos de cada provedor ficam em um driver (`invocation()` + parser de stream) atrás de uma interface comum. O agente entra no `Office` com id próprio (`chat:<uuid>`), e as fontes que leem sessões de fora passam a ignorá-lo. As aprovações do Claude passam pelo `--permission-prompt-tool`, servido pelo próprio servidor como MCP HTTP. Esse caminho reaproveita o `PermissionRegistry` e o cartão de permissão que já existem. Codex e Antigravity rodam em sandbox e com `git push` bloqueado pelo ambiente.
+**Architecture:** Um `ChatService` no servidor roda uma rodada por mensagem do usuário: dispara a CLI do provedor sem shell (`spawn` + argv, pedido por stdin ou `--print=`), lê o JSONL e retoma a mesma conversa pelo id. Os trechos específicos de cada provedor ficam em um driver (`invocation()` + parser de stream) atrás de uma interface comum. O agente entra no `Office` com id próprio (`chat:<uuid>`), e as fontes que leem sessões de fora passam a ignorá-lo. As aprovações do Claude passam pelo `--permission-prompt-tool`, servido pelo próprio servidor como MCP HTTP. Esse caminho reaproveita o `PermissionRegistry` e o cartão de permissão que já existem. No automático os três rodam com acesso total: Claude `--permission-mode bypassPermissions`, Codex `sandbox_mode="danger-full-access"`, agy `--dangerously-skip-permissions`. O permission tool só entra no Claude em "pedir aprovação".
 
 **Tech Stack:** Node ≥ 22.12 + TypeScript (`node:http` próprio, `node:child_process`, `node:readline`), Vite + DOM puro com o helper `h()`, vitest em ambiente `node`, git worktree.
 
@@ -18,19 +18,19 @@
 - Segredos nunca vão para o snapshot, o cliente ou os logs: `maskSecrets()` (shared/activity.ts:125) em todo texto de ferramenta, resposta e erro. O token MCP nunca sai do servidor.
 - Textos visíveis com `tr('…')` (primeiro argumento literal), com tradução em `shared/locales/{en,es,fr}.ts`. Cada mudança visível ganha uma linha em `CHANGELOG.md` > `## [Não lançado]`.
 - Mudanças em `shared/types.ts` só aditivas (campos opcionais).
-- Testes vitest co-localizados (`x.test.ts` ao lado de `x.ts`) para a lógica nova: parsers, decisão de permissão/trava, persistência, limites.
+- Testes vitest co-localizados (`x.test.ts` ao lado de `x.ts`) para a lógica nova: parsers, decisão de permissão, persistência, limites.
 - Windows 11 é a plataforma principal (servidor com `HABBLAUD_PTY=1`). Não quebrar macOS, Linux nem Docker.
 - No Docker o chat fica indisponível, com aviso na tela. O resto do modo Docker (incluindo o Novo agente atual via host) segue igual.
 - Nada do AgenticOffice é gravado no repositório do usuário. Papéis, conversas e worktrees ficam em `config.dataDir` (`~/.habblaud`). A única exceção é o metadado interno do git (`.git/worktrees/`), criado pelo `git worktree add`.
 - Limites: custo somado por todas as rodadas (persistido; em tokens quando o provedor não informa US$). Tempo por rodada. Estourou: a rodada para, o chat avisa, e o agente só aceita nova mensagem se o usuário aumentar o limite.
-- Permissão padrão `auto`. "Pedir aprovação" só existe no Claude; nos outros a opção fica desabilitada, com o motivo.
+- Permissão padrão `auto` = acesso total, sem trava de ações irreversíveis (decisão do usuário em 2026-10-16: "qualquer coisa só pedir permissão ou perguntar, se não só deixa ele fazer"). "Pedir aprovação" só existe no Claude; nos outros a opção fica desabilitada, com o motivo.
 - Nenhum código, prompt ou formato do Maestro/Maestri.
 - Processo: commit local por tarefa e nada de push. O usuário testa antes (build, reinício do servidor local, teste, depois push).
 
 ## Review Focus
 
 1. **Shims `.cmd` do npm no Windows.** `claude` e `codex` neste PC são `…\npm\claude.cmd` e `…\npm\codex.cmd`, e o `spawn` sem shell não roda `.cmd`. O alvo real é `node_modules\@anthropic-ai\claude-code\bin\claude.exe` e `node node_modules\@openai\codex\bin\codex.js`. Teste fixado na Task 4.
-2. **Comando reescrito por hook do usuário, ou composto.** Na sonda real, o `git push origin main` chegou ao permission tool como `rtk git push origin main` (hook PreToolUse do usuário). Também existem `cd x && git push` e `git -C ../o push`. A trava não pode ancorar no início. Teste fixado na Task 5.
+2. **Aprovação que nunca chega.** Em "pedir aprovação", se a página fecha ou o servidor reinicia com um pedido aberto, o Claude fica esperando o permission tool. Tem de virar recusa com `Sem resposta a tempo.` e a rodada seguir, nunca travar para sempre. Teste fixado na Task 10.
 3. **Custo do Claude é cumulativo por sessão e vem 0 no erro.** `total_cost_usd` da rodada 2 retomada foi 0.11005549 (a rodada 1 tinha dado 0.1015494). No `error_during_execution` vem `0`. Somar ingenuamente dobra o custo, e zerar a base no erro faz o limite errar. Teste fixado na Task 6.
 4. **Parar no Windows deixa neto vivo.** `node codex.js` → `codex.exe`, e o `claude.exe` → shell da ferramenta. `child.kill()` só mata o primeiro. Teste fixado na Task 8 (`taskkill /PID <pid> /T /F`).
 5. **Agente em dobro e cartão em dobro.** O `claude -p` grava `~/.claude/sessions/<pid>.json` (`"kind":"interactive","entrypoint":"sdk-cli"`, confirmado), que o `ClaudeWatcher` mostraria. Os hooks de plugin do usuário (inclusive o PermissionRequest do habblaud-permissoes) rodam dentro do `-p`. Testes fixados na Task 9.
@@ -46,7 +46,6 @@ Criados (servidor, `server/chat/`):
 - `server/chat/drivers/agy.ts`: argv/env e parser do `agy --print= --output-format stream-json`.
 - `server/chat/fixtures/*.jsonl`: streams reais (redigidos) usados pelos testes dos parsers.
 - `server/chat/bins.ts`: acha o executável de cada CLI (shims do npm no Windows).
-- `server/chat/trava.ts`: decide o que é irreversível (`travaReason`) e monta o env que bloqueia `git push`.
 - `server/chat/usage.ts`: acumula uso/custo e checa os limites.
 - `server/chat/store.ts`: persistência de cada conversa em `<dataDir>/chat/agents/<id>.json`.
 - `server/chat/roles.ts`: os 6 papéis prontos + CRUD em `<dataDir>/chat/roles.json`.
@@ -85,7 +84,6 @@ Modificados:
 | `claude` | 2.1.300 | `-p --output-format stream-json --verbose`, prompt por stdin, `--session-id <uuid>` na 1ª rodada, `--resume <uuid>`, eventos `system/init`, `assistant` (thinking/tool_use/text), `user` (tool_result), `result` (success e `error_during_execution`). `--permission-prompt-tool mcp__<srv>__<tool>` com MCP **HTTP** (`{"type":"http","url","headers"}`): chega `tools/call` com `{tool_name,input,tool_use_id}`, e a resposta é texto JSON `{"behavior":"allow","updatedInput":{…}}` ou `{"behavior":"deny","message":"…"}`. O flag não aparece no `--help`, mas funciona. `--append-system-prompt`, `--max-budget-usd`, `--permission-mode default\|acceptEdits`, e `-p` grava `sessions/<pid>.json` com `entrypoint:"sdk-cli"`. | Se o hook `PermissionRequest` do plugin dispara antes do permission tool no `-p` (a Task 9 cobre os dois casos). |
 | `codex` | 0.154.0 | `exec --json`, prompt `-` por stdin, `thread.started{thread_id}`, `turn.started`, `item.completed{item:{type:"error"}}`, `error{message}`, `turn.failed{error:{message}}`. `exec resume` **não** aceita `--sandbox`/`-C`/`--add-dir` (só `-c`, `-m`, `--json`, `--skip-git-repo-check`). As chaves de config `sandbox_mode`, `sandbox_workspace_write`, `network_access`, `writable_roots` e `developer_instructions` existem no binário. | Rodada com sucesso: o limite de uso do ChatGPT esgotou e volta em 22/10. Nomes `item.started/updated/completed`, `agent_message`, `command_execution` (`command`, `aggregated_output`, `exit_code`, `status`), `file_change` (`changes`), `turn.completed{usage:{input_tokens,cached_input_tokens,output_tokens}}` estão no binário, mas não foram vistos num stream. Não se sabe se o `usage` é por rodada ou cumulativo, nem se o sandbox `unelevated` do Windows corta rede e protege `.git`. **Task 1 (spike).** |
 | `agy` | 1.1.19 (auto-atualiza; o help mudou durante a sonda) | `--print=<texto>` (o `-p` consome o próximo argv; `-- texto` falha), `--output-format stream-json`, `{"event":"init","conversation_id",…}`, `{"event":"result","result":{status,response,num_turns,usage}}`. **Sem login**, devolve `status:"SUCCESS"`, `response:""`, `num_turns:0`. O `--print-timeout` agora é 0 (espera para sempre). As conversas vão para `~/.gemini/antigravity-cli/` (a fonte atual lê `antigravity-ide/`, então não duplica). | Eventos intermediários (texto, ferramenta), o efeito de `--sandbox` e `--mode accept-edits\|auto`, e se ações em `request-review` travam ou são negadas no print. O agy não está logado nesta máquina. **Task 1 (spike).** |
-| git | – | `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.habblaud-trava:blocked/.pushInsteadOf GIT_CONFIG_VALUE_0=` faz **todo** `git push` falhar (exit 128) e o `fetch` seguir (testado). | – |
 
 ---
 
@@ -101,23 +99,18 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
 - Consumes: os drivers das Tasks 3 e 4.
 - Produces: fixtures reais e as decisões abaixo, gravadas na tabela.
 
-- [ ] **Step 1: Capturar.** Numa pasta vazia em `%TEMP%`, com `git init`, rodar `"Run: echo hi > c.txt, then git push origin main, then reply ok"`:
-  - `codex exec --json --skip-git-repo-check -c sandbox_mode="workspace-write" -c sandbox_workspace_write.network_access=false -m gpt-5.6-luna -` (prompt por stdin)
-  - depois `codex exec resume <thread_id> --json -c sandbox_mode="workspace-write" -`
-  - `agy --print="<prompt>" --output-format stream-json --sandbox --mode accept-edits`, depois `--conversation <id>`
+- [ ] **Step 1: Capturar.** Numa pasta vazia em `%TEMP%`, com `git init`, rodar `"Run: echo hi > c.txt, then git status, then reply ok"`:
+  - `codex exec --json --skip-git-repo-check -c sandbox_mode="danger-full-access" -m gpt-5.6-luna -` (prompt por stdin)
+  - depois `codex exec resume <thread_id> --json -c sandbox_mode="danger-full-access" -`
+  - `agy --print="<prompt>" --output-format stream-json --dangerously-skip-permissions`, depois `--conversation <id>`
 
   Redigir caminhos e ids de usuário. Gravar as 2 rodadas de cada em `server/chat/fixtures/`.
 - [ ] **Step 2: Decidir e anotar.** Responder com evidência:
   - (a) o `turn.completed.usage` do Codex é por rodada ou cumulativo;
-  - (b) o `git push` sai negado sob o sandbox `unelevated`, e `c.txt` foi criado;
-  - (c) o `git commit` funciona com `.git` fora do writable root (caso da worktree, Task 12);
-  - (d) no agy, o que acontece com um comando que pediria revisão (nega, trava ou roda);
-  - (e) quais eventos o agy emite entre `init` e `result`.
+  - (b) com acesso total o comando roda e `c.txt` é criado (Codex no Windows e agy);
+  - (c) quais eventos o agy emite entre `init` e `result` (texto, ferramenta).
 
-  Regras de decisão já fixadas:
-  - Se (b) falhar, a Task 8 passa a forçar a cópia isolada para o Codex. O env do git (Task 5) continua.
-  - Se (d) travar, o agy usa `--mode auto` mais o env da Task 5.
-  - Se nada disso bloquear o `git push`, a opção Antigravity sai do seletor com o motivo `tr('Antigravity: sem como travar ações irreversíveis nesta versão do agy')`.
+  Se o agy sem login seguir devolvendo `SUCCESS` vazio, manter o erro de login da Task 4.
 - [ ] **Step 3: Ajustar** os parsers e os testes das Tasks 3 e 4 às fixtures reais. Rodar `npx vitest run server/chat` e esperar PASS.
 - [ ] **Step 4: Commit.** `git add server/chat docs/superpowers/plans/2026-10-16-base-orquestracao.md && git commit -m "test: fixtures reais do Codex e do Antigravity para o chat"`
 
@@ -158,7 +151,7 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
     | { type: 'usage'; tokensIn: number; tokensOut: number; costUsd?: number; costIsCumulative?: boolean }
     | { type: 'done'; ok: boolean; error?: string };
   export interface StreamParser { line(raw: string): ChatEvent[]; end(exitCode: number | null, stderr: string): ChatEvent[] }
-  export interface TurnSpec { folder: string; prompt: string; first: boolean; sessionId?: string; resumeId?: string; model?: string; role?: string; permission: ChatPermission; budgetUsd?: number; mcp?: { url: string; token: string }; accountDir?: string; writableRoots: string[] }
+  export interface TurnSpec { folder: string; prompt: string; first: boolean; sessionId?: string; resumeId?: string; model?: string; role?: string; permission: ChatPermission; budgetUsd?: number; mcp?: { url: string; token: string }; accountDir?: string }
   export interface CliInvocation { args: string[]; stdin?: string; env: Record<string, string | undefined> }
   export interface ChatDriver { readonly provider: Provider; invocation(spec: TurnSpec): CliInvocation; parser(): StreamParser }
   ```
@@ -198,11 +191,12 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
 
   const fx = (n: string) => readFileSync(join(__dirname, '..', 'fixtures', n), 'utf8').split(/\r?\n/).filter(Boolean);
   const run = (n: string, exit = 0): ChatEvent[] => { const p = claudeDriver.parser(); return [...fx(n).flatMap((l) => p.line(l)), ...p.end(exit, '')]; };
-  const base: TurnSpec = { folder: 'C:\\proj', prompt: '-oi', first: true, sessionId: 'a202b58e-04e5-40b3-bbe5-0cbe9be49d86', permission: 'auto', writableRoots: ['C:\\proj'] };
+  const base: TurnSpec = { folder: 'C:\\proj', prompt: '-oi', first: true, sessionId: 'a202b58e-04e5-40b3-bbe5-0cbe9be49d86', permission: 'auto' };
 
   describe('chat: driver do Claude', () => {
     it('argv da 1ª rodada fixa o id; as outras retomam; pedido nunca vai no argv', () => {
-      expect(claudeArgs(base)).toEqual(['-p', '--output-format', 'stream-json', '--verbose', '--session-id', 'a202b58e-04e5-40b3-bbe5-0cbe9be49d86', '--permission-mode', 'acceptEdits']);
+      expect(claudeArgs(base)).toEqual(['-p', '--output-format', 'stream-json', '--verbose', '--session-id', 'a202b58e-04e5-40b3-bbe5-0cbe9be49d86', '--permission-mode', 'bypassPermissions']);
+      expect(claudeArgs(base)).not.toContain('--permission-prompt-tool'); // automático: acesso total, sem permission tool
       const next = claudeArgs({ ...base, first: false, resumeId: 'a202b58e-04e5-40b3-bbe5-0cbe9be49d86', permission: 'ask', model: 'sonnet', role: 'Seja breve.', budgetUsd: 0.5, mcp: { url: 'http://127.0.0.1:4747/api/chat/mcp/chat:1', token: 't0k' } });
       expect(next.slice(0, 6)).toEqual(['-p', '--output-format', 'stream-json', '--verbose', '--resume', 'a202b58e-04e5-40b3-bbe5-0cbe9be49d86']);
       expect(next).toContain('--permission-prompt-tool');
@@ -247,7 +241,7 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
 
 - [ ] **Step 3: Rodar** `npx vitest run server/chat/drivers/claude.test.ts`. Esperado: FAIL (módulo inexistente).
 - [ ] **Step 4: Implementar.**
-  - Ordem do argv: `['-p','--output-format','stream-json','--verbose']`, depois `--session-id <id>` (first) ou `--resume <id>`, depois `--permission-mode` (`acceptEdits` no auto, `default` no ask), e então, na ordem, `--model`, `--append-system-prompt`, `--max-budget-usd` (`String(n)`) e, com `mcp`, `--strict-mcp-config --mcp-config <json> --permission-prompt-tool mcp__habblaud__approve`.
+  - Ordem do argv: `['-p','--output-format','stream-json','--verbose']`, depois `--session-id <id>` (first) ou `--resume <id>`, depois `--permission-mode` (`bypassPermissions` no auto, `default` no ask), e então, na ordem, `--model`, `--append-system-prompt`, `--max-budget-usd` (`String(n)`) e, com `mcp` (só no ask), `--strict-mcp-config --mcp-config <json> --permission-prompt-tool mcp__habblaud__approve`.
   - Env: `accountDir` vira `CLAUDE_CONFIG_DIR` (ausente = a conta padrão).
   - Parser: `tool.input` é o primeiro de `command` | `file_path` | `pattern` | `url`, ou `JSON.stringify(input)`. O `tool_result.content` pode ser string ou array de `{type:'text',text}` (juntar com `\n`). `usage.tokensIn` = `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`.
   - `result` com `is_error` vira `done{ok:false,error: errors?.join('\n') || result || subtype}` e **não** emite usage com custo.
@@ -283,7 +277,7 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
   {"type":"turn.started"}
   {"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Planning**"}}
   {"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"git push origin main","aggregated_output":"","exit_code":null,"status":"in_progress"}}
-  {"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"git push origin main","aggregated_output":"ssh: Could not resolve hostname habblaud-trava","exit_code":128,"status":"failed"}}
+  {"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"git push origin main","aggregated_output":"Everything up-to-date","exit_code":0,"status":"completed"}}
   {"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"C:\\proj\\c.txt","kind":"add"}],"status":"completed"}}
   {"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"ok"}}
   {"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":800,"output_tokens":40}}
@@ -292,14 +286,13 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
 - [ ] **Step 2: Teste que falha** (`codex.test.ts`, mesmo helper `run` da Task 2):
 
   ```ts
-  it('argv: exec na 1ª, exec resume depois; sandbox e papel por -c; pedido por stdin', () => {
-    const s: TurnSpec = { folder: 'C:\\proj', prompt: '--x', first: true, permission: 'auto', writableRoots: ['C:\\proj', 'C:\\proj\\.git'], role: 'Diga "oi"\n' };
+  it('argv: exec na 1ª, exec resume depois; acesso total e papel por -c; pedido por stdin', () => {
+    const s: TurnSpec = { folder: 'C:\\proj', prompt: '--x', first: true, permission: 'auto', role: 'Diga "oi"\n' };
     expect(codexArgs(s)).toEqual(['exec', '--json', '--skip-git-repo-check',
-      '-c', 'sandbox_mode="workspace-write"', '-c', 'sandbox_workspace_write.network_access=false',
-      '-c', 'sandbox_workspace_write.writable_roots=["C:\\\\proj","C:\\\\proj\\\\.git"]',
+      '-c', 'sandbox_mode="danger-full-access"',
       '-c', 'developer_instructions="Diga \\"oi\\"\\n"', '-']);
     expect(codexArgs({ ...s, first: false, resumeId: '01a14670-48d2-7781-8dee-d5aaf4ebd0f3', model: 'gpt-5.6-luna', role: undefined }))
-      .toEqual(['exec', 'resume', '01a14670-48d2-7781-8dee-d5aaf4ebd0f3', '--json', '--skip-git-repo-check', '-c', 'sandbox_mode="workspace-write"', '-c', 'sandbox_workspace_write.network_access=false', '-c', 'sandbox_workspace_write.writable_roots=["C:\\\\proj","C:\\\\proj\\\\.git"]', '-m', 'gpt-5.6-luna', '-']);
+      .toEqual(['exec', 'resume', '01a14670-48d2-7781-8dee-d5aaf4ebd0f3', '--json', '--skip-git-repo-check', '-c', 'sandbox_mode="danger-full-access"', '-m', 'gpt-5.6-luna', '-']);
     expect(codexDriver.invocation(s).stdin).toBe('--x');
   });
   it('erro real: aviso vira notice, falha traz a mensagem de dentro do JSON', () => {
@@ -311,7 +304,7 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
   it('rodada: comando, arquivo, texto e uso em tokens (sem US$)', () => {
     const ev = run('codex-turn.jsonl');
     expect(ev).toContainEqual({ type: 'tool', id: 'item_1', name: 'command', input: 'git push origin main' });
-    expect(ev).toContainEqual({ type: 'tool-result', id: 'item_1', output: 'ssh: Could not resolve hostname habblaud-trava', error: true });
+    expect(ev).toContainEqual({ type: 'tool-result', id: 'item_1', output: 'Everything up-to-date', error: false });
     expect(ev).toContainEqual({ type: 'tool', id: 'item_2', name: 'file_change', input: 'add C:\\proj\\c.txt' });
     expect(ev).toContainEqual({ type: 'text', text: 'ok' });
     expect(ev).toContainEqual({ type: 'usage', tokensIn: 1200, tokensOut: 40 });
@@ -321,6 +314,7 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
 
 - [ ] **Step 3: Rodar** `npx vitest run server/chat/drivers/codex.test.ts`. Esperado: FAIL.
 - [ ] **Step 4: Implementar.**
+  - Automático = `-c sandbox_mode="danger-full-access"` (o `exec` não tem aprovação por ação; decisão do usuário).
   - Os valores `-c` são TOML: strings com `JSON.stringify` (escapes válidos em TOML) e arrays como `[...].map(JSON.stringify)`.
   - O resume não aceita `--sandbox`/`-C`/`--add-dir`, por isso tudo vai por `-c`. A pasta vem do `cwd` do processo.
   - Env: `accountDir` vira `CODEX_HOME`.
@@ -356,10 +350,10 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
 
   ```ts
   it('argv: o pedido vai grudado em --print= (texto que começa com "-" não vira flag)', () => {
-    const s: TurnSpec = { folder: 'C:\\proj', prompt: '--model x', first: true, permission: 'auto', writableRoots: ['C:\\proj'], role: 'Papel.' };
-    expect(agyArgs(s)).toEqual(['--output-format', 'stream-json', '--sandbox', '--mode', 'accept-edits', '--print=Papel.\n\n---\n\n--model x']);
+    const s: TurnSpec = { folder: 'C:\\proj', prompt: '--model x', first: true, permission: 'auto', role: 'Papel.' };
+    expect(agyArgs(s)).toEqual(['--output-format', 'stream-json', '--dangerously-skip-permissions', '--print=Papel.\n\n---\n\n--model x']);
     expect(agyArgs({ ...s, first: false, resumeId: 'd38f4d9a-1217-40ed-87e9-1ebc9a747fae', model: 'gemini-x' }))
-      .toEqual(['--output-format', 'stream-json', '--sandbox', '--mode', 'accept-edits', '--conversation', 'd38f4d9a-1217-40ed-87e9-1ebc9a747fae', '--model', 'gemini-x', '--print=--model x']);
+      .toEqual(['--output-format', 'stream-json', '--dangerously-skip-permissions', '--conversation', 'd38f4d9a-1217-40ed-87e9-1ebc9a747fae', '--model', 'gemini-x', '--print=--model x']);
   });
   it('sem login: SUCCESS vazio com 0 rodadas é erro com aviso de login', () => {
     const ev = run('agy-nologin.jsonl');
@@ -401,54 +395,9 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
 
 ---
 
-### Task 5: Trava do automático
+### Task 5: (removida)
 
-**Files:**
-- Create: `server/chat/trava.ts`, `server/chat/trava.test.ts`
-
-**Interfaces:**
-- Produces:
-  - `export function travaReason(tool: string, input: Record<string, unknown>, root: string): string | undefined` (motivo em PT via `tr`; `undefined` = livre). Ferramentas de shell: `Bash`, `PowerShell`, `command` (Codex), `run_command` (agy).
-  - `export function travaEnv(env: NodeJS.ProcessEnv): Record<string, string>`: soma ao `GIT_CONFIG_COUNT` existente a regra `url.habblaud-trava:blocked/.pushInsteadOf` = `''`.
-
-- [ ] **Step 1: Teste que falha** (Review Focus 2):
-
-  ```ts
-  const root = 'C:\\proj';
-  const sh = (command: string) => travaReason('Bash', { command }, root);
-  it('push, publicar, deploy e banco de produção pedem/recusam em qualquer posição do comando', () => {
-    for (const c of ['git push origin main', 'rtk git push origin main', 'cd app && git push', 'git -C ../o push --force', 'npm publish', 'pnpm publish --access public', 'cargo publish', 'twine upload dist/*', 'gh release create v1', 'vercel --prod', 'vercel deploy', 'netlify deploy --prod', 'firebase deploy', 'fly deploy', 'eas submit -p ios', 'eas update', 'wrangler deploy', 'supabase db push', 'prisma migrate deploy', 'terraform apply', 'kubectl delete pod x', 'psql -c "DROP TABLE users"'])
-      expect(sh(c), c).toBeDefined();
-    expect(travaReason('PowerShell', { command: 'git push' }, root)).toBeDefined();
-    expect(travaReason('command', { command: 'git push' }, root)).toBeDefined();
-  });
-  it('apagar fora da pasta pede; dentro é livre', () => {
-    expect(sh('rm -rf C:\\Users\\u\\docs')).toBeDefined();
-    expect(sh('rm -rf ../outro')).toBeDefined();
-    expect(sh('rm -rf ~/x')).toBeDefined();
-    expect(travaReason('PowerShell', { command: 'Remove-Item -Recurse D:\\dados' }, root)).toBeDefined();
-    expect(sh('rm -rf dist node_modules')).toBeUndefined();
-    expect(sh('rm C:\\proj\\tmp.txt')).toBeUndefined();
-  });
-  it('escrever fora da pasta pede', () => {
-    expect(travaReason('Write', { file_path: 'C:\\Windows\\x.txt' }, root)).toBeDefined();
-    expect(travaReason('Edit', { file_path: 'C:\\proj\\src\\a.ts' }, root)).toBeUndefined();
-  });
-  it('comandos comuns são livres', () => {
-    for (const c of ['git status', 'git commit -m "push later"', 'npm test', 'npm run build', 'git pushd', 'echo git push']) expect(sh(c), c).toBeUndefined();
-  });
-  it('env bloqueia todo push e preserva GIT_CONFIG já existente', () => {
-    expect(travaEnv({})).toEqual({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'url.habblaud-trava:blocked/.pushInsteadOf', GIT_CONFIG_VALUE_0: '' });
-    expect(travaEnv({ GIT_CONFIG_COUNT: '2' })).toEqual({ GIT_CONFIG_COUNT: '3', GIT_CONFIG_KEY_2: 'url.habblaud-trava:blocked/.pushInsteadOf', GIT_CONFIG_VALUE_2: '' });
-  });
-  ```
-
-  Nota: o caso `echo git push` é livre, e `git commit -m "push later"` também. O matcher quebra o comando em segmentos por `&&`, `||`, `;`, `|` e quebra de linha, tira prefixos de wrapper (`rtk`, `sudo`, `env X=Y`, `npx`), e só então compara o primeiro token mais o subcomando. O subcomando é o primeiro token que não é opção, pulando as opções do git com valor (`-C <dir>`, `-c <k=v>`). Use `shellWords` (shared/activity.ts:137) para tokenizar.
-- [ ] **Step 2: Rodar** `npx vitest run server/chat/trava.test.ts`. Esperado: FAIL.
-- [ ] **Step 3: Implementar.** Tabela de regras como `{ cmd: string; sub?: RegExp; reason: string }[]`. O `psql`/`mysql`/`sqlcmd` só pede com `DROP|TRUNCATE|DELETE FROM` sem `WHERE`.
-  - "Fora da pasta": o caminho absoluto, ou relativo resolvido contra `root`, que não começa com `root + sep` (comparação sem diferenciar maiúsculas no win32), ou que começa com `~`.
-- [ ] **Step 4: Rodar.** Esperado: PASS.
-- [ ] **Step 5: Commit.** `git commit -m "feat: trava do automático (push, publicar, deploy, banco e apagar fora da pasta)"`
+Sem trava de ações irreversíveis: o usuário decidiu em 2026-10-16 que no automático o agente faz tudo, e que aprovação só existe quando ele escolhe "pedir aprovação" (Claude). A numeração das outras tasks foi mantida.
 
 ---
 
@@ -550,7 +499,7 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
 - Modify: `shared/types.ts` (`AgentInfo.chat?: true`), `server/model/office.ts` (`MainInput.chat?: true` copiado para o `AgentInfo`), `server/pty/manager.ts` (`export const INHERITED_SESSION_VARS`)
 
 **Interfaces:**
-- Consumes: drivers (Tasks 2–4), `resolveCliBin`, `travaEnv` (Task 5), `addUsage`/`overLimit`/`remainingUsd` (Task 6), `ChatStore`/`RoleStore` (Task 7), `Office.addMain`/`setStatus`/`addActivity`/`applyTranscript`/`closeMain`/`setCharacter`, `describeTool` (shared/activity.ts:658), `maskSecrets`, `pickName`.
+- Consumes: drivers (Tasks 2–4), `resolveCliBin`, `addUsage`/`overLimit`/`remainingUsd` (Task 6), `ChatStore`/`RoleStore` (Task 7), `Office.addMain`/`setStatus`/`addActivity`/`applyTranscript`/`closeMain`/`setCharacter`, `describeTool` (shared/activity.ts:658), `maskSecrets`, `pickName`.
 - Produces:
   ```ts
   export interface ChatOpenRequest { folder: string; provider: Provider; account?: string; model?: string; roleId?: string; permission?: ChatPermission; isolated?: boolean; limits?: ChatLimits; name?: string; prompt: string; vboardsTaskId?: string }
@@ -579,7 +528,7 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
   1. **Abrir.** `open({folder:'C:\\proj', provider:'claude', prompt:'oi'})` com `knownFolders` = `['C:\\proj']` devolve `{agentId:'chat:<newId>'}`. O Office tem `{kind:'main', provider:'claude', chat:true, status:'working'}`. O argv tem `--session-id <uuid>`, e o `ChatRecord.providerSessionId` já é esse uuid antes do fim.
   2. **Pasta desconhecida.** `open({folder:'C:\\outro',…})` devolve `{error:'invalid'}`, e nenhum processo é criado.
   3. **Rodada.** Com a fixture `claude-turn.jsonl` e `close(0)`:
-     - itens `user`, `tool` × 2 (o do push com `error:true`), `assistant` e `usage`;
+     - itens `user`, `tool` × 2 (o do push com `error:true` na fixture gravada), `assistant` e `usage`;
      - o Office fica com `status:'idle'` e `stats.tokensOut` 590;
      - o `onFinish` é chamado com o id.
   4. **Retomar.** O 2º `send` usa `--resume <mesmo uuid>`. Um `send` durante uma rodada devolve `'busy'`.
@@ -595,7 +544,6 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
   8. **Env.**
      - Sem `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` nem `CLAUDE_CODE_SESSION_ID` (`INHERITED_SESSION_VARS`).
      - Conta não padrão vira `CLAUDE_CONFIG_DIR`.
-     - Codex/agy recebem `travaEnv`, e o Claude **não** (a trava dele é a aprovação).
   9. **Reinício.** Um `ChatService` novo sobre o mesmo `dataDir` recoloca o agente no Office (status `idle`) com os itens e o mesmo `providerSessionId`.
   10. **Segredos.** Uma saída de ferramenta com `sk-ant-…` chega ao `view()` já mascarada.
 - [ ] **Step 2: Rodar** `npx vitest run server/chat/service.test.ts`. Esperado: FAIL.
@@ -612,7 +560,7 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
   - `providers()` usa `resolveCliBin`. O motivo vem em `tr('{0} não encontrado no PATH', [nome])`, e `ask` é `provider === 'claude'`.
   - O nome sorteado vem de `pickName(agentId, usados)`, salvo se o pedido trouxer um. Nome dado vira `office.setCharacter(id, { name, seed })`.
   - `MAX_CHAT_AGENTS = 8` abertos; acima disso, `'too-many'`.
-  - O `role` (texto do `RoleStore`) vai em toda rodada; o driver do agy só o usa com `first`. O Claude sempre recebe `mcp` (no automático também, por causa da trava) e `budgetUsd = remainingUsd(...)`.
+  - O `role` (texto do `RoleStore`) vai em toda rodada; o driver do agy só o usa com `first`. O Claude recebe `mcp` só com `permission: 'ask'`, e sempre `budgetUsd = remainingUsd(...)`.
 - [ ] **Step 4: Rodar.** Esperado: PASS. Rodar também `npx vitest run server/model` (Office) e esperar PASS.
 - [ ] **Step 5: Commit.** `git commit -m "feat: runtime do chat com agentes (rodada por mensagem, retomar, parar, limites)"`
 
@@ -650,7 +598,7 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
 - Create: `server/chat/permission.ts`, `server/chat/permission.test.ts`
 
 **Interfaces:**
-- Consumes: `travaReason` (Task 5), `PermissionRegistry.registerChat`/`wait` (Task 9), `ChatService.tokenOwner`/`addApproval` (Task 8).
+- Consumes: `PermissionRegistry.registerChat`/`wait` (Task 9), `ChatService.tokenOwner`/`addApproval` (Task 8).
 - Produces:
   ```ts
   export type ToolDecision = { behavior: 'allow' } | { behavior: 'ask'; reason?: string } | { behavior: 'deny'; message: string };
@@ -663,15 +611,15 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
 
   ```ts
   const o = { permission: 'auto' as const, root: 'C:\\proj', alwaysAllow: [] };
-  it('auto: libera tudo menos a trava', () => {
+  it('auto: libera tudo, inclusive push', () => {
     expect(decideClaudeTool('Bash', { command: 'npm test' }, o)).toEqual({ behavior: 'allow' });
-    expect(decideClaudeTool('Bash', { command: 'rtk git push origin main' }, o).behavior).toBe('ask');
+    expect(decideClaudeTool('Bash', { command: 'rtk git push origin main' }, o)).toEqual({ behavior: 'allow' });
   });
   it('pedir aprovação: pergunta tudo, salvo o "não perguntar de novo"', () => {
     const a = { ...o, permission: 'ask' as const };
     expect(decideClaudeTool('Bash', { command: 'npm test' }, a).behavior).toBe('ask');
     expect(decideClaudeTool('Bash', { command: 'npm test' }, { ...a, alwaysAllow: ['Bash:npm'] })).toEqual({ behavior: 'allow' });
-    expect(decideClaudeTool('Bash', { command: 'git push' }, { ...a, alwaysAllow: ['Bash:git'] }).behavior).toBe('ask'); // a trava vence o "sempre"
+    expect(decideClaudeTool('Bash', { command: 'git push' }, { ...a, alwaysAllow: ['Bash:git'] })).toEqual({ behavior: 'allow' });
   });
   it('MCP: initialize, tools/list e tools/call no formato que o Claude Code usa', async () => {
     const allow = async (a: { input: Record<string, unknown> }) => ({ behavior: 'allow' as const, updatedInput: a.input });
@@ -686,9 +634,11 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
   });
   ```
 
+  Review Focus 2: `it('pedido sem resposta vira recusa e não trava a rodada')`: com `registry.wait` falso devolvendo `released`, o `call` resolve `{behavior:'deny', message:'Sem resposta a tempo.'}`.
+
 - [ ] **Step 2: Rodar** `npx vitest run server/chat/permission.test.ts`. Esperado: FAIL.
 - [ ] **Step 3: Implementar.**
-  - `decideClaudeTool`: a trava devolve `ask` com o motivo. No `ask`, a resposta é `ask`, salvo quando `alwaysKey` está em `alwaysAllow`. No `auto`, `allow`.
+  - `decideClaudeTool`: no `ask`, a resposta é `ask`, salvo quando `alwaysKey` está em `alwaysAllow`. No `auto`, `allow`.
   - O `call` real, montado na Task 12, segue esta ordem:
     1. `decideClaudeTool`.
     2. Se `allow`, devolve `{behavior:'allow', updatedInput: input}`.
@@ -732,7 +682,7 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
 - [ ] **Step 2: Rodar** `npx vitest run server/chat/worktree.test.ts`. Esperado: FAIL.
 - [ ] **Step 3: Implementar** com `execFile('git', args, { cwd, windowsHide: true })` sem shell.
   - O `ChatService` (Task 8, via `deps.worktrees`) usa `create` no `open` quando `isolated`.
-  - Nesse caso, `cwd` = worktree e `writableRoots` = `[worktree, <repo>/.git]`, porque o commit numa worktree escreve no `.git` do repo. A Task 1, passo (c), confirma isso no Codex.
+  - Nesse caso, `cwd` = worktree (com acesso total, o commit no `.git` do repo funciona sem configuração extra).
   - Ao fim de cada rodada com cópia isolada, entra um item `notice` com o `summary.stat`.
 - [ ] **Step 4: Rodar.** Esperado: PASS.
 - [ ] **Step 5: Commit.** `git commit -m "feat: cópia isolada do agente em git worktree com Juntar e Descartar"`
@@ -872,7 +822,7 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
 
 - [ ] **Step 1: Teste que falha.**
   - `defaultForm('C:\\proj', [{id:'claude',available:false},{id:'codex',available:true}])` escolhe `codex`, com `permission:'auto'`, `isolated:false` e `roleId:''`.
-  - `askDisabledReason('codex')` é `'O Codex não pede aprovação ação por ação: roda no automático, em sandbox, e recusa ações irreversíveis.'`, e o do `'antigravity'` segue o mesmo modelo. O do `'claude'` é `undefined`.
+  - `askDisabledReason('codex')` é `'O Codex não pede aprovação ação por ação: roda sempre no automático, com acesso total.'`, e o do `'antigravity'` segue o mesmo modelo. O do `'claude'` é `undefined`.
   - `toRequest` com `limitUsd:'0,5'` dá `limits:{maxCostUsd:0.5}`. `limitUsd:'abc'` dá `{error}`. Vazio dá sem limite. `permission:'ask'` com codex vira `auto`. O `name` vem aparado.
   - Limite de tokens só para Codex/agy, e US$ só para Claude: `toRequest` ignora o outro.
 - [ ] **Step 2: Rodar** `npx vitest run client/src/ui/spawn-model.test.ts`. Esperado: FAIL.
@@ -937,8 +887,8 @@ Pré-requisitos que só o usuário resolve: a cota do Codex voltar (22/10) e rod
   2. **Continuar.** Mande "o que você fez antes?" no mesmo chat: ele lembra. Reinicie o servidor, abra o agente de novo e mande outra mensagem: a conversa continua.
   3. **Parar.** Peça algo longo e toque em Parar. A rodada para e o chat avisa. No Gerenciador de Tarefas não pode sobrar `claude.exe`, `codex.exe` nem `node`.
   4. **Aprovação no Claude.** Abra outro agente com "Pedir aprovação" e peça "crie um arquivo teste.txt". Aparece o cartão com Aprovar/Recusar: aprove uma vez e recuse outra.
-  5. **Trava no automático (Claude).** Num repo de teste, peça "faça git push". O cartão de aprovação aparece mesmo no automático.
-  6. **Codex e Antigravity.** Abra um agente de cada. "Pedir aprovação" aparece desabilitado com o motivo. Peça "faça git push": o push é recusado e o chat mostra a falha. Para o Antigravity, faça login com `agy` antes.
+  5. **Automático sem bloqueio.** Num repo de teste, peça ao Claude no automático algo que rode comandos (ex.: "rode os testes e faça commit"). Ele faz sem pedir aprovação.
+  6. **Codex e Antigravity.** Abra um agente de cada. "Pedir aprovação" aparece desabilitado com o motivo. Peça uma mudança pequena: ele faz no automático. Para o Antigravity, faça login com `agy` antes.
   7. **Cópia isolada.** Abra com "Cópia isolada" e peça uma mudança pequena. O fim mostra o resumo do diff. Teste "Juntar" (o arquivo aparece no projeto) e, num segundo agente, "Descartar".
   8. **Limites.** Abra com limite de US$ 0,05 e peça algo maior. O chat avisa que o limite estourou e só aceita mensagem depois de você aumentar o limite.
   9. **VBoards.** Toque em "Iniciar" numa task. A janela abre preenchida. Ao terminar, a subtask fica marcada com o resumo.

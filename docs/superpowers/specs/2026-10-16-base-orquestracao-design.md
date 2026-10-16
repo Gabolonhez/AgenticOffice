@@ -46,7 +46,6 @@ ou formato de arquivo deles é copiado (ver Anti-objetivos).
   do Maestri (fechado).
 - Quebrar o que já funciona: monitoramento das sessões de fora, permissões pelo escritório, mensagens pelo plugin,
   botão VS Code/Antigravity, integração com o VBoards.
-- Agente no automático fazendo algo irreversível sem o usuário ver (ver "Trava do automático").
 - Escrever arquivos do AgenticOffice dentro do repositório do projeto do usuário (ex.: papéis gravados no `CLAUDE.md`
   do projeto).
 
@@ -65,15 +64,15 @@ verificadas nesta máquina:
 O `gemini` (Gemini CLI) não está instalado; o Antigravity cobre o Gemini via `agy`. As flags exatas são do `--help` de
 cada CLI nesta máquina e devem ser reconferidas pelo builder.
 
-**Permissão.** Padrão: o agente roda sozinho. Ao abrir (ou como padrão nas configurações), dá para escolher "pedir
-aprovação": cada comando/edição aparece no chat com Aprovar / Recusar (e, quando o provedor oferece, "aprovar e não
-perguntar de novo").
+**Permissão.** Padrão: o agente roda sozinho, com acesso total e **sem trava de ações irreversíveis** (push, deploy,
+publicar, instalar pacotes; decisão do usuário em 2026-10-16: "qualquer coisa só pedir permissão ou perguntar, se não só
+deixa ele fazer"). Ao abrir (ou como padrão nas configurações), dá para escolher "pedir aprovação": cada
+comando/edição aparece no chat com Aprovar / Recusar (e, quando o provedor oferece, "aprovar e não perguntar de novo").
 
 **Codex e Antigravity sem aprovação por ação.** Só o Claude Code consegue pedir aprovação ação por ação rodando sem
-tela (`--permission-prompt-tool`). O `codex exec` e o `agy -p` não têm isso. Decisão do usuário: os três entram nesta
-Base; Codex e Antigravity rodam no automático **dentro de sandbox restrito à pasta do projeto** (ou à cópia isolada), e
-as ações irreversíveis são **recusadas** em vez de perguntadas. "Pedir aprovação" aparece só para o Claude (nos outros,
-a opção fica desabilitada com o motivo).
+tela (`--permission-prompt-tool`). O `codex exec` e o `agy -p` não têm isso. Os três entram nesta Base; Codex e
+Antigravity rodam sempre no automático com acesso total (Codex com internet). "Pedir aprovação" aparece só para o
+Claude (nos outros, a opção fica desabilitada com o motivo). O chat aceita só pastas que o escritório já conhece.
 
 **Opções ao abrir um agente.** Todas com padrão, para abrir com dois cliques; as extras ficam em "Mais opções":
 - pasta e conta (como o "Novo agente" de hoje);
@@ -102,9 +101,6 @@ depois push. O usuário usa Windows 11; o servidor roda com `HABBLAUD_PTY=1`.
 
 ## Decisões minhas (o usuário pode trocar)
 
-- **Trava do automático.** Mesmo no automático, o agente fica restrito à pasta do projeto (ou à cópia isolada), e ações
-  irreversíveis pedem aprovação: `git push`, deploy, publicar pacote, apagar fora da pasta, comandos de banco em
-  produção. A lista exata e o mecanismo por provedor ficam com o builder; o comportamento esperado é este.
 - **Docker**: o chat fica indisponível quando o servidor roda no Docker, com aviso na tela. O usuário roda o
   servidor direto no Windows; levar streaming e aprovações pela ponte do host não vale agora. Não quebrar o resto do
   modo Docker.
