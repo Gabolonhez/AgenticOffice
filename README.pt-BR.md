@@ -267,7 +267,7 @@ credenciais › Instalar certificado › Certificado de CA), conferindo a impres
 - **Endereço próprio** (ex.: `meuclaude.home`): entra no certificado, mas o celular só o encontra com uma entrada no
   DNS do roteador apontando para o IP do computador. O `<nome>.local` funciona sem configurar nada.
 - **O que o celular pode fazer:** por padrão, aprovar e recusar pedidos de permissão. `HABBLAUD_REMOTE_ALLOW` no
-  `.env` aceita `permissions`, `messages`, `terminal` e `spawn`, separados por vírgula, ou `none` (só ver). O
+  `.env` aceita `permissions`, `messages`, `terminal`, `spawn` e `chat`, separados por vírgula, ou `none` (só ver). O
   terminal interativo nunca funciona pelo celular.
 - **Entregas** (celular, com `terminal` liberado): o botão da caixinha no topo lista o que cada agente terminou, com
   resumo e anexos (prints, PDFs, arquivos que ele mandou) que abrem com um toque.
@@ -277,6 +277,12 @@ credenciais › Instalar certificado › Certificado de CA), conferindo a impres
   **Vem desligado:** precisa de `HABBLAUD_PTY=1` (a mesma liberação do
   [terminal interativo](#terminal-interativo-assumir-nova-sessão-e-encerrar); no Docker, ponha no `.env` e deixe o
   `npm run codex:bridge` rodando no computador) e, pelo celular, também de `spawn` no `HABBLAUD_REMOTE_ALLOW`.
+- **Chat com agentes pelo celular** (abrir agente, conversar, Rodar lista, Gatilhos e o Quadro): **vem desligado**,
+  porque esses agentes podem ter acesso total ao computador. Só funciona com `chat` no `HABBLAUD_REMOTE_ALLOW` (ou
+  `npm run remote:setup -- --allow permissions,chat`), sempre com o login e o HTTPS; o servidor avisa no log ao subir.
+  Mesmo liberado, o MCP dos agentes nunca responde pela porta do celular, a pasta continua limitada às que o escritório
+  já conhece e os cartões de delegação, gatilho e aprovação continuam pedindo aprovação (respondê-los pelo celular
+  precisa de `permissions` também).
 - **Ditado** (no Novo agente e na caixa de mensagem): precisa de `whisper-cli` e `ffmpeg` (`brew install whisper-cpp
   ffmpeg`) e de um modelo multilíngue em `~/.local/share/whisper/` (`ggml-small.bin` acerta mais que o
   `ggml-base.bin`; os `.en` só entendem inglês). Sem eles o botão Ditar não aparece. A voz não sai do computador.
@@ -722,7 +728,7 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 | `HABBLAUD_TERMINAL` | ligado (só com acesso local) | `0` desliga o terminal, responder e mandar mensagens pelo escritório e o editor de personagem. Com a porta exposta eles já ficam desligados, sem opção de ligar. |
 | `HABBLAUD_PTY` | desligado | `1` liga o terminal interativo (abrir, assumir e encerrar sessões do Claude Code pelo escritório; só com acesso local e fora do Docker) e o **Novo agente** (também no Docker, pelo `npm run codex:bridge`). Leia o aviso em [Privacidade e segurança](#privacidade-e-segurança). |
 | `HABBLAUD_CLAUDE_BIN` | `claude` do PATH | O executável do Claude Code que o terminal interativo e o Novo agente rodam. |
-| `HABBLAUD_REMOTE_ALLOW` | `permissions` | O que o [celular com login](#celular-com-login-e-https-aprovando-pedidos) pode fazer: `permissions`, `messages`, `terminal`, `spawn` (separados por vírgula) ou `none`. Os outros `HABBLAUD_REMOTE_*` são escritos pelo `npm run remote:setup`. |
+| `HABBLAUD_REMOTE_ALLOW` | `permissions` | O que o [celular com login](#celular-com-login-e-https-aprovando-pedidos) pode fazer: `permissions`, `messages`, `terminal`, `spawn`, `chat` (separados por vírgula) ou `none`. Os outros `HABBLAUD_REMOTE_*` são escritos pelo `npm run remote:setup`. |
 | `HABBLAUD_MENSAGENS` | ligado (com o terminal) | `0` desliga só as mensagens pelo escritório (a caixa no terminal e nos detalhes do agente). |
 | `HABBLAUD_CODEX` | ligado | `0` desliga o Codex no escritório. |
 | `HABBLAUD_CODEX_DIRS` | detecção automática | Pastas do Codex, separadas por vírgula (no lugar de `~/.codex*` e `CODEX_HOME`). |

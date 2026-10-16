@@ -279,7 +279,7 @@ en vérifiant l'empreinte que le setup a affichée.
 - **Adresse propre** (ex. : `meuclaude.home`) : elle figure dans le certificat, mais le téléphone ne la trouve qu'avec
   une entrée dans le DNS du routeur pointant vers l'IP de l'ordinateur. `<nome>.local` fonctionne sans rien configurer.
 - **Ce que le téléphone peut faire :** par défaut, valider et refuser les demandes de permission.
-  `HABBLAUD_REMOTE_ALLOW` dans le `.env` accepte `permissions`, `messages`, `terminal` et `spawn`, séparés par des
+  `HABBLAUD_REMOTE_ALLOW` dans le `.env` accepte `permissions`, `messages`, `terminal`, `spawn` et `chat`, séparés par des
   virgules, ou `none` (consultation seule). Le terminal interactif ne fonctionne jamais depuis le téléphone.
 - **Livraisons** (téléphone, avec `terminal` autorisé) : le bouton en forme de boîte dans la barre du haut liste ce que
   chaque agent a terminé, avec un résumé et des pièces jointes (captures d'écran, PDF, fichiers qu'il a envoyés) qui
@@ -291,6 +291,13 @@ en vérifiant l'empreinte que le setup a affichée.
   même activation que le [terminal interactif](#terminal-interactif-prendre-le-contrôle-nouvelle-session-et-fermer) ;
   dans Docker, mettez-la dans le `.env` et laissez tourner `npm run codex:bridge` sur l'ordinateur) et, depuis le
   téléphone, `spawn` dans `HABBLAUD_REMOTE_ALLOW` aussi.
+- **Chat avec les agents depuis le téléphone** (ouvrir un agent, discuter, Lancer une liste, Déclencheurs et le
+  Tableau) : **désactivé par défaut**, car ces agents peuvent avoir un accès total à l'ordinateur. Il ne fonctionne
+  qu'avec `chat` dans `HABBLAUD_REMOTE_ALLOW` (ou `npm run remote:setup -- --allow permissions,chat`), toujours avec la
+  connexion et le HTTPS ; le serveur prévient dans le log au démarrage. Même autorisé, le MCP des agents ne répond
+  jamais sur le port du téléphone, le dossier reste limité à ceux que le bureau connaît déjà et les cartes de
+  délégation, de déclencheur et d'approbation demandent toujours une approbation (y répondre depuis le téléphone
+  nécessite aussi `permissions`).
 - **Dictée** (dans Nouvel agent et dans la zone de message) : nécessite `whisper-cli` et `ffmpeg` (`brew install
   whisper-cpp ffmpeg`) et un modèle multilingue dans `~/.local/share/whisper/` (`ggml-small.bin` se trompe moins que
   `ggml-base.bin` ; les `.en` ne comprennent que l'anglais). Sans eux, le bouton Dicter n'apparaît pas. La voix ne
@@ -761,7 +768,7 @@ Tout fonctionne sans rien configurer. Si vous avez besoin d'ajuster quelque chos
 | `HABBLAUD_TERMINAL` | activé (en accès local uniquement) | `0` désactive le terminal, la réponse et l'envoi de messages depuis le bureau, et l'éditeur de personnage. Avec le port exposé, ils sont déjà désactivés, sans possibilité de les activer. |
 | `HABBLAUD_PTY` | désactivé | `1` active le terminal interactif (ouvrir, reprendre et fermer des sessions Claude Code depuis le bureau ; uniquement en accès local et hors Docker) et **Nouvel agent** (aussi dans Docker, via `npm run codex:bridge`). Lisez l'avertissement dans [Confidentialité et sécurité](#confidentialité-et-sécurité). |
 | `HABBLAUD_CLAUDE_BIN` | `claude` du PATH | L'exécutable de Claude Code que lancent le terminal interactif et Nouvel agent. |
-| `HABBLAUD_REMOTE_ALLOW` | `permissions` | Ce que peut faire le [téléphone avec connexion](#téléphone-avec-connexion-et-https-valider-les-demandes) : `permissions`, `messages`, `terminal`, `spawn` (séparés par des virgules) ou `none`. Les autres `HABBLAUD_REMOTE_*` sont écrites par `npm run remote:setup`. |
+| `HABBLAUD_REMOTE_ALLOW` | `permissions` | Ce que peut faire le [téléphone avec connexion](#téléphone-avec-connexion-et-https-valider-les-demandes) : `permissions`, `messages`, `terminal`, `spawn`, `chat` (séparés par des virgules) ou `none`. Les autres `HABBLAUD_REMOTE_*` sont écrites par `npm run remote:setup`. |
 | `HABBLAUD_MENSAGENS` | activé (avec le terminal) | `0` désactive seulement les messages depuis le bureau (la zone dans le terminal et dans les détails de l'agent). |
 | `HABBLAUD_CODEX` | activé | `0` désactive Codex dans le bureau. |
 | `HABBLAUD_CODEX_DIRS` | détection automatique | Dossiers de Codex, séparés par des virgules (à la place de `~/.codex*` et `CODEX_HOME`). |

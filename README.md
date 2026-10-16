@@ -269,7 +269,7 @@ Install a certificate › CA certificate), checking the fingerprint the setup sh
 - **Own address** (e.g. `meuclaude.home`): goes into the certificate, but the phone only finds it with an entry in the
   router's DNS pointing to the computer's IP. `<nome>.local` works without configuring anything.
 - **What the phone can do:** by default, approve and deny permission requests. `HABBLAUD_REMOTE_ALLOW` in `.env`
-  accepts `permissions`, `messages`, `terminal` and `spawn`, separated by commas, or `none` (view only). The
+  accepts `permissions`, `messages`, `terminal`, `spawn` and `chat`, separated by commas, or `none` (view only). The
   interactive terminal never works from the phone.
 - **Deliveries** (phone, with `terminal` allowed): the box button in the top bar lists what each agent finished, with
   a summary and attachments (screenshots, PDFs, files it sent) that open with a tap.
@@ -279,6 +279,12 @@ Install a certificate › CA certificate), checking the fingerprint the setup sh
   there. **It comes turned off:** it needs `HABBLAUD_PTY=1` (the same opt-in as the
   [interactive terminal](#interactive-terminal-take-over-new-session-and-end); in Docker, put it in `.env` and keep
   `npm run codex:bridge` running on the computer) and, from the phone, `spawn` in `HABBLAUD_REMOTE_ALLOW` too.
+- **Agent chat from the phone** (open an agent, talk to it, Run list, Triggers and the Board): **it comes turned off**,
+  because these agents may have full access to the computer. It only works with `chat` in `HABBLAUD_REMOTE_ALLOW` (or
+  `npm run remote:setup -- --allow permissions,chat`), always with the login and HTTPS; the server warns in the log at
+  startup. Even when allowed, the agents' MCP never answers on the phone port, the folder is still limited to the ones
+  the office already knows, and delegation, trigger and approval cards still ask for approval (answering them from the
+  phone needs `permissions` too).
 - **Dictation** (in New agent and in the message box): needs `whisper-cli` and `ffmpeg` (`brew install whisper-cpp
   ffmpeg`) and a multilingual model in `~/.local/share/whisper/` (`ggml-small.bin` gets more right than
   `ggml-base.bin`; the `.en` ones only understand English). Without them, the Dictate button doesn't show up. The
@@ -724,7 +730,7 @@ Everything works without configuring anything. If you need to adjust something, 
 | `HABBLAUD_TERMINAL` | on (local access only) | `0` turns off the terminal, answering and sending messages from the office, and the character editor. With the port exposed they're already off, with no way to turn them on. |
 | `HABBLAUD_PTY` | off | `1` turns on the interactive terminal (open, take over and end Claude Code sessions from the office; local access only and outside Docker) and **New agent** (also in Docker, through `npm run codex:bridge`). Read the warning in [Privacy and security](#privacy-and-security). |
 | `HABBLAUD_CLAUDE_BIN` | `claude` from PATH | The Claude Code executable that the interactive terminal and New agent run. |
-| `HABBLAUD_REMOTE_ALLOW` | `permissions` | What the [phone with login](#phone-with-login-and-https-approving-requests) can do: `permissions`, `messages`, `terminal`, `spawn` (comma-separated) or `none`. The other `HABBLAUD_REMOTE_*` are written by `npm run remote:setup`. |
+| `HABBLAUD_REMOTE_ALLOW` | `permissions` | What the [phone with login](#phone-with-login-and-https-approving-requests) can do: `permissions`, `messages`, `terminal`, `spawn`, `chat` (comma-separated) or `none`. The other `HABBLAUD_REMOTE_*` are written by `npm run remote:setup`. |
 | `HABBLAUD_MENSAGENS` | on (with the terminal) | `0` turns off only messages from the office (the box in the terminal and in the agent's details). |
 | `HABBLAUD_CODEX` | on | `0` turns off Codex in the office. |
 | `HABBLAUD_CODEX_DIRS` | automatic detection | Codex folders, comma-separated (instead of `~/.codex*` and `CODEX_HOME`). |

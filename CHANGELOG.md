@@ -21,6 +21,9 @@ do meio (0.**3**.0).
 - **Cópia isolada:** o agente trabalha num git worktree num branch próprio; ao terminar, Juntar ou Descartar.
 - **VBoards:** o "Iniciar" abre a janela preenchida e inicia a task pelo chat.
 - **Docker:** o chat fica indisponível, com aviso; o resto segue igual.
+- **Chat pelo celular:** desligado por padrão; com `chat` no `HABBLAUD_REMOTE_ALLOW` (login + HTTPS) o chat, Rodar
+  lista, Gatilhos e o Quadro funcionam pela porta do celular, com alvos de toque maiores e janelas em tela cheia. O MCP
+  dos agentes nunca responde por lá, e os cartões continuam pedindo aprovação.
 
 ### Habblaud World (em desenvolvimento, desligado por padrão)
 
