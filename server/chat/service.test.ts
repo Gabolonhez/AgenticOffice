@@ -263,3 +263,57 @@ describe('chat: correções da revisão', () => {
     expect(chatOffReason({ inDocker: false, ptyOptIn: true, terminal: true })).toBeUndefined();
   });
 });
+
+describe('chat: mensagens entre agentes (deliver)', () => {
+  const from = { agentId: 'chat:9', name: 'Ana (Orquestrador)' };
+
+  it('Claude no automático também recebe o MCP do escritório (ferramentas office_*)', () => {
+    const { chat, spawned } = setup();
+    chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' });
+    expect(spawned[0].args).toContain('--mcp-config');
+    expect(spawned[0].args).not.toContain('--strict-mcp-config');
+  });
+
+  it('agente livre: roda na hora com o remetente, e o resultado traz a resposta final', async () => {
+    const { chat, spawned } = setup();
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }, from));
+    expect(chat.view(id)!.items[0]).toMatchObject({ kind: 'user', text: 'oi', from });
+    spawned[0].proc.finish(fixture('claude-turn.jsonl'));
+    await flush();
+    const ends: string[] = [];
+    chat.onTurnEnd((a) => ends.push(a));
+    const d = chat.deliver(id, 'revise o diff', from)!;
+    expect(chat.view(id)!.items.at(-1)).toMatchObject({ kind: 'user', text: 'revise o diff', from });
+    expect(spawned[1].proc.input).toContain('Ana (Orquestrador)');
+    expect(spawned[1].proc.input).toContain('revise o diff');
+    spawned[1].proc.finish(fixture('claude-turn.jsonl'));
+    expect(await d.result).toEqual({ ok: true, reply: chat.lastReply(id) });
+    expect(ends).toEqual([id]);
+  });
+
+  it('agente ocupado: entra na fila e roda quando a rodada atual termina; cancelar tira da fila', async () => {
+    const { chat, spawned } = setup();
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }));
+    const a = chat.deliver(id, 'primeira', from)!;
+    const b = chat.deliver(id, 'segunda', from)!;
+    expect(spawned).toHaveLength(1);
+    b.cancel();
+    spawned[0].proc.finish(fixture('claude-turn.jsonl'));
+    await flush();
+    expect(spawned).toHaveLength(2);
+    expect(spawned[1].proc.input).toContain('primeira');
+    spawned[1].proc.finish([], 1);
+    await flush();
+    expect(spawned).toHaveLength(2); // a cancelada não rodou
+    expect(await a.result).toMatchObject({ ok: false });
+    expect(chat.deliver('chat:x', 'a', from)).toBeUndefined();
+  });
+
+  it('lista os agentes do chat com nome, papel, pasta e status', async () => {
+    const { chat, office } = setup();
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi', roleId: 'dev', name: 'Bia' }));
+    expect(chat.agentsList()).toEqual([{ id, name: 'Bia', role: 'Dev', provider: 'claude', folder: 'C:\\proj', status: 'working' }]);
+    expect(chat.displayName(id)).toBe('Bia (Dev)');
+    expect(office.get(id)?.name).toBe('Bia');
+  });
+});

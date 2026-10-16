@@ -5,7 +5,7 @@ import { execFile, spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
-import { CHAT_TEXT_MAX, CHAT_TOOL_OUTPUT_MAX, type ChatItem, type ChatLimits, type ChatOpenRequest, type ChatState, type ChatView } from '../../shared/chat';
+import { CHAT_TEXT_MAX, CHAT_TOOL_OUTPUT_MAX, type ChatFrom, type ChatItem, type ChatLimits, type ChatOpenRequest, type ChatState, type ChatView } from '../../shared/chat';
 import { describeTool, maskSecrets, truncate } from '../../shared/activity';
 import { tr } from '../../shared/i18n';
 import type { Provider } from '../../shared/types';
@@ -23,6 +23,9 @@ import { addUsage, overLimit, remainingUsd } from './usage';
 
 export type { ChatOpenRequest };
 export type ChatOpenResult = { agentId: string } | { error: 'invalid' | 'unavailable' | 'too-many'; reason: string };
+/** Fim da rodada de uma mensagem entregue por outro agente (deliver). */
+export type DeliverResult = { ok: true; reply: string } | { ok: false; error: string };
+export interface ChatAgentSummary { id: string; name: string; role: string; provider: Provider; folder: string; status: string; lastReply?: string }
 export interface ChatProcess {
   pid?: number;
   stdout: NodeJS.ReadableStream;
@@ -91,6 +94,10 @@ interface Runtime {
   tool?: string;
   turnStart: number;
   token: string;
+  /** Mensagens de outros agentes esperando a rodada atual terminar (deliver). */
+  queue: Array<{ text: string; from: ChatFrom; done: (r: DeliverResult) => void }>;
+  /** Quem espera o fim da rodada atual (a mensagem entregue que ela está rodando). */
+  waiter?: (r: DeliverResult) => void;
 }
 
 function num(v: unknown): number | undefined {
@@ -117,6 +124,7 @@ export class ChatService {
   readonly roles: RoleStore;
   private readonly now: () => number;
   private readonly platform: NodeJS.Platform;
+  private readonly turnEndListeners: Array<(agentId: string) => void> = [];
 
   constructor(private readonly deps: ChatServiceDeps) {
     this.store = new ChatStore(join(deps.dataDir, 'chat', 'agents'));
@@ -141,7 +149,7 @@ export class ChatService {
     });
   }
 
-  open(raw: unknown): ChatOpenResult {
+  open(raw: unknown, from?: ChatFrom): ChatOpenResult {
     const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<ChatOpenRequest>;
     const invalid = (reason: string): ChatOpenResult => ({ error: 'invalid', reason });
     const folder = typeof r.folder === 'string' ? this.knownFolder(r.folder) : undefined;
@@ -198,10 +206,10 @@ export class ChatService {
         }
         rec.cwd = w.path;
         rec.isolated = { branch: w.branch, path: w.path, base: w.base };
-        this.runTurn(rt, prompt);
+        this.runTurn(rt, prompt, from);
       });
     } else {
-      this.runTurn(rt, prompt);
+      this.runTurn(rt, prompt, from);
     }
     return { agentId };
   }
@@ -215,6 +223,56 @@ export class ChatService {
     if (overLimit(rt.rec.spend, rt.rec.limits)) return 'blocked';
     this.runTurn(rt, text);
     return 'ok';
+  }
+
+  /**
+   * Mensagem de outro agente (já aprovada pelo usuário): roda agora se o agente estiver livre, senão espera na fila.
+   * `result` resolve no fim da rodada dela; `cancel` tira da fila (se já roda, só deixa de esperar).
+   */
+  deliver(agentId: string, text: string, from: ChatFrom): { result: Promise<DeliverResult>; cancel: () => void } | undefined {
+    const rt = this.agents.get(agentId);
+    if (!rt) return undefined;
+    let entry!: Runtime['queue'][number];
+    const result = new Promise<DeliverResult>((done) => (entry = { text, from, done }));
+    if (rt.proc || rt.rec.running) rt.queue.push(entry);
+    else this.startDelivered(rt, entry);
+    return {
+      result,
+      cancel: () => {
+        rt.queue = rt.queue.filter((q) => q !== entry);
+        if (rt.waiter === entry.done) delete rt.waiter;
+        entry.done({ ok: false, error: tr('Cancelado.') });
+      },
+    };
+  }
+
+  /** Avisado quando a rodada de qualquer agente termina (inclusive por Parar ou tempo). */
+  onTurnEnd(cb: (agentId: string) => void): void {
+    this.turnEndListeners.push(cb);
+  }
+
+  /** "Bia (Dev)": o nome do personagem no escritório e o papel. */
+  displayName(agentId: string): string {
+    const rec = this.agents.get(agentId)?.rec;
+    if (!rec) return agentId;
+    const name = this.deps.office.get(agentId)?.name || rec.name || agentId;
+    const role = rec.roleId ? this.roles.get(rec.roleId)?.name : undefined;
+    return role ? `${name} (${role})` : name;
+  }
+
+  agentsList(): ChatAgentSummary[] {
+    return [...this.agents.values()].map(({ rec }) => {
+      const reply = this.lastReply(rec.agentId);
+      return {
+        id: rec.agentId,
+        name: this.deps.office.get(rec.agentId)?.name || rec.name || rec.agentId,
+        role: rec.roleId ? (this.roles.get(rec.roleId)?.name ?? '') : '',
+        provider: rec.provider,
+        folder: rec.folder,
+        status: this.deps.office.get(rec.agentId)?.status ?? 'idle',
+        ...(reply ? { lastReply: truncate(reply.replace(/\s+/g, ' '), 300) } : {}),
+      };
+    });
   }
 
   stop(agentId: string): 'ok' | 'not-found' | 'idle' {
@@ -338,7 +396,7 @@ export class ChatService {
   // --- interno ---
 
   private runtime(rec: ChatRecord): Runtime {
-    return { rec, phase: 'idle', turnStart: 0, token: randomBytes(24).toString('hex') };
+    return { rec, phase: 'idle', turnStart: 0, token: randomBytes(24).toString('hex'), queue: [] };
   }
 
   private bin(p: Provider): CliBin | undefined {
@@ -396,10 +454,26 @@ export class ChatService {
     return full;
   }
 
-  private runTurn(rt: Runtime, prompt: string): void {
+  private startDelivered(rt: Runtime, q: Runtime['queue'][number]): void {
+    if (overLimit(rt.rec.spend, rt.rec.limits)) return q.done({ ok: false, error: tr('O agente atingiu o limite de custo ou de tokens.') });
+    rt.waiter = q.done;
+    this.runTurn(rt, q.text, q.from);
+  }
+
+  /** Como terminou a rodada que acabou de fechar, para quem mandou a mensagem. */
+  private turnResult(rt: Runtime): DeliverResult {
+    if (this.turnOutcome(rt.rec.agentId) === 'done') return { ok: true, reply: this.lastReply(rt.rec.agentId) ?? '' };
+    const items = rt.rec.items;
+    let i = items.length - 1;
+    while (i >= 0 && items[i].kind !== 'user') i--;
+    const notice = items.slice(i + 1).findLast((x) => x.kind === 'notice');
+    return { ok: false, error: notice && notice.kind === 'notice' ? notice.text : tr('O agente terminou sem responder.') };
+  }
+
+  private runTurn(rt: Runtime, prompt: string, from?: ChatFrom): void {
     const { rec } = rt;
     const bin = this.bin(rec.provider);
-    this.pushItem(rt, { kind: 'user', text: prompt });
+    this.pushItem(rt, { kind: 'user', text: prompt, ...(from ? { from } : {}) });
     if (!bin) {
       this.pushItem(rt, { kind: 'notice', level: 'error', text: tr('{0} não encontrado no PATH', [CLI_NAMES[rec.provider]]) });
       this.finishOffice(rt);
@@ -408,7 +482,8 @@ export class ChatService {
     const first = !rec.sessionStarted;
     const spec: TurnSpec = {
       folder: rec.cwd,
-      prompt,
+      // A CLI de quem recebe precisa saber que o pedido veio de outro agente (no chat, o remetente vai no item).
+      prompt: from ? `[Mensagem de ${from.name}, outro agente do AgenticOffice (id ${from.agentId}). A sua resposta final volta para ele.]\n\n${prompt}` : prompt,
       first,
       ...(rec.provider === 'claude' && first ? { sessionId: rec.providerSessionId } : {}),
       ...(!first && rec.providerSessionId ? { resumeId: rec.providerSessionId } : {}),
@@ -416,7 +491,7 @@ export class ChatService {
       ...(rec.roleId && this.roles.get(rec.roleId) ? { role: this.roles.get(rec.roleId)!.text } : {}),
       permission: rec.permission,
       ...(remainingUsd(rec.spend, rec.limits) !== undefined ? { budgetUsd: remainingUsd(rec.spend, rec.limits) } : {}),
-      ...(rec.provider === 'claude' && rec.permission === 'ask'
+      ...(rec.provider === 'claude'
         ? { mcp: { url: `http://127.0.0.1:${this.deps.port}/api/chat/mcp/${encodeURIComponent(rec.agentId)}`, token: rt.token } }
         : {}),
       ...(rec.account && this.deps.accounts.find(rec.account) ? { accountDir: this.deps.accounts.find(rec.account)!.dir } : {}),
@@ -552,6 +627,12 @@ export class ChatService {
     void this.afterIsolatedTurn(rt).finally(() => {
       this.finishOffice(rt);
       this.deps.onFinish?.(rec.agentId);
+      const waiter = rt.waiter;
+      delete rt.waiter;
+      waiter?.(this.turnResult(rt));
+      for (const cb of this.turnEndListeners) cb(rec.agentId);
+      const next = rt.queue.shift();
+      if (next && !rt.proc && !rec.running) this.startDelivered(rt, next);
     });
   }
 

@@ -25,6 +25,14 @@ describe('chat: driver do Claude', () => {
     expect(claudeDriver.invocation(base).stdin).toBe('-oi');
   });
 
+  it('automático com o MCP do escritório: --mcp-config sem strict nem permission tool; prazo longo das ferramentas MCP', () => {
+    const auto = claudeArgs({ ...base, mcp: { url: 'http://127.0.0.1:4747/api/chat/mcp/chat:1', token: 't0k' } });
+    expect(JSON.parse(auto[auto.indexOf('--mcp-config') + 1]).mcpServers.habblaud.url).toBe('http://127.0.0.1:4747/api/chat/mcp/chat:1');
+    expect(auto).not.toContain('--strict-mcp-config');
+    expect(auto).not.toContain('--permission-prompt-tool');
+    expect(Number(claudeDriver.invocation(base).env.MCP_TOOL_TIMEOUT)).toBeGreaterThanOrEqual(2 * 60 * 60_000);
+  });
+
   it('rodada real: sessão, ferramentas, texto, uso cumulativo e fim', () => {
     const ev = run('claude-turn.jsonl');
     expect(ev[0]).toEqual({ type: 'session', id: 'a202b58e-04e5-40b3-bbe5-0cbe9be49d86' });

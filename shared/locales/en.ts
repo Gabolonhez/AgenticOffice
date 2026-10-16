@@ -3395,4 +3395,7 @@ export const EN: Readonly<Record<string, string>> = {
   "Nota apagada": "Note deleted",
   "Alternar entre o escritório e o quadro (cartões, linhas e notas)": "Switch between the office and the board (cards, lines and notes)",
   "O que o agente deve fazer (obrigatório)": "What the agent should do (required)",
+  "Cancelado.": "Cancelled.",
+  "O agente atingiu o limite de custo ou de tokens.": "The agent reached its cost or token limit.",
+  "O agente terminou sem responder.": "The agent finished without replying.",
 };

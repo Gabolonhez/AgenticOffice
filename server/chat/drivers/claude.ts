@@ -4,6 +4,7 @@ import { tr } from '../../../shared/i18n';
 import type { ChatDriver, ChatEvent, StreamParser, TurnSpec } from '../types';
 
 export const PERMISSION_TOOL = 'mcp__habblaud__approve';
+export const MCP_TOOL_TIMEOUT_MS = 150 * 60_000;
 
 export function claudeArgs(spec: TurnSpec): string[] {
   const args = ['-p', '--output-format', 'stream-json', '--verbose'];
@@ -13,9 +14,12 @@ export function claudeArgs(spec: TurnSpec): string[] {
   if (spec.model) args.push('--model', spec.model);
   if (spec.role) args.push('--append-system-prompt', spec.role);
   if (spec.budgetUsd !== undefined) args.push('--max-budget-usd', String(spec.budgetUsd));
-  if (spec.mcp && spec.permission === 'ask') {
+  // MCP do escritório sempre (ferramentas office_*); no automático sem strict, para os MCPs do usuário continuarem.
+  if (spec.mcp) {
     const config = { mcpServers: { habblaud: { type: 'http', url: spec.mcp.url, headers: { Authorization: `Bearer ${spec.mcp.token}` } } } };
-    args.push('--strict-mcp-config', '--mcp-config', JSON.stringify(config), '--permission-prompt-tool', PERMISSION_TOOL);
+    if (spec.permission === 'ask') args.push('--strict-mcp-config');
+    args.push('--mcp-config', JSON.stringify(config));
+    if (spec.permission === 'ask') args.push('--permission-prompt-tool', PERMISSION_TOOL);
   }
   return args;
 }
@@ -97,7 +101,8 @@ function claudeParser(): StreamParser {
 export const claudeDriver: ChatDriver = {
   provider: 'claude',
   invocation(spec) {
-    return { args: claudeArgs(spec), stdin: spec.prompt, env: { CLAUDE_CONFIG_DIR: spec.accountDir } };
+    // office_ask_agent espera até 2 h a resposta de outro agente (mais o cartão de aprovação).
+    return { args: claudeArgs(spec), stdin: spec.prompt, env: { CLAUDE_CONFIG_DIR: spec.accountDir, MCP_TOOL_TIMEOUT: String(MCP_TOOL_TIMEOUT_MS) } };
   },
   parser: claudeParser,
 };

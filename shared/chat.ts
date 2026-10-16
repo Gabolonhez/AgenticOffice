@@ -2,9 +2,11 @@
 import type { Provider } from './types';
 
 export type ChatPermission = 'auto' | 'ask';
+/** Outro agente do chat que mandou a mensagem (office_ask_agent / office_open_agent, server/chat/delegation.ts). */
+export interface ChatFrom { agentId: string; name: string }
 export interface ChatLimits { maxCostUsd?: number; maxTokens?: number; maxTurnMinutes?: number }
 export type ChatItem =
-  | { seq: number; at: number; kind: 'user'; text: string }
+  | { seq: number; at: number; kind: 'user'; text: string; from?: ChatFrom }
   | { seq: number; at: number; kind: 'assistant'; text: string }
   | { seq: number; at: number; kind: 'tool'; toolId: string; name: string; input: string; output?: string; error?: boolean; blocked?: string }
   | { seq: number; at: number; kind: 'approval'; permissionId: string; tool: string; text: string; outcome?: 'allow' | 'deny' }
