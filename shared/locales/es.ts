@@ -3301,4 +3301,5 @@ export const ES: Readonly<Record<string, string>> = {
   "VBoards: falha ao mandar as conversas ({0}).": "VBoards: no se pudieron enviar las conversaciones ({0}).",
   "VBoards: não deu para gravar {0} ({1}).": "VBoards: no se pudo guardar {0} ({1}).",
   "A CLI terminou sem resposta (código {0})": "La CLI terminó sin respuesta (código {0})",
+  "O Antigravity não respondeu. Faça login rodando `agy` num terminal.": "Antigravity no respondió. Inicia sesión ejecutando `agy` en una terminal.",
 };

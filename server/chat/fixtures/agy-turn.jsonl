@@ -1,0 +1,2 @@
+{"event":"init","conversation_id":"d38f4d9a-1217-40ed-87e9-1ebc9a747fae","init":{"cwd":"C:\proj","tools":["run_command"],"permission_mode":"request-review"}}
+{"event":"result","result":{"conversation_id":"d38f4d9a-1217-40ed-87e9-1ebc9a747fae","status":"SUCCESS","response":"ok","duration_seconds":2,"num_turns":1,"usage":{"input_tokens":900,"output_tokens":3,"thinking_tokens":10,"cache_read_tokens":0,"total_tokens":913}}}
