@@ -7,6 +7,7 @@ import type { Provider } from '../../shared/types';
 import { HttpError, readJson, sendJson } from '../http/app';
 import { ptyRequestProblem } from '../http/pty';
 import type { PermissionRegistry } from '../permissions/registry';
+import type { Delegation } from './delegation';
 import { handleMcp, makeApprovalCall } from './permission';
 import type { RoleStore } from './roles';
 import type { ChatService } from './service';
@@ -18,7 +19,12 @@ export interface ChatRouteDeps {
   folders: () => Array<{ path: string; name?: string }>;
   accounts: () => Array<{ id: string; provider: Provider; short?: string }>;
   worktrees?: WorktreeOps;
+  /** Ferramentas office_* e ligações entre agentes (delegation.ts); sem ela, só o permission tool. */
+  delegation?: Pick<Delegation, 'tools' | 'links'>;
 }
+
+/** Batida do SSE enquanto uma ferramenta espera (aprovação, resposta de outro agente). */
+const SSE_BEAT_MS = 15_000;
 
 const AGENT_ROUTE = /^\/api\/chat\/agents\/([^/]+)(?:\/(messages|stop|limits|merge|discard))?$/;
 const MCP_ROUTE = /^\/api\/chat\/mcp\/([^/]+)$/;
@@ -59,7 +65,20 @@ export function createChatRoutes(d: ChatRouteDeps): (req: IncomingMessage, res: 
       }
       const body = await readJson(req);
       const registry = d.registry ?? { registerChat: () => ({ skip: 'too-many' as const }), wait: () => undefined };
-      const out = await handleMcp(body, makeApprovalCall({ registry, chat: d.chat }, agentId));
+      const run = () => handleMcp(body, makeApprovalCall({ registry, chat: d.chat }, agentId), d.delegation?.tools(agentId));
+      // tools/call pode esperar muito (cartão, resposta de outro agente): por SSE, com batidas, nenhum prazo de
+      // cabeçalho/corpo do cliente HTTP estoura. O Streamable HTTP do MCP aceita os dois formatos.
+      if ((body as { method?: unknown })?.method === 'tools/call' && String(req.headers.accept ?? '').includes('text/event-stream')) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+        const beat = setInterval(() => res.write(': ping\n\n'), SSE_BEAT_MS);
+        try {
+          res.end(`event: message\ndata: ${JSON.stringify(await run())}\n\n`);
+        } finally {
+          clearInterval(beat);
+        }
+        return;
+      }
+      const out = await run();
       if (out === undefined) {
         res.writeHead(202);
         res.end();
@@ -72,6 +91,11 @@ export function createChatRoutes(d: ChatRouteDeps): (req: IncomingMessage, res: 
     if (problem) {
       req.resume();
       return sendJson(res, 403, { error: problem });
+    }
+
+    if (path === '/api/chat/links') {
+      if (method !== 'GET') return notAllowed(res, 'GET');
+      return sendJson(res, 200, d.delegation?.links() ?? []);
     }
 
     if (path === '/api/chat/options') {

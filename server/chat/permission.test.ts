@@ -71,6 +71,22 @@ describe('chat: aprovações do Claude', () => {
   });
 });
 
+describe('chat: ferramentas office_* no MCP do escritório', () => {
+  it('não passam pelo permission tool (elas mesmas pedem a aprovação): sem cartão duplo', () => {
+    const a = { permission: 'ask' as const, root: 'C:\\proj', alwaysAllow: [] };
+    expect(decideClaudeTool('mcp__habblaud__office_ask_agent', { agentId: 'chat:2', message: 'oi' }, a)).toEqual({ behavior: 'allow' });
+    expect(decideClaudeTool('mcp__outro__office_ask_agent', {}, a).behavior).toBe('ask');
+  });
+  it('tools/list junta as ferramentas extras; tools/call devolve o texto e o isError', async () => {
+    const allow = async (a: { input: Record<string, unknown> }) => ({ behavior: 'allow' as const, updatedInput: a.input });
+    const tools = [{ name: 'office_x', description: 'x', inputSchema: { type: 'object' }, run: async (args: Record<string, unknown>) => ({ text: `oi ${String(args.n)}`, isError: true }) }];
+    const list = (await handleMcp({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, allow, tools)) as { result: { tools: { name: string }[] } };
+    expect(list.result.tools.map((t) => t.name)).toEqual(['approve', 'office_x']);
+    expect(await handleMcp({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'office_x', arguments: { n: 3 } } }, allow, tools))
+      .toEqual({ jsonrpc: '2.0', id: 2, result: { content: [{ type: 'text', text: 'oi 3' }], isError: true } });
+  });
+});
+
 describe('chat: "não perguntar de novo" com comando composto', () => {
   it('comando composto não gera regra nem aproveita uma regra existente', () => {
     expect(alwaysKey('Bash', { command: 'cd x && npm test' })).toBeUndefined();

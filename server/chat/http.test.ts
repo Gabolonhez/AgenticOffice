@@ -25,7 +25,11 @@ async function start() {
     },
     open: () => ({ agentId: 'chat:9' }),
   } as unknown as ChatRouteDeps['chat'];
-  const routes = createChatRoutes({ chat, folders: () => [], accounts: () => [] });
+  const delegation = {
+    links: () => [{ from: 'chat:1', to: 'chat:2', at: 5 }],
+    tools: (caller: string) => [{ name: 'office_list_agents', description: 'x', inputSchema: { type: 'object' }, run: async () => ({ text: `lista de ${caller}` }) }],
+  };
+  const routes = createChatRoutes({ chat, folders: () => [], accounts: () => [], delegation });
   const server = http.createServer((req, res) => routes(req, res, new URL(req.url ?? '/', 'http://x')));
   servers.push(server);
   await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
@@ -68,6 +72,25 @@ describe('chat: rotas HTTP', () => {
     const note = await raw(port, path, { method: 'POST', headers: { ...json, authorization: 'Bearer tok-1' }, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });
     expect(note.status).toBe(202);
     expect((await raw(port, path, { headers: { authorization: 'Bearer tok-1' } })).status).toBe(405);
+  });
+
+  it('MCP: ferramentas office_* do agente; tools/call por SSE quando o cliente aceita (esperas longas)', async () => {
+    const { port } = await start();
+    const path = `/api/chat/mcp/${encodeURIComponent('chat:1')}`;
+    const auth = { ...json, authorization: 'Bearer tok-1' };
+    const list = await raw(port, path, { method: 'POST', headers: auth, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) });
+    expect(JSON.parse(list.body).result.tools.map((t: { name: string }) => t.name)).toEqual(['approve', 'office_list_agents']);
+    const call = JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'office_list_agents', arguments: {} } });
+    const sse = await raw(port, path, { method: 'POST', headers: { ...auth, accept: 'application/json, text/event-stream' }, body: call });
+    expect(sse.status).toBe(200);
+    expect(sse.body).toBe(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: 2, result: { content: [{ type: 'text', text: 'lista de chat:1' }] } })}\n\n`);
+  });
+
+  it('ligações entre agentes para o quadro', async () => {
+    const { port } = await start();
+    const r = await raw(port, '/api/chat/links');
+    expect(r.status).toBe(200);
+    expect(JSON.parse(r.body)).toEqual([{ from: 'chat:1', to: 'chat:2', at: 5 }]);
   });
 
   it('a conversa vem a partir do seq pedido', async () => {

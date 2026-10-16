@@ -246,6 +246,13 @@ export class ChatService {
     };
   }
 
+  /** Atividade no Office do agente (ex.: conversa entre agentes). */
+  note(agentId: string, icon: string, text: string, detail?: string): void {
+    if (!this.agents.has(agentId)) return;
+    const at = this.now();
+    this.deps.office.addActivity(agentId, { id: `${agentId}#note:${randomUUID()}`, at, kind: 'other', icon, text: truncate(text, 46), ...(detail ? { detail: truncate(maskSecrets(detail), 300) } : {}) }, false);
+  }
+
   /** Avisado quando a rodada de qualquer agente termina (inclusive por Parar ou tempo). */
   onTurnEnd(cb: (agentId: string) => void): void {
     this.turnEndListeners.push(cb);

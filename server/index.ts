@@ -60,6 +60,7 @@ import { BuildingTokens } from './world/tokens';
 import { BuildingUplink } from './world/uplink';
 import { WorldViewer } from './world/viewer';
 import { lastReply, loadVBoardsConfig, VBoardsService } from './vboards/vboards';
+import { Delegation } from './chat/delegation';
 import { createChatRoutes } from './chat/http';
 import { ChatService, chatOffReason } from './chat/service';
 import { createWorktreeOps } from './chat/worktree';
@@ -405,6 +406,8 @@ const chat = chatOff
       worktrees: createWorktreeOps(config.dataDir),
     });
 late.chat = chat;
+// Agentes conversando entre si (chat/delegation.ts): só com o registro de permissões, que mostra os cartões de aprovação.
+const delegation = chat && permissions ? new Delegation({ chat, registry: permissions, folders: () => chatFolders }) : undefined;
 const chatRoutes = chat
   ? createChatRoutes({
       chat,
@@ -412,6 +415,7 @@ const chatRoutes = chat
       folders: () => (refreshChatFolders(), chatFolders),
       accounts: () => accounts.allEntries().map((a) => ({ id: a.id, provider: a.provider, short: accounts.find(a.id)?.detected.name })),
       worktrees: createWorktreeOps(config.dataDir),
+      delegation,
     })
   : undefined;
 if (chat) {
