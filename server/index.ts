@@ -65,6 +65,7 @@ import { createChatRoutes } from './chat/http';
 import { ChatService, chatOffReason } from './chat/service';
 import { createWorktreeOps } from './chat/worktree';
 import { RunService } from './chat/runs';
+import { officeApprover, TriggerService } from './chat/triggers';
 
 const config = loadConfig();
 const startedAt = Date.now();
@@ -411,6 +412,11 @@ late.chat = chat;
 const delegation = chat && permissions ? new Delegation({ chat, registry: permissions, folders: () => chatFolders }) : undefined;
 // Listas (chat/runs.ts): um agente do chat por item, em sequência; só começam com o "Rodar lista" da página.
 const runs = chat ? new RunService({ chat, vboards, worktrees: createWorktreeOps(config.dataDir), file: join(config.dataDir, 'chat', 'runs.json') }) : undefined;
+// Gatilhos (chat/triggers.ts): todo disparo vira um cartão de aprovação; sem o registro de permissões, não existem.
+const triggers =
+  chat && permissions
+    ? new TriggerService({ chat, approve: officeApprover({ office, registry: permissions }), folders: () => chatFolders, file: join(config.dataDir, 'chat', 'triggers.json') })
+    : undefined;
 const chatRoutes = chat
   ? createChatRoutes({
       chat,
@@ -420,11 +426,14 @@ const chatRoutes = chat
       worktrees: createWorktreeOps(config.dataDir),
       delegation,
       runs,
+      triggers,
     })
   : undefined;
 if (chat) {
   chat.start();
   runs?.load();
+  triggers?.load();
+  triggers?.start();
   refreshChatFolders();
   setInterval(refreshChatFolders, 30_000).unref();
 }
@@ -644,6 +653,7 @@ function shutdown(signal: string): void {
   hub.stop();
   terminals?.stop();
   runs?.freeze();
+  triggers?.stop();
   chat?.stopAll();
   timeline?.stop();
   permissions?.stop();

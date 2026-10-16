@@ -38,7 +38,15 @@ async function start() {
     merge: async () => ({ ok: true }),
     discard: async () => ({ status: 409, error: 'sem cópia' }),
   } as unknown as ChatRouteDeps['runs'];
-  const routes = createChatRoutes({ chat, folders: () => [], accounts: () => [], delegation, runs });
+  const triggers = {
+    list: () => [{ id: 't1' }],
+    history: () => [{ id: 'f1', ruleId: 't1' }],
+    create: (b: { name?: string }) => (b.name ? { rule: { id: 't1', name: b.name } } : { status: 400, error: 'Dê um nome ao gatilho (até 60 caracteres).' }),
+    update: (id: string, b: { name?: string }) => (id !== 't1' ? { status: 404, error: 'gatilho não encontrado' } : { rule: { id, name: b.name } }),
+    remove: (id: string) => id === 't1',
+    test: (id: string) => (id === 't1' ? 'ok' : 'not-found'),
+  } as unknown as ChatRouteDeps['triggers'];
+  const routes = createChatRoutes({ chat, folders: () => [], accounts: () => [], delegation, runs, triggers });
   const server = http.createServer((req, res) => routes(req, res, new URL(req.url ?? '/', 'http://x')));
   servers.push(server);
   await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
@@ -142,5 +150,28 @@ describe('chat: rotas HTTP', () => {
     expect((await raw(port, '/api/chat/runs/r1/discard', { method: 'POST' })).status).toBe(409);
     expect((await raw(port, '/api/chat/runs/r1/stop')).status).toBe(405);
     expect((await raw(port, '/api/chat/runs', { method: 'DELETE' })).status).toBe(405);
+  });
+
+  it('gatilhos: listar, criar, editar, apagar, testar (só cria o cartão) e histórico; só pelo próprio computador', async () => {
+    const { port } = await start();
+    expect((await raw(port, '/api/chat/triggers', { method: 'POST', headers: { ...json, origin: 'http://evil' }, body: '{}' })).status).toBe(403);
+    expect((await raw(port, '/api/chat/triggers', { headers: { host: '192.168.0.10' } })).status).toBe(403);
+    expect(JSON.parse((await raw(port, '/api/chat/triggers')).body)).toEqual([{ id: 't1' }]);
+    const bad = await raw(port, '/api/chat/triggers', { method: 'POST', headers: json, body: '{}' });
+    expect(bad.status).toBe(400);
+    expect(JSON.parse(bad.body).error).toBe('Dê um nome ao gatilho (até 60 caracteres).');
+    const ok = await raw(port, '/api/chat/triggers', { method: 'POST', headers: json, body: JSON.stringify({ name: 'R' }) });
+    expect(ok.status).toBe(201);
+    expect(JSON.parse(ok.body)).toEqual({ id: 't1', name: 'R' });
+    expect((await raw(port, '/api/chat/triggers/t1', { method: 'PUT', headers: json, body: JSON.stringify({ name: 'S' }) })).status).toBe(200);
+    expect((await raw(port, '/api/chat/triggers/t2', { method: 'PUT', headers: json, body: '{}' })).status).toBe(404);
+    expect((await raw(port, '/api/chat/triggers/t1/test', { method: 'POST' })).status).toBe(202);
+    expect((await raw(port, '/api/chat/triggers/t2/test', { method: 'POST' })).status).toBe(404);
+    expect(JSON.parse((await raw(port, '/api/chat/triggers/history')).body)).toEqual([{ id: 'f1', ruleId: 't1' }]);
+    expect((await raw(port, '/api/chat/triggers/t1', { method: 'DELETE' })).status).toBe(200);
+    expect((await raw(port, '/api/chat/triggers/t2', { method: 'DELETE' })).status).toBe(404);
+    expect((await raw(port, '/api/chat/triggers/t1')).status).toBe(405);
+    expect((await raw(port, '/api/chat/triggers/t1/test')).status).toBe(405);
+    expect((await raw(port, '/api/chat/triggers/history', { method: 'POST' })).status).toBe(405);
   });
 });

@@ -12,6 +12,7 @@ import { handleMcp, makeApprovalCall } from './permission';
 import type { RoleStore } from './roles';
 import type { RunService } from './runs';
 import type { ChatService } from './service';
+import type { TriggerService } from './triggers';
 import type { WorktreeOps } from './types';
 
 export interface ChatRouteDeps {
@@ -24,6 +25,8 @@ export interface ChatRouteDeps {
   delegation?: Pick<Delegation, 'tools' | 'links'>;
   /** Listas que rodam um agente por item (runs.ts); sem ela, 404. */
   runs?: Pick<RunService, 'list' | 'get' | 'create' | 'stop' | 'continue' | 'merge' | 'discard'>;
+  /** Gatilhos (triggers.ts); sem eles, 404. */
+  triggers?: Pick<TriggerService, 'list' | 'history' | 'create' | 'update' | 'remove' | 'test'>;
 }
 
 /** Batida do SSE enquanto uma ferramenta espera (aprovação, resposta de outro agente). */
@@ -33,6 +36,7 @@ const AGENT_ROUTE = /^\/api\/chat\/agents\/([^/]+)(?:\/(messages|stop|limits|mer
 const MCP_ROUTE = /^\/api\/chat\/mcp\/([^/]+)$/;
 const ROLE_ROUTE = /^\/api\/chat\/roles\/([^/]+)$/;
 const RUN_ROUTE = /^\/api\/chat\/runs\/([^/]+)(?:\/(stop|continue|merge|discard))?$/;
+const TRIGGER_ROUTE = /^\/api\/chat\/triggers\/([^/]+)(?:\/(test))?$/;
 
 function isLoopback(addr: string | undefined): boolean {
   const a = addr?.startsWith('::ffff:') ? addr.slice(7) : addr;
@@ -191,6 +195,38 @@ export function createChatRoutes(d: ChatRouteDeps): (req: IncomingMessage, res: 
       }
       const r = await (action === 'merge' ? d.runs.merge(id) : d.runs.discard(id));
       return 'ok' in r ? sendJson(res, 200, {}) : sendJson(res, r.status, { error: r.error });
+    }
+
+    // Gatilhos: "Testar agora" só cria o cartão de aprovação, como qualquer disparo.
+    const triggers = d.triggers;
+    if (path === '/api/chat/triggers' || path.startsWith('/api/chat/triggers/')) {
+      if (!triggers) return sendJson(res, 404, { error: tr('rota desconhecida') });
+      if (path === '/api/chat/triggers') {
+        if (method === 'GET') return sendJson(res, 200, triggers.list());
+        if (method !== 'POST') return notAllowed(res, 'GET, POST');
+        const r = triggers.create(await readJson(req));
+        return 'rule' in r ? sendJson(res, 201, r.rule) : sendJson(res, r.status, { error: r.error });
+      }
+      if (path === '/api/chat/triggers/history') {
+        if (method !== 'GET') return notAllowed(res, 'GET');
+        return sendJson(res, 200, triggers.history());
+      }
+      const t = TRIGGER_ROUTE.exec(path);
+      if (t) {
+        const id = decode(t[1]);
+        if (t[2] === 'test') {
+          if (method !== 'POST') return notAllowed(res, 'POST');
+          req.resume();
+          return triggers.test(id) === 'ok' ? sendJson(res, 202, {}) : sendJson(res, 404, { error: tr('gatilho não encontrado') });
+        }
+        if (method === 'PUT') {
+          const r = triggers.update(id, await readJson(req));
+          return 'rule' in r ? sendJson(res, 200, r.rule) : sendJson(res, r.status, { error: r.error });
+        }
+        if (method !== 'DELETE') return notAllowed(res, 'PUT, DELETE');
+        req.resume();
+        return triggers.remove(id) ? sendJson(res, 200, {}) : sendJson(res, 404, { error: tr('gatilho não encontrado') });
+      }
     }
 
     if (path === '/api/chat/roles') {
