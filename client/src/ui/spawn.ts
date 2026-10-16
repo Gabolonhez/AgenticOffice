@@ -5,9 +5,10 @@
 // (ui/dictation.ts, Whisper local no Mac). Pasta que o Claude Code não conhece cai no app (Enter lá).
 import { tr } from '../../../shared/i18n';
 import { isDemoId } from '../../../shared/timeline';
-import type { OfficeSnapshot, Provider } from '../../../shared/types';
+import type { OfficeSnapshot } from '../../../shared/types';
 import { access } from '../net/access';
-import { askDisabledReason, defaultForm, providerLabel, toRequest, type OpenForm } from './spawn-model';
+import { toRequest } from './spawn-model';
+import { ChatOptionsFields } from './chat-options';
 import type { UiContext } from './context';
 import { DictationButton, dictationAvailable, insertDictation } from './dictation';
 import { h, iconButton, setHidden, setText } from './dom';
@@ -116,9 +117,6 @@ interface PendingFile {
   el: HTMLElement;
 }
 
-interface ChatProviderOption { id: Provider; available: boolean; reason?: string; ask: boolean }
-interface ChatAccountOption { id: string; provider: Provider; short?: string }
-
 export class SpawnPanel {
   readonly el: HTMLElement;
   private readonly folderList: HTMLElement;
@@ -140,20 +138,8 @@ export class SpawnPanel {
   private chatMode = false;
   /** Task do VBoards que esta janela vai iniciar ("Iniciar" do VBoards com o chat ligado). */
   private vboardsTask: string | undefined;
-  private chatProviders: ChatProviderOption[] = [];
-  private chatAccounts: ChatAccountOption[] = [];
+  private readonly options = new ChatOptionsFields();
   private readonly chatBox: HTMLElement;
-  private readonly provider: HTMLSelectElement;
-  private readonly account: HTMLSelectElement;
-  private readonly model: HTMLInputElement;
-  private readonly role: HTMLSelectElement;
-  private readonly permAuto: HTMLInputElement;
-  private readonly permAsk: HTMLInputElement;
-  private readonly isolated: HTMLInputElement;
-  private readonly limitUsd: HTMLInputElement;
-  private readonly limitTokens: HTMLInputElement;
-  private readonly limitMinutes: HTMLInputElement;
-  private readonly agentName: HTMLInputElement;
   private readonly attachBtn: HTMLButtonElement;
   private readonly hint: HTMLElement;
 
@@ -205,51 +191,9 @@ export class SpawnPanel {
       this.selected = this.folder.value.trim();
       this.renderFolders();
     });
-    const field = (label: string, control: HTMLElement) => h('label', { class: 'ui-spawn__field' }, h('span', { text: label }), control);
-    const input = (type: string, attrs: Record<string, string> = {}) => {
-      const el = h('input', { class: 'ui-rename__input', type, attrs }) as HTMLInputElement;
-      el.addEventListener('keydown', (e) => e.stopPropagation());
-      el.addEventListener('keyup', (e) => e.stopPropagation());
-      return el;
-    };
-    this.provider = h('select', { class: 'ui-rename__input', attrs: { 'aria-label': tr('Agente') }, on: { change: () => this.syncChatControls() } }) as HTMLSelectElement;
-    this.account = h('select', { class: 'ui-rename__input', attrs: { 'aria-label': tr('Conta') } }) as HTMLSelectElement;
-    this.model = input('text', { placeholder: tr('padrão da ferramenta'), spellcheck: 'false' });
-    this.role = h('select', { class: 'ui-rename__input', attrs: { 'aria-label': tr('Papel') } }) as HTMLSelectElement;
-    this.permAuto = input('radio', { name: 'ui-spawn-perm', value: 'auto' });
-    this.permAsk = input('radio', { name: 'ui-spawn-perm', value: 'ask' });
-    this.permAuto.checked = true;
-    this.isolated = input('checkbox');
-    this.limitUsd = input('text', { inputmode: 'decimal', placeholder: tr('sem limite') });
-    this.limitTokens = input('text', { inputmode: 'numeric', placeholder: tr('sem limite') });
-    this.limitMinutes = input('text', { inputmode: 'decimal', placeholder: tr('sem limite') });
-    this.agentName = input('text', { maxlength: '40', placeholder: tr('sorteado') });
     this.hint = h('p', { class: 'ui-rename__hint', text: tr('Começa na hora uma sessão do Claude Code em segundo plano no computador, na pasta escolhida; as permissões chegam aqui. Pasta que o Claude Code ainda não conhece abre no app do Claude e espera o Enter lá. Anexos vão para ~/.habblaud/attachments e o pedido leva os caminhos.') });
-    this.chatBox = h(
-      'div',
-      { class: 'ui-spawn__chat', hidden: true },
-      field(tr('Agente'), this.provider),
-      h(
-        'details',
-        { class: 'ui-spawn__more' },
-        h('summary', { text: tr('Mais opções') }),
-        field(tr('Conta'), this.account),
-        field(tr('Modelo'), this.model),
-        field(tr('Papel'), this.role),
-        h(
-          'fieldset',
-          { class: 'ui-spawn__perm' },
-          h('legend', { text: tr('Permissões') }),
-          h('label', {}, this.permAuto, h('span', { text: tr('Automático (faz tudo sozinho)') })),
-          h('label', {}, this.permAsk, h('span', { text: tr('Pedir aprovação a cada ação') })),
-        ),
-        h('label', { class: 'ui-spawn__check' }, this.isolated, h('span', { text: tr('Cópia isolada (git worktree, num branch próprio)') })),
-        field(tr('Limite de custo (US$)'), this.limitUsd),
-        field(tr('Limite de tokens'), this.limitTokens),
-        field(tr('Limite por rodada (minutos)'), this.limitMinutes),
-        field(tr('Nome do personagem'), this.agentName),
-      ),
-    );
+    this.chatBox = this.options.el;
+    setHidden(this.chatBox, true);
     const close = iconButton(ICONS.close, tr('Fechar'), () => this.hide(), 'ui-icon-btn--sm');
     this.el = h(
       'div',
@@ -328,25 +272,8 @@ export class SpawnPanel {
     this.chatMode = !!access().chat;
     this.applyChatMode();
     if (!this.chatMode) return;
-    try {
-      const o = await api<{ providers: ChatProviderOption[]; roles: Array<{ id: string; name: string }>; accounts: ChatAccountOption[] }>('/api/chat/options');
-      this.chatProviders = o.providers;
-      this.chatAccounts = o.accounts;
-      this.provider.replaceChildren(
-        ...o.providers.map((p) =>
-          h('option', {
-            attrs: { value: p.id, ...(p.available ? {} : { disabled: 'true', title: p.reason ?? '' }) },
-            text: p.available ? providerLabel(p.id) : `${providerLabel(p.id)} (${p.reason ?? tr('indisponível')})`,
-          }),
-        ),
-      );
-      this.provider.value = defaultForm('', o.providers).provider;
-      this.role.replaceChildren(h('option', { attrs: { value: '' }, text: tr('Sem papel') }), ...o.roles.map((r) => h('option', { attrs: { value: r.id }, text: r.name })));
-      this.syncChatControls();
-    } catch {
-      this.chatMode = false;
-      this.applyChatMode();
-    }
+    this.chatMode = !!(await this.options.load());
+    this.applyChatMode();
   }
 
   private applyChatMode(): void {
@@ -361,41 +288,9 @@ export class SpawnPanel {
     this.prompt.required = this.chatMode;
   }
 
-  /** Conta e aprovação conforme o agente escolhido (só o Claude pede aprovação ação por ação). */
-  private syncChatControls(): void {
-    const provider = this.provider.value as Provider;
-    this.account.replaceChildren(
-      h('option', { attrs: { value: '' }, text: tr('Conta padrão') }),
-      ...this.chatAccounts.filter((a) => a.provider === provider).map((a) => h('option', { attrs: { value: a.id }, text: a.short ?? a.id })),
-    );
-    const why = askDisabledReason(provider);
-    this.permAsk.disabled = !!why;
-    this.permAsk.parentElement?.setAttribute('title', why ?? '');
-    if (why) this.permAuto.checked = true;
-    setHidden(this.limitUsd.parentElement as HTMLElement, provider !== 'claude');
-    setHidden(this.limitTokens.parentElement as HTMLElement, provider === 'claude');
-  }
-
-  private chatForm(folder: string): OpenForm {
-    return {
-      ...defaultForm(folder, this.chatProviders),
-      provider: this.provider.value as Provider,
-      ...(this.account.value ? { account: this.account.value } : {}),
-      model: this.model.value,
-      roleId: this.role.value,
-      permission: this.permAsk.checked ? 'ask' : 'auto',
-      isolated: this.isolated.checked,
-      limitUsd: this.limitUsd.value,
-      limitTokens: this.limitTokens.value,
-      limitMinutes: this.limitMinutes.value,
-      name: this.agentName.value,
-      prompt: this.prompt.value,
-    };
-  }
-
   /** Abre pelo chat: o agente aparece no escritório e a gaveta abre na conversa. */
   private async submitChat(folder: string): Promise<void> {
-    const req = toRequest(this.chatForm(folder));
+    const req = toRequest(this.options.form(folder, this.prompt.value));
     if ('error' in req) return this.say(req.error, true);
     this.busy = true;
     this.submitBtn.disabled = true;
