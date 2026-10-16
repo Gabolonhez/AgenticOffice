@@ -10,6 +10,7 @@ import type { CodexLive } from '../sources/codex/live';
 import type { SessionLookup } from '../sources/source';
 import { isJsonContentType, isLoopbackHost } from './guard';
 import type { RemoteFeature } from './remote';
+import type { ChatRoutes } from '../chat/http';
 import { handleSessionsRoute } from './sessions';
 import type { Hub } from './sse';
 import { handleStatsRoute } from './stats';
@@ -60,7 +61,7 @@ export interface ApiDeps {
    */
   pty?: (req: IncomingMessage, res: ServerResponse, path: string) => void;
   /** Chat com agentes (/api/chat/*, server/chat/http.ts). Ausente = desligado; `chatOff` diz o motivo. */
-  chat?: (req: IncomingMessage, res: ServerResponse, url: URL) => void;
+  chat?: ChatRoutes;
   chatOff?: string;
   /**
    * Fonte do Codex ao vivo: recebe os eventos dos hooks do Codex (POST /api/codex/events, server/codex/http.ts). Sem
@@ -406,7 +407,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
           terminal: !!terminals && trusted(req, 'terminal'),
           spawn: !!deps.spawn && trusted(req, 'spawn'),
           world: !!deps.world && !!deps.terminal && !remote && isLoopbackHost(req.headers.host),
-          chat: !!deps.chat && !remote && isLoopbackHost(req.headers.host),
+          chat: !!deps.chat && trusted(req, 'chat'),
         };
         sendJson(res, 200, access);
       }
@@ -460,14 +461,15 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       return true;
     }
     if (path === '/api/chat' || path.startsWith('/api/chat/')) {
-      // Abre processos na máquina: nunca pela porta remota (o resto da trava fica em chat/http.ts).
-      if (isRemote(req)) {
+      // Abre processos na máquina: pela porta remota só com "chat" liberado, e o MCP nunca (o resto da trava fica em
+      // chat/http.ts, que recebe o mesmo critério).
+      if (isRemote(req) && (!trusted(req, 'chat') || path.startsWith('/api/chat/mcp/'))) {
         req.resume();
-        sendJson(res, 403, { error: tr('o terminal interativo só pode ser usado no próprio computador') });
+        sendJson(res, 403, { error: denied(req, '') });
       } else if (!deps.chat) {
         req.resume();
         sendJson(res, 403, { error: deps.chatOff ?? tr('Chat com agentes indisponível no Docker: rode o servidor direto no computador.') });
-      } else deps.chat(req, res, url);
+      } else deps.chat(req, res, url, { is: isRemote, trusted: (r) => trusted(r, 'chat') });
       return true;
     }
     if (path === '/api/pty' || path.startsWith('/api/pty/') || AGENT_ACTION_ROUTE.test(path)) {

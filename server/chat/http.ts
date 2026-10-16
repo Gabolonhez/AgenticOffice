@@ -1,6 +1,7 @@
-// Rotas do chat com agentes (/api/chat/*). Abrem processos na máquina: só pelo próprio computador (a trava do terminal
-// interativo). O MCP do permission tool (/api/chat/mcp/:agentId) é chamado pelo `claude.exe`, sem Origin: vale só do
-// loopback e com o Bearer do próprio agente.
+// Rotas do chat com agentes (/api/chat/*). Abrem processos na máquina: pelo próprio computador (a trava do terminal
+// interativo) ou, pela porta do celular (login + HTTPS), só com "chat" em HABBLAUD_REMOTE_ALLOW. O MCP do permission
+// tool (/api/chat/mcp/:agentId) é chamado pelo `claude.exe`, sem Origin: vale só do loopback, pela porta local e com o
+// Bearer do próprio agente.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tr } from '../../shared/i18n';
 import type { Provider } from '../../shared/types';
@@ -51,15 +52,24 @@ const decode = (s: string) => {
   }
 };
 
-export function createChatRoutes(d: ChatRouteDeps): (req: IncomingMessage, res: ServerResponse, url: URL) => void {
+/** Porta do celular (vem do app.ts): `is` = chegou pela porta remota (já logado); `trusted` = "chat" liberado lá. */
+export interface ChatRemote {
+  is(req: IncomingMessage): boolean;
+  trusted(req: IncomingMessage): boolean;
+}
+
+export type ChatRoutes = (req: IncomingMessage, res: ServerResponse, url: URL, remote?: ChatRemote) => void;
+
+export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
   const notAllowed = (res: ServerResponse, allow: string) => {
     res.setHeader('Allow', allow);
     sendJson(res, 405, { error: tr('método não permitido') });
   };
 
-  const handle = async (req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> => {
+  const handle = async (req: IncomingMessage, res: ServerResponse, url: URL, remote?: ChatRemote): Promise<void> => {
     const path = url.pathname;
     const method = req.method ?? 'GET';
+    const isRemote = !!remote?.is(req);
 
     const mcp = MCP_ROUTE.exec(path);
     if (mcp) {
@@ -67,7 +77,7 @@ export function createChatRoutes(d: ChatRouteDeps): (req: IncomingMessage, res: 
       const agentId = decode(mcp[1]);
       const auth = req.headers.authorization ?? '';
       const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-      if (!isLoopback(req.socket.remoteAddress) || !token || d.chat.tokenOwner(token) !== agentId) {
+      if (isRemote || !isLoopback(req.socket.remoteAddress) || !token || d.chat.tokenOwner(token) !== agentId) {
         req.resume();
         return sendJson(res, 401, { error: tr('não autorizado') });
       }
@@ -95,7 +105,11 @@ export function createChatRoutes(d: ChatRouteDeps): (req: IncomingMessage, res: 
       return sendJson(res, 200, out);
     }
 
-    const problem = ptyRequestProblem(req);
+    const problem = isRemote
+      ? remote!.trusted(req)
+        ? null
+        : tr('não liberado no acesso remoto (veja HABBLAUD_REMOTE_ALLOW)')
+      : ptyRequestProblem(req);
     if (problem) {
       req.resume();
       return sendJson(res, 403, { error: problem });
@@ -249,8 +263,8 @@ export function createChatRoutes(d: ChatRouteDeps): (req: IncomingMessage, res: 
     sendJson(res, 404, { error: tr('rota desconhecida') });
   };
 
-  return (req, res, url) => {
-    handle(req, res, url).catch((err) => {
+  return (req, res, url, remote) => {
+    handle(req, res, url, remote).catch((err) => {
       if (res.headersSent) return void res.destroy();
       if (err instanceof HttpError) sendJson(res, err.status, { error: err.message });
       else sendJson(res, 500, { error: tr('erro interno') });

@@ -559,6 +559,7 @@ if (config.remote) {
     const where = config.inDocker ? tr('publicada pelo HABBLAUD_REMOTE_BIND') : remote.host;
     const scheme = remote.tls ? 'HTTPS' : tr('HTTP SEM criptografia (HABBLAUD_REMOTE_INSECURE_HTTP)');
     log.info(tr('   Acesso remoto: ligado na porta {0} ({1}), {2}, com login; libera: {3}.', [remote.port, where, scheme, allow]));
+    if (remote.allow.has('chat')) log.warn(tr('   Acesso remoto: "chat" liberado. Agentes que podem ter acesso total a este computador podem ser comandados pelo celular (o MCP e as pastas desconhecidas continuam bloqueados).'));
     if (remote.allow.has('spawn') && !spawn) log.warn(tr('   Acesso remoto: "spawn" liberado, mas o Novo agente está desligado (ligue com HABBLAUD_PTY=1).'));
   });
 } else if (config.remoteWarning) {

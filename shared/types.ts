@@ -398,7 +398,7 @@ export interface AccessInfo {
    * com Host local. Ausente em servidores antigos.
    */
   world?: boolean;
-  /** Pode abrir e conversar com agentes pelo chat do escritório (/api/chat/*): só pelo próprio computador. */
+  /** Pode abrir e conversar com agentes pelo chat do escritório (/api/chat/*): pelo próprio computador ou, na porta do celular, com "chat" em HABBLAUD_REMOTE_ALLOW. */
   chat?: boolean;
 }
 

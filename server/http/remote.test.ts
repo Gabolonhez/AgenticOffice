@@ -26,6 +26,7 @@ import {
 import { Hub } from './sse';
 import { hashPassword, parsePasswordHash } from '../remote/password';
 import { SpawnService } from '../spawn/spawn';
+import { createChatRoutes, type ChatRouteDeps } from '../chat/http';
 
 setQuiet(true);
 
@@ -69,6 +70,9 @@ describe('parseRemoteConfig', () => {
     expect([...parseAllow('messages, Terminal, bogus')]).toEqual(['messages', 'terminal']);
     expect([...parseAllow('none')]).toEqual([]);
     expect([...parseAllow('')]).toEqual(['permissions']);
+    // O chat (agentes com acesso ao PC) só entra se pedido pelo nome; nunca no padrão.
+    expect([...parseAllow('chat, permissions')]).toEqual(['chat', 'permissions']);
+    expect(parseAllow(undefined).has('chat')).toBe(false);
   });
 });
 
@@ -224,6 +228,12 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
       sendJson(res, 200, { ok: true });
     },
     renameRoom: () => 'sala',
+    // Chat de verdade (a trava fica em chat/http.ts) sobre um serviço falso: abrir sempre responde 400.
+    chat: createChatRoutes({
+      chat: { providers: () => [], open: () => ({ error: 'invalid', reason: 'falso' }), tokenOwner: () => undefined } as unknown as ChatRouteDeps['chat'],
+      folders: () => [],
+      accounts: () => [],
+    }),
     remote: { is: isRemoteRequest, allows: (f) => allowSet.has(f) },
     world: (req, res, url) => {
       req.resume();
@@ -574,6 +584,32 @@ describe('quem pode responder (o hook só espera se houver página que responda)
 });
 
 describe('GET /api/access (o que a página pode fazer)', () => {
+  it('chat com agentes: desligado no celular por padrão; só com "chat" liberado e login; o MCP nunca pela porta remota', async () => {
+    const body = { provider: 'claude', folder: '/x' };
+    const off = await start(['permissions', 'messages', 'terminal', 'spawn']);
+    const c1 = await login(off.remoteBase);
+    const denied = await request(off.remoteBase, '/api/chat/agents', { method: 'POST', body, headers: { Cookie: c1, Host: 'localhost' } });
+    expect(denied.status).toBe(403);
+    expect(JSON.parse(denied.body).error).toMatch(/HABBLAUD_REMOTE_ALLOW/);
+    expect((await request(off.remoteBase, '/api/chat/options', { headers: { Cookie: c1 } })).status).toBe(403);
+    expect(JSON.parse((await request(off.remoteBase, '/api/access', { headers: { Cookie: c1 } })).body).chat).toBe(false);
+
+    const on = await start(['permissions', 'chat']);
+    expect((await request(on.remoteBase, '/api/chat/options')).status).toBe(401);
+    const c2 = await login(on.remoteBase);
+    expect(JSON.parse((await request(on.remoteBase, '/api/access', { headers: { Cookie: c2 } })).body).chat).toBe(true);
+    expect((await request(on.remoteBase, '/api/chat/options', { headers: { Cookie: c2 } })).status).toBe(200);
+    // Chegou ao serviço (o falso recusa com 400), não à trava.
+    expect((await request(on.remoteBase, '/api/chat/agents', { method: 'POST', body, headers: { Cookie: c2 } })).status).toBe(400);
+    // O MCP do permission tool: nem logado, nem com chat liberado, nem com Bearer e Host imitando localhost.
+    for (const headers of [{ Cookie: c2 }, { Cookie: c2, Host: 'localhost', Authorization: 'Bearer t' }] as Array<Record<string, string>>) {
+      const mcp = await request(on.remoteBase, '/api/chat/mcp/a1', { method: 'POST', body: {}, headers });
+      expect(mcp.status).toBe(403);
+    }
+    // Na porta local continua como antes: sem Bearer, 401.
+    expect((await request(on.localBase, '/api/chat/mcp/a1', { method: 'POST', body: {} })).status).toBe(401);
+  });
+
   it('porta remota: só o liberado; porta local: tudo pelo Host local; Host da rede na local: nada', async () => {
     const h = await start(['permissions']);
     const cookie = await login(h.remoteBase);
@@ -587,7 +623,7 @@ describe('GET /api/access (o que a página pode fazer)', () => {
       world: false,
       chat: false,
     });
-    expect(JSON.parse((await request(h.localBase, '/api/access')).body)).toEqual({ remote: false, local: true, permissions: true, messages: true, terminal: false, spawn: true, world: true, chat: false });
+    expect(JSON.parse((await request(h.localBase, '/api/access')).body)).toEqual({ remote: false, local: true, permissions: true, messages: true, terminal: false, spawn: true, world: true, chat: true });
     expect(JSON.parse((await request(h.localBase, '/api/access', { headers: { Host: '192.168.1.5:4747' } })).body)).toMatchObject({
       local: false,
       permissions: false,

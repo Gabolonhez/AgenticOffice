@@ -8,8 +8,9 @@
 // Configuração (escrita por `npm run remote:setup`, scripts/remote-setup.ts):
 //   HABBLAUD_REMOTE_USER + HABBLAUD_REMOTE_PASSWORD_HASH  ligam a porta (o hash é scrypt, ver remote/password.ts;
 //                                                         senha em texto puro não é aceita)
-//   HABBLAUD_REMOTE_ALLOW   o que a sessão remota pode fazer além de ver: permissions, messages, terminal ("none" = só
-//                           ver). Padrão: permissions.
+//   HABBLAUD_REMOTE_ALLOW   o que a sessão remota pode fazer além de ver: permissions, messages, terminal, spawn, chat
+//                           ("none" = só ver). Padrão: permissions. "chat" (comandar agentes que podem ter acesso total
+//                           ao PC) nunca entra no padrão: só pedido pelo nome.
 //   HABBLAUD_REMOTE_TLS_DIR pasta com server.key, server.crt (e ca.crt, servido em /remote/ca.crt). Padrão:
 //                           /remote-tls no Docker, ~/.habblaud/remote-tls/server no Node. Sem certificado a porta não
 //                           sobe, a menos que HABBLAUD_REMOTE_INSECURE_HTTP=1 (HTTP puro: senha e cookie à vista na rede).
@@ -29,9 +30,9 @@ import { parsePasswordHash, verifyPassword, type PasswordHash } from '../remote/
 import { hostAllowed } from './guard';
 import { getLocale, tr } from '../../shared/i18n';
 
-export type RemoteFeature = 'permissions' | 'messages' | 'terminal' | 'spawn';
+export type RemoteFeature = 'permissions' | 'messages' | 'terminal' | 'spawn' | 'chat';
 
-const FEATURES: readonly RemoteFeature[] = ['permissions', 'messages', 'terminal', 'spawn'];
+const FEATURES: readonly RemoteFeature[] = ['permissions', 'messages', 'terminal', 'spawn', 'chat'];
 
 export interface RemoteTls {
   dir: string;
