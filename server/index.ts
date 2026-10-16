@@ -64,6 +64,7 @@ import { Delegation } from './chat/delegation';
 import { createChatRoutes } from './chat/http';
 import { ChatService, chatOffReason } from './chat/service';
 import { createWorktreeOps } from './chat/worktree';
+import { RunService } from './chat/runs';
 
 const config = loadConfig();
 const startedAt = Date.now();
@@ -408,6 +409,8 @@ const chat = chatOff
 late.chat = chat;
 // Agentes conversando entre si (chat/delegation.ts): só com o registro de permissões, que mostra os cartões de aprovação.
 const delegation = chat && permissions ? new Delegation({ chat, registry: permissions, folders: () => chatFolders }) : undefined;
+// Listas (chat/runs.ts): um agente do chat por item, em sequência; só começam com o "Rodar lista" da página.
+const runs = chat ? new RunService({ chat, vboards, worktrees: createWorktreeOps(config.dataDir), file: join(config.dataDir, 'chat', 'runs.json') }) : undefined;
 const chatRoutes = chat
   ? createChatRoutes({
       chat,
@@ -416,10 +419,12 @@ const chatRoutes = chat
       accounts: () => accounts.allEntries().map((a) => ({ id: a.id, provider: a.provider, short: accounts.find(a.id)?.detected.name })),
       worktrees: createWorktreeOps(config.dataDir),
       delegation,
+      runs,
     })
   : undefined;
 if (chat) {
   chat.start();
+  runs?.load();
   refreshChatFolders();
   setInterval(refreshChatFolders, 30_000).unref();
 }
@@ -638,6 +643,7 @@ function shutdown(signal: string): void {
   accounts.stop();
   hub.stop();
   terminals?.stop();
+  runs?.freeze();
   chat?.stopAll();
   timeline?.stop();
   permissions?.stop();

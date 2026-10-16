@@ -131,6 +131,15 @@ describe('chat: lista que roda um agente por item', () => {
     expect(again.svc.get('r1')?.items[0]).toMatchObject({ state: 'running', agentId: 'chat:1' });
   });
 
+  it('servidor desligando (freeze): o fim das rodadas mortas não abre o próximo item', async () => {
+    const { svc, opened, end, file } = setup();
+    await svc.create({ items: items('a', 'b'), options });
+    svc.freeze();
+    end('chat:1', 'failed');
+    expect(opened).toHaveLength(1);
+    expect(setup({}, file).svc.get('r1')?.items.map((i) => i.state)).toEqual(['interrupted', 'pending']);
+  });
+
   it('arquivo com lixo: lê o que dá', () => {
     const dir = mkdtempSync(join(tmpdir(), 'hb-runs-'));
     const file = join(dir, 'runs.json');

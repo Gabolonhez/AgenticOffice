@@ -29,7 +29,16 @@ async function start() {
     links: () => [{ from: 'chat:1', to: 'chat:2', at: 5 }],
     tools: (caller: string) => [{ name: 'office_list_agents', description: 'x', inputSchema: { type: 'object' }, run: async () => ({ text: `lista de ${caller}` }) }],
   };
-  const routes = createChatRoutes({ chat, folders: () => [], accounts: () => [], delegation });
+  const runs = {
+    list: () => [{ id: 'r1' }],
+    get: (id: string) => (id === 'r1' ? { id } : undefined),
+    create: (body: { items?: unknown[] }) => (body.items?.length ? { run: { id: 'r1' } } : { status: 400, error: 'A lista precisa ter de 1 a 50 itens.' }),
+    stop: (id: string) => (id === 'r1' ? 'ok' : 'not-found'),
+    continue: (id: string) => (id === 'r1' ? 'busy' : 'not-found'),
+    merge: async () => ({ ok: true }),
+    discard: async () => ({ status: 409, error: 'sem cópia' }),
+  } as unknown as ChatRouteDeps['runs'];
+  const routes = createChatRoutes({ chat, folders: () => [], accounts: () => [], delegation, runs });
   const server = http.createServer((req, res) => routes(req, res, new URL(req.url ?? '/', 'http://x')));
   servers.push(server);
   await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
@@ -112,5 +121,26 @@ describe('chat: rotas HTTP', () => {
     const r = await raw(port, '/api/chat/agents', { method: 'POST', headers: json, body: JSON.stringify({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }) });
     expect(r.status).toBe(201);
     expect(JSON.parse(r.body)).toEqual({ agentId: 'chat:9' });
+  });
+
+  it('listas: criar (a aprovação), ver, parar, continuar, juntar/descartar; só pelo próprio computador', async () => {
+    const { port } = await start();
+    expect((await raw(port, '/api/chat/runs', { method: 'POST', headers: { ...json, origin: 'http://evil' }, body: '{}' })).status).toBe(403);
+    const bad = await raw(port, '/api/chat/runs', { method: 'POST', headers: json, body: JSON.stringify({ items: [] }) });
+    expect(bad.status).toBe(400);
+    expect(JSON.parse(bad.body).error).toBe('A lista precisa ter de 1 a 50 itens.');
+    const ok = await raw(port, '/api/chat/runs', { method: 'POST', headers: json, body: JSON.stringify({ items: [{ text: 'a' }] }) });
+    expect(ok.status).toBe(201);
+    expect(JSON.parse(ok.body)).toEqual({ id: 'r1' });
+    expect(JSON.parse((await raw(port, '/api/chat/runs')).body)).toEqual([{ id: 'r1' }]);
+    expect((await raw(port, '/api/chat/runs/r1')).status).toBe(200);
+    expect((await raw(port, '/api/chat/runs/r2')).status).toBe(404);
+    expect((await raw(port, '/api/chat/runs/r1/stop', { method: 'POST' })).status).toBe(200);
+    expect((await raw(port, '/api/chat/runs/r2/stop', { method: 'POST' })).status).toBe(404);
+    expect((await raw(port, '/api/chat/runs/r1/continue', { method: 'POST' })).status).toBe(409);
+    expect((await raw(port, '/api/chat/runs/r1/merge', { method: 'POST' })).status).toBe(200);
+    expect((await raw(port, '/api/chat/runs/r1/discard', { method: 'POST' })).status).toBe(409);
+    expect((await raw(port, '/api/chat/runs/r1/stop')).status).toBe(405);
+    expect((await raw(port, '/api/chat/runs', { method: 'DELETE' })).status).toBe(405);
   });
 });

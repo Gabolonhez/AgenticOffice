@@ -34,6 +34,8 @@ const itemPrompt = (run: Pick<ChatRun, 'context'>, text: string) => (run.context
 
 export class RunService {
   private runs: ChatRun[] = [];
+  /** Servidor desligando: nada avança (o fim das rodadas mortas não pode abrir o próximo item). */
+  private frozen = false;
   private readonly now: () => number;
 
   constructor(private readonly deps: RunDeps) {
@@ -61,6 +63,11 @@ export class RunService {
       changed = true;
     }
     if (changed) this.save();
+  }
+
+  /** Antes do ChatService.stopAll: o que rodava fica como estava e vira interrompido no próximo load. */
+  freeze(): void {
+    this.frozen = true;
   }
 
   list(): ChatRun[] {
@@ -196,7 +203,7 @@ export class RunService {
   }
 
   private advance(run: ChatRun): void {
-    if (run.state !== 'running') return;
+    if (run.state !== 'running' || this.frozen) return;
     const item = run.items.find((i) => i.state === 'pending');
     if (!item) {
       run.state = 'done';
@@ -233,6 +240,7 @@ export class RunService {
   }
 
   private turnEnded(agentId: string): void {
+    if (this.frozen) return;
     for (const run of this.runs) {
       if (run.state !== 'running') continue;
       const item = run.items.find((i) => i.state === 'running' && i.agentId === agentId);

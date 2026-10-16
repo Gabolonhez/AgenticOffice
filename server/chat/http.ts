@@ -10,6 +10,7 @@ import type { PermissionRegistry } from '../permissions/registry';
 import type { Delegation } from './delegation';
 import { handleMcp, makeApprovalCall } from './permission';
 import type { RoleStore } from './roles';
+import type { RunService } from './runs';
 import type { ChatService } from './service';
 import type { WorktreeOps } from './types';
 
@@ -21,6 +22,8 @@ export interface ChatRouteDeps {
   worktrees?: WorktreeOps;
   /** Ferramentas office_* e ligações entre agentes (delegation.ts); sem ela, só o permission tool. */
   delegation?: Pick<Delegation, 'tools' | 'links'>;
+  /** Listas que rodam um agente por item (runs.ts); sem ela, 404. */
+  runs?: Pick<RunService, 'list' | 'get' | 'create' | 'stop' | 'continue' | 'merge' | 'discard'>;
 }
 
 /** Batida do SSE enquanto uma ferramenta espera (aprovação, resposta de outro agente). */
@@ -29,6 +32,7 @@ const SSE_BEAT_MS = 15_000;
 const AGENT_ROUTE = /^\/api\/chat\/agents\/([^/]+)(?:\/(messages|stop|limits|merge|discard))?$/;
 const MCP_ROUTE = /^\/api\/chat\/mcp\/([^/]+)$/;
 const ROLE_ROUTE = /^\/api\/chat\/roles\/([^/]+)$/;
+const RUN_ROUTE = /^\/api\/chat\/runs\/([^/]+)(?:\/(stop|continue|merge|discard))?$/;
 
 function isLoopback(addr: string | undefined): boolean {
   const a = addr?.startsWith('::ffff:') ? addr.slice(7) : addr;
@@ -158,6 +162,35 @@ export function createChatRoutes(d: ChatRouteDeps): (req: IncomingMessage, res: 
       if (!r.ok) return sendJson(res, 409, { error: r.reason });
       d.chat.markIsolated(id, { discarded: true }, tr('Cópia descartada.'));
       return sendJson(res, 200, {});
+    }
+
+    // Listas: o POST que cria é o "Rodar lista" da tela de confirmação (a aprovação da lista inteira).
+    if (path === '/api/chat/runs') {
+      if (!d.runs) return sendJson(res, 404, { error: tr('rota desconhecida') });
+      if (method === 'GET') return sendJson(res, 200, d.runs.list());
+      if (method !== 'POST') return notAllowed(res, 'GET, POST');
+      const r = d.runs.create(await readJson(req));
+      return 'run' in r ? sendJson(res, 201, r.run) : sendJson(res, r.status, { error: r.error });
+    }
+    const runRoute = RUN_ROUTE.exec(path);
+    if (runRoute && d.runs) {
+      const id = decode(runRoute[1]);
+      const action = runRoute[2];
+      if (!action) {
+        if (method !== 'GET') return notAllowed(res, 'GET');
+        const run = d.runs.get(id);
+        return run ? sendJson(res, 200, run) : sendJson(res, 404, { error: tr('lista não encontrada') });
+      }
+      if (method !== 'POST') return notAllowed(res, 'POST');
+      req.resume();
+      if (action === 'stop' || action === 'continue') {
+        const r = action === 'stop' ? d.runs.stop(id) : d.runs.continue(id);
+        const status = { ok: 200, idle: 200, 'not-found': 404, invalid: 409, busy: 409 }[r];
+        const error = r === 'busy' ? tr('Já há uma lista rodando.') : r === 'invalid' ? tr('Esta lista não pode continuar.') : r;
+        return sendJson(res, status, status === 200 ? {} : { error });
+      }
+      const r = await (action === 'merge' ? d.runs.merge(id) : d.runs.discard(id));
+      return 'ok' in r ? sendJson(res, 200, {}) : sendJson(res, r.status, { error: r.error });
     }
 
     if (path === '/api/chat/roles') {
