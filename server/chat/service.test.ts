@@ -86,6 +86,19 @@ describe('chat: ChatService', () => {
     expect(spawned).toHaveLength(0);
   });
 
+  it('check valida sem abrir; agente de lista roda na cópia dela e não conta no limite', () => {
+    const { chat, spawned } = setup();
+    expect(chat.check({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' })).toBeUndefined();
+    expect(chat.check({ folder: 'C:\\outro', provider: 'claude', prompt: 'oi' })).toMatchObject({ error: 'invalid' });
+    expect(spawned).toHaveLength(0);
+    for (let i = 0; i < 8; i++) chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' });
+    expect(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' })).toMatchObject({ error: 'too-many' });
+    const r = chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'item' }, undefined, { cwd: 'C:\\wt' });
+    expect(r).toEqual({ agentId: 'chat:9' });
+    expect(spawned.at(-1)?.cwd).toBe('C:\\wt');
+    expect(chat.record('chat:9')?.folder).toBe('C:\\proj');
+  });
+
   it('rodada: itens, Office parado com os números e onFinish', async () => {
     const { chat, office, spawned, finished } = setup();
     const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }));

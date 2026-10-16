@@ -166,6 +166,17 @@ describe('serviço', () => {
     expect(open).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'Corrija o login e rode os testes', vboardsTaskId: 'c1:s1' }));
   });
 
+  it('lista do chat: begin abre pelo opener dela e a tarefa fica ligada ao agente', async () => {
+    const { svc, open } = setup({ chat: true });
+    await svc.poll();
+    svc.stop();
+    const viaRun = vi.fn(() => ({ agentId: 'chat:7' }));
+    expect(await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web', chat: { provider: 'claude', prompt: 'item' } }, viaRun)).toEqual({ agentId: 'chat:7' });
+    expect(open).not.toHaveBeenCalled();
+    expect(viaRun).toHaveBeenCalledWith(expect.objectContaining({ prompt: 'item', vboardsTaskId: 'c1:s1' }));
+    expect(await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web' }, viaRun)).toMatchObject({ status: 409 });
+  });
+
   it('agente do chat ligado a uma task não vira item de conversa; um solto vira um item só', async () => {
     const { svc, calls, setAgents, tick } = setup({ chat: true });
     await svc.poll();

@@ -149,23 +149,37 @@ export class ChatService {
     });
   }
 
-  open(raw: unknown, from?: ChatFrom): ChatOpenResult {
+  /** O que impediria abrir este agente (pasta, provedor, pedido, papel, limites, CLI), sem abrir nada. */
+  check(raw: unknown): Exclude<ChatOpenResult, { agentId: string }> | undefined {
     const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<ChatOpenRequest>;
-    const invalid = (reason: string): ChatOpenResult => ({ error: 'invalid', reason });
-    const folder = typeof r.folder === 'string' ? this.knownFolder(r.folder) : undefined;
-    if (!folder) return invalid(tr('Pasta desconhecida: abra uma sessão nela antes.'));
+    const invalid = (reason: string) => ({ error: 'invalid' as const, reason });
+    if (typeof r.folder !== 'string' || !this.knownFolder(r.folder)) return invalid(tr('Pasta desconhecida: abra uma sessão nela antes.'));
     const provider = r.provider;
     if (!provider || !PROVIDERS.includes(provider)) return invalid(tr('Provedor inválido.'));
     const prompt = typeof r.prompt === 'string' ? r.prompt.trim() : '';
     if (!prompt || prompt.length > CHAT_TEXT_MAX) return invalid(tr('Escreva o pedido (até {0} caracteres).', [CHAT_TEXT_MAX]));
-    const limits = parseLimits(r.limits);
-    if (!limits) return invalid(tr('Limites inválidos.'));
+    if (!parseLimits(r.limits)) return invalid(tr('Limites inválidos.'));
     if (r.roleId && !this.roles.get(r.roleId)) return invalid(tr('Papel não encontrado.'));
-    const name = typeof r.name === 'string' ? r.name.trim() : '';
-    if (name.length > NAME_MAX) return invalid(tr('Nome muito longo.'));
+    if (typeof r.name === 'string' && r.name.trim().length > NAME_MAX) return invalid(tr('Nome muito longo.'));
     if (r.isolated && !this.deps.worktrees) return invalid(tr('Cópia isolada indisponível.'));
     if (!this.bin(provider)) return { error: 'unavailable', reason: tr('{0} não encontrado no PATH', [CLI_NAMES[provider]]) };
-    if (this.agents.size >= MAX_CHAT_AGENTS) return { error: 'too-many', reason: tr('Já há {0} agentes do chat abertos; feche um antes.', [MAX_CHAT_AGENTS]) };
+    return undefined;
+  }
+
+  /**
+   * Abre um agente e roda o pedido. `run` (só do servidor, lista de server/chat/runs.ts): roda na cópia da lista e não
+   * conta no limite de agentes (a lista roda um por vez).
+   */
+  open(raw: unknown, from?: ChatFrom, run?: { cwd?: string }): ChatOpenResult {
+    const bad = this.check(raw);
+    if (bad) return bad;
+    const r = raw as ChatOpenRequest;
+    const folder = this.knownFolder(r.folder)!;
+    const provider = r.provider;
+    const prompt = r.prompt.trim();
+    const limits = parseLimits(r.limits)!;
+    const name = typeof r.name === 'string' ? r.name.trim() : '';
+    if (!run && this.agents.size >= MAX_CHAT_AGENTS) return { error: 'too-many', reason: tr('Já há {0} agentes do chat abertos; feche um antes.', [MAX_CHAT_AGENTS]) };
 
     const agentId = `chat:${(this.deps.newId ?? randomUUID)()}`;
     const rec: ChatRecord = {
@@ -174,7 +188,7 @@ export class ChatService {
       provider,
       ...(typeof r.account === 'string' && r.account ? { account: r.account } : {}),
       folder,
-      cwd: folder,
+      cwd: run?.cwd ?? folder,
       ...(typeof r.model === 'string' && r.model.trim() ? { model: r.model.trim() } : {}),
       ...(r.roleId ? { roleId: r.roleId } : {}),
       permission: provider === 'claude' && r.permission === 'ask' ? 'ask' : 'auto',
@@ -193,7 +207,7 @@ export class ChatService {
     this.agents.set(agentId, rt);
     this.enterOffice(rec, 'working');
     if (name) this.deps.office.setCharacter(agentId, { name, seed: rec.seed, parts: {} });
-    if (r.isolated && this.deps.worktrees) {
+    if (r.isolated && this.deps.worktrees && !run) {
       rt.phase = 'thinking';
       rec.running = true;
       this.store.save(rec);
@@ -398,6 +412,14 @@ export class ChatService {
     if (change.discarded) rt.rec.cwd = rt.rec.folder;
     if (notice) this.pushItem(rt, { kind: 'notice', level: 'info', text: notice });
     else this.store.save(rt.rec);
+  }
+
+  /** A cópia da lista foi descartada: o agente volta a trabalhar na pasta do projeto. */
+  restoreCwd(agentId: string): void {
+    const rt = this.agents.get(agentId);
+    if (!rt || rt.rec.cwd === rt.rec.folder || rt.rec.isolated) return;
+    rt.rec.cwd = rt.rec.folder;
+    this.store.save(rt.rec);
   }
 
   // --- interno ---

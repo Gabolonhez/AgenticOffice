@@ -219,6 +219,8 @@ export function lastReply(path: string, parser: TerminalParser): string | undefi
   return text;
 }
 
+export type ChatOpener = (raw: unknown) => { agentId: string } | { error: string; reason: string };
+
 export interface VBoardsServiceOptions {
   config: VBoardsConfig;
   /** Agentes reais do escritório (Office.list) e a pasta de cada sala. */
@@ -229,7 +231,7 @@ export interface VBoardsServiceOptions {
   /** Novo agente; ausente = a fila não é buscada (dá para iniciar só com ele). */
   spawn?: { submit(raw: unknown): SpawnSubmit; get(id: string): SpawnInfo | undefined };
   /** Chat do escritório (server/chat): com ele, o "Iniciar" abre o agente pelo chat em vez do Novo agente. */
-  chat?: { open(raw: unknown): { agentId: string } | { error: string; reason: string }; outcome?(agentId: string): 'done' | 'failed' | undefined };
+  chat?: { open: ChatOpener; outcome?(agentId: string): 'done' | 'failed' | undefined };
   /** Última resposta do agente (transcript). */
   reply?: (agentId: string) => string | undefined;
   booting?: () => boolean;
@@ -329,10 +331,11 @@ export class VBoardsService {
   }
 
   /** "Iniciar": a pasta vem do próprio servidor (a única que combina, ou uma das conhecidas escolhida na página). */
-  async begin(raw: unknown): Promise<{ spawn: SpawnInfo } | { agentId: string } | { status: number; error: string }> {
+  /** `open` (lista do chat, server/chat/runs.ts): abre o agente do chat por ela em vez do chat.open das opções. */
+  async begin(raw: unknown, open?: ChatOpener): Promise<{ spawn: SpawnInfo } | { agentId: string } | { status: number; error: string }> {
     const body = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
     const spawn = this.opts.spawn;
-    const chat = this.opts.chat;
+    const chat = open ? { open } : this.opts.chat;
     if (!spawn && !chat) return { status: 403, error: tr('novo agente pelo escritório desligado') };
     const task = this.tasks.find((t) => taskId(t) === body.id);
     if (!task) return { status: 404, error: tr('tarefa do VBoards desconhecida: atualize a lista') };
