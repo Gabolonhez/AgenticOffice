@@ -11044,3 +11044,124 @@ html.is-replay #world {
   display: flex;
   gap: 6px;
 }
+
+/* Chat com agentes abertos pelo escritório (ui/chat.ts). */
+.ui-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ui-chat__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.ui-chat__item {
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  font: 12.5px/1.45 var(--font-ui);
+  color: var(--ui-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ui-chat__item--user {
+  align-self: flex-end;
+  max-width: 88%;
+  background: var(--ui-accent-soft);
+  border: 1px solid rgba(124, 200, 255, 0.35);
+}
+
+.ui-chat__item--assistant {
+  background: var(--ui-bg-soft);
+  border: 1px solid var(--ui-line);
+}
+
+.ui-chat__item--notice,
+.ui-chat__item--usage,
+.ui-chat__item--approval {
+  padding: 2px 4px;
+  font-size: 11.5px;
+  color: var(--ui-muted);
+}
+
+.ui-chat__item.is-error,
+.ui-chat__tool.is-error > summary {
+  color: var(--ui-danger, #ff8a8a);
+}
+
+.ui-chat__tool > summary {
+  cursor: pointer;
+  font: 11.5px/1.4 var(--font-mono, monospace);
+  color: var(--ui-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-chat__tool > pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 4px 0 0;
+}
+
+.ui-chat__status {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ui-accent);
+}
+
+.ui-chat__error {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ui-danger, #ff8a8a);
+}
+
+.ui-chat__error:empty,
+.ui-chat__status:empty {
+  display: none;
+}
+
+.ui-chat__row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ui-chat__row:not(:has(> :not([hidden]))) {
+  display: none;
+}
+
+.ui-chat__input {
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  max-height: calc(12.5px * 1.4 * 6 + 16px);
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--ui-line-strong);
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--ui-text);
+  font: 12.5px/1.4 var(--font-ui);
+  resize: vertical;
+}
+
+.ui-chat__input:focus {
+  outline: none;
+  border-color: rgba(124, 200, 255, 0.6);
+}
+
+.ui-chat__limit {
+  width: 110px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--ui-line-strong);
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--ui-text);
+}

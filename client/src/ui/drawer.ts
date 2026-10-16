@@ -4,6 +4,7 @@ import type { Activity, AgentInfo, FeedItem, RoomInfo, ShellJob, TaskItem } from
 import { roomTheme } from '../art';
 import { createAvatarPlaceholder, updateAvatar } from './avatar';
 import { CharacterEditor } from './character-editor';
+import { ChatPanel } from './chat';
 import { MessageComposer } from './composer';
 import type { UiComponent, UiContext } from './context';
 import { copyText, h, iconButton, KeyedList, setAttr, setHidden, setStyleVar, setText, setTitle, setVariant } from './dom';
@@ -248,6 +249,9 @@ class AgentView {
   /** Mandar mensagem ao agente principal pelo Habblaud (plugin habblaud-mensagens). */
   private composer: MessageComposer;
   private msgSec: ReturnType<typeof section>;
+  /** Chat com o agente aberto pelo escritório (AgentInfo.chat): no lugar do terminal e da caixa de mensagem. */
+  private chat: ChatPanel;
+  private chatSec: ReturnType<typeof section>;
   private tasksSec: ReturnType<typeof section>;
   private tasksBar: HTMLElement;
   private tasks: KeyedList<TaskItem>;
@@ -366,6 +370,9 @@ class AgentView {
     this.msgSec = section(tr('Mandar mensagem'), this.composer.el);
     // No celular a caixa fica presa no rodapé da gaveta enquanto a conversa rola (styles.css, .ui-sec--msg).
     this.msgSec.el.classList.add('ui-sec--msg');
+    this.chat = new ChatPanel(ctx);
+    this.chatSec = section(tr('Conversa'), this.chat.el);
+    this.chatSec.el.hidden = true;
     this.social = new SocialSection(ctx);
     this.perm = new PermissionCard(ctx);
 
@@ -425,6 +432,7 @@ class AgentView {
       this.shellBox,
       this.shellsSec.el,
       nowSec.el,
+      this.chatSec.el,
       this.msgSec.el,
       this.social.el,
       this.tasksSec.el,
@@ -437,6 +445,11 @@ class AgentView {
 
   get agentId(): string {
     return this.id;
+  }
+
+  /** Gaveta fechada ou fora do agente: o chat para de buscar a conversa. */
+  closeChat(): void {
+    this.chat.close();
   }
 
   open(id: string): void {
@@ -630,6 +643,17 @@ class AgentView {
 
     // Mandar mensagem: só para principais presentes (com o recurso ligado e a página local; sem o plugin, a dica).
     setHidden(this.msgSec.el, this.composer.render(live, this.id) === 'off');
+    // Agente do chat: conversa pelo painel; nada de caixa do plugin nem terminal (ele roda sem tela).
+    setHidden(this.chatSec.el, !a.chat);
+    if (a.chat) {
+      this.chat.open(a.id);
+      setHidden(this.msgSec.el, true);
+      setHidden(this.termBtn, true);
+      setHidden(this.termWhy, true);
+    } else {
+      this.chat.close();
+      setHidden(this.termBtn, false);
+    }
 
     // Vida social (personalidade, carteira, rodas): só de quem está no escritório.
     if (live) this.social.render(a.id, now);
@@ -1026,7 +1050,10 @@ export class Drawer implements UiComponent {
     const mode = sel?.type ?? null;
     if (mode !== this.mode) {
       // Gaveta fechada ou fora do agente: o editor fecha, e ao reabrir começa do estado atual do agente.
-      if (this.mode === 'agent') this.agentView.character.close();
+      if (this.mode === 'agent') {
+        this.agentView.character.close();
+        this.agentView.closeChat();
+      }
       this.mode = mode;
       this.body.replaceChildren(...(mode === 'agent' ? [this.agentView.el] : mode === 'room' ? [this.roomView.el] : []));
       this.body.scrollTop = 0;
