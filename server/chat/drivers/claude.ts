@@ -72,19 +72,18 @@ function claudeParser(): StreamParser {
         }
       } else if (m.type === 'result') {
         finished = true;
+        // Rodada que falhou (inclusive por estourar o orçamento) também gastou: o uso conta no limite.
+        const u = m.usage ?? {};
+        out.push({
+          type: 'usage',
+          tokensIn: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0),
+          tokensOut: u.output_tokens ?? 0,
+          ...(typeof m.total_cost_usd === 'number' ? { costUsd: m.total_cost_usd, costIsCumulative: true } : {}),
+        });
         if (m.is_error) {
           const error = (Array.isArray(m.errors) && m.errors.join('\n')) || m.result || m.subtype || tr('erro');
           out.push({ type: 'done', ok: false, error: String(error) });
-        } else {
-          const u = m.usage ?? {};
-          out.push({
-            type: 'usage',
-            tokensIn: (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0),
-            tokensOut: u.output_tokens ?? 0,
-            ...(typeof m.total_cost_usd === 'number' ? { costUsd: m.total_cost_usd, costIsCumulative: true } : {}),
-          });
-          out.push({ type: 'done', ok: true });
-        }
+        } else out.push({ type: 'done', ok: true });
       }
       return out;
     },

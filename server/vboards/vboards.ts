@@ -229,7 +229,7 @@ export interface VBoardsServiceOptions {
   /** Novo agente; ausente = a fila não é buscada (dá para iniciar só com ele). */
   spawn?: { submit(raw: unknown): SpawnSubmit; get(id: string): SpawnInfo | undefined };
   /** Chat do escritório (server/chat): com ele, o "Iniciar" abre o agente pelo chat em vez do Novo agente. */
-  chat?: { open(raw: unknown): { agentId: string } | { error: string; reason: string } };
+  chat?: { open(raw: unknown): { agentId: string } | { error: string; reason: string }; outcome?(agentId: string): 'done' | 'failed' | undefined };
   /** Última resposta do agente (transcript). */
   reply?: (agentId: string) => string | undefined;
   booting?: () => boolean;
@@ -275,7 +275,7 @@ export class VBoardsService {
   }
 
   start(): void {
-    if (this.opts.spawn) void this.poll();
+    if (this.opts.spawn || this.opts.chat) void this.poll();
     this.checkTimer = setInterval(() => void this.check(), 5_000);
     this.checkTimer.unref?.();
   }
@@ -413,7 +413,10 @@ export class VBoardsService {
       }
       // Logo depois de subir, o escritório ainda pode não ter remontado a sessão.
       if (!agent && now - this.startedAt < STARTUP_GRACE_MS) continue;
-      const end = decideCompletion(l, agent);
+      // Agente do chat: vale o resultado da rodada (respondeu ou falhou), não só ter parado depois de começar.
+      const chatEnd = agent?.chat && this.opts.chat?.outcome ? this.opts.chat.outcome(l.agentId!) : null;
+      if (chatEnd === undefined) continue;
+      const end = chatEnd ?? decideCompletion(l, agent);
       if (!end) continue;
       l.state = end;
       l.summary = end === 'done' ? summaryText(this.opts.reply?.(l.agentId!)) : undefined;

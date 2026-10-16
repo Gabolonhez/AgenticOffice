@@ -533,6 +533,9 @@ describe('pedidos do chat do escritório', () => {
     expect('id' in r).toBe(true);
     const id = 'id' in r ? r.id : '';
     expect(registry.snapshot().get('chat:1')?.id).toBe(id);
+    expect(registry.detail(id)?.suggestions).toHaveLength(1);
+    const compound = registry.registerChat({ agentId: 'chat:1', sessionId: 'S', tool: 'Bash', input: { command: 'cd a && rm -rf b' }, timeoutMs: 300_000 });
+    expect(registry.detail('id' in compound ? compound.id : '')?.suggestions).toBeUndefined();
     const w = registry.wait(id, 10_000)!;
     expect(registry.decide(id, { behavior: 'allow' })).toBe('ok');
     expect(await w.result).toMatchObject({ status: 'decided', behavior: 'allow' });

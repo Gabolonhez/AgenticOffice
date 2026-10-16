@@ -29,6 +29,7 @@ export interface ChatProcess {
   stderr: NodeJS.ReadableStream;
   stdin: NodeJS.WritableStream;
   on(e: 'close', cb: (code: number | null) => void): void;
+  on(e: 'error', cb: (err: Error) => void): void;
 }
 export interface ChatServiceDeps {
   office: Office;
@@ -50,6 +51,14 @@ export interface ChatServiceDeps {
 type NewItem = ChatItem extends infer T ? (T extends ChatItem ? Omit<T, 'seq' | 'at'> : never) : never;
 
 export const MAX_CHAT_AGENTS = 8;
+
+/** Por que o chat está desligado (undefined = ligado). Abre processos com acesso total: a mesma trava do terminal. */
+export function chatOffReason(o: { inDocker: boolean; ptyOptIn: boolean; terminal: boolean; terminalReason?: string }): string | undefined {
+  if (o.inDocker) return tr('Chat com agentes indisponível no Docker: rode o servidor direto no computador.');
+  if (!o.ptyOptIn) return tr('Chat com agentes desligado: inicie o servidor com HABBLAUD_PTY=1.');
+  if (!o.terminal) return tr('Chat com agentes desligado pela trava do terminal ({0}).', [o.terminalReason ?? '']);
+  return undefined;
+}
 const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'antigravity'];
 const DRIVERS: Record<Provider, ChatDriver> = { claude: claudeDriver, codex: codexDriver, antigravity: agyDriver };
 const CLI_NAMES: Record<Provider, string> = { claude: 'claude', codex: 'codex', antigravity: 'agy' };
@@ -254,6 +263,22 @@ export class ChatService {
     return 'ok';
   }
 
+  /** Desligando o servidor: encerra as rodadas em andamento (os filhos sobreviveriam ao processo). */
+  stopAll(): void {
+    for (const rt of this.agents.values()) this.interrupt(rt, tr('Rodada interrompida.'));
+  }
+
+  /** Como terminou a última rodada: 'done' se o agente respondeu; undefined enquanto roda. */
+  turnOutcome(agentId: string): 'done' | 'failed' | undefined {
+    const rt = this.agents.get(agentId);
+    if (!rt || rt.proc || rt.rec.running) return undefined;
+    const items = rt.rec.items;
+    let i = items.length - 1;
+    while (i >= 0 && items[i].kind !== 'user') i--;
+    if (i < 0) return undefined;
+    return items.slice(i + 1).some((x) => x.kind === 'assistant') ? 'done' : 'failed';
+  }
+
   isChatSession(sessionId: string): boolean {
     for (const rt of this.agents.values()) if (rt.rec.providerSessionId === sessionId) return true;
     return false;
@@ -304,6 +329,8 @@ export class ChatService {
     const rt = this.agents.get(agentId);
     if (!rt?.rec.isolated) return;
     Object.assign(rt.rec.isolated, change);
+    // A cópia descartada não existe mais: o agente volta a trabalhar na pasta do projeto.
+    if (change.discarded) rt.rec.cwd = rt.rec.folder;
     if (notice) this.pushItem(rt, { kind: 'notice', level: 'info', text: notice });
     else this.store.save(rt.rec);
   }
@@ -378,7 +405,7 @@ export class ChatService {
       this.finishOffice(rt);
       return;
     }
-    const first = !rec.items.some((i) => i.kind === 'usage') && !(rec.provider !== 'claude' && rec.providerSessionId);
+    const first = !rec.sessionStarted;
     const spec: TurnSpec = {
       folder: rec.cwd,
       prompt,
@@ -417,6 +444,12 @@ export class ChatService {
       return;
     }
     rt.proc = proc;
+    // Falha ao abrir (pasta sumiu, executável apagado) chega como 'error' depois; sem ouvinte, derrubaria o servidor.
+    let spawnError = '';
+    proc.on('error', (err) => {
+      spawnError ||= err.message;
+    });
+    proc.stdin.on('error', () => {});
     proc.stdin.end(inv.stdin ?? '');
 
     const parser = driver.parser();
@@ -435,7 +468,7 @@ export class ChatService {
     }
     proc.on('close', (code) => {
       void rlDone.then(() => {
-        for (const e of parser.end(code, stderr)) this.apply(rt, e);
+        for (const e of parser.end(code, spawnError || stderr)) this.apply(rt, e);
         this.endTurn(rt);
       });
     });
@@ -454,8 +487,9 @@ export class ChatService {
     const id = rec.agentId;
     switch (e.type) {
       case 'session':
-        if (!rec.providerSessionId) {
-          rec.providerSessionId = e.id;
+        if (!rec.providerSessionId) rec.providerSessionId = e.id;
+        if (!rec.sessionStarted) {
+          rec.sessionStarted = true;
           this.store.save(rec);
         }
         return;

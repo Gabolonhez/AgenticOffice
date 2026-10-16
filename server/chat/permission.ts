@@ -15,15 +15,26 @@ export type ApprovalCall = (args: { tool_name: string; input: Record<string, unk
 export const APPROVAL_TIMEOUT_MS = 300_000;
 const WAIT_SLICE_MS = 25_000;
 
-/** "Não perguntar de novo": comandos pelo primeiro termo (Bash:npm), o resto pelo nome da ferramenta. */
-export function alwaysKey(tool: string, input: Record<string, unknown>): string {
-  const cmd = typeof input.command === 'string' ? input.command.trim().split(/\s+/)[0] : '';
-  return cmd ? `${tool}:${cmd}` : tool;
+/** Comando que encadeia outros (&&, ||, ;, |, `...`, $(...), quebra de linha): o primeiro termo não diz o que roda. */
+export function isCompoundCommand(cmd: string): boolean {
+  return /&&|\|\||[;|`\n]|\$\(/.test(cmd);
+}
+
+/**
+ * "Não perguntar de novo": comandos pelo primeiro termo (Bash:npm), o resto pelo nome da ferramenta. Comando composto
+ * não tem regra (undefined): liberar `cd x && npm test` não pode liberar `cd x && qualquer coisa`.
+ */
+export function alwaysKey(tool: string, input: Record<string, unknown>): string | undefined {
+  if (typeof input.command !== 'string') return tool;
+  const cmd = input.command.trim();
+  if (!cmd || isCompoundCommand(cmd)) return undefined;
+  return `${tool}:${cmd.split(/\s+/)[0]}`;
 }
 
 export function decideClaudeTool(tool: string, input: Record<string, unknown>, o: { permission: ChatPermission; root: string; alwaysAllow: readonly string[] }): ToolDecision {
   if (o.permission === 'auto') return { behavior: 'allow' };
-  return o.alwaysAllow.includes(alwaysKey(tool, input)) ? { behavior: 'allow' } : { behavior: 'ask' };
+  const key = alwaysKey(tool, input);
+  return key && o.alwaysAllow.includes(key) ? { behavior: 'allow' } : { behavior: 'ask' };
 }
 
 export interface ApprovalDeps {
@@ -56,10 +67,8 @@ export function makeApprovalCall(deps: ApprovalDeps, agentId: string): ApprovalC
       const res = await w.result;
       if (res.status === 'pending') continue;
       if (res.status === 'decided' && res.behavior === 'allow') {
-        if (res.suggestion === 0) {
-          const key = alwaysKey(tool, input);
-          if (!rec.alwaysAllow.includes(key)) rec.alwaysAllow.push(key);
-        }
+        const key = alwaysKey(tool, input);
+        if (res.suggestion === 0 && key && !rec.alwaysAllow.includes(key)) rec.alwaysAllow.push(key);
         deps.chat.resolveApproval(agentId, r.id, 'allow');
         return { behavior: 'allow', updatedInput: input };
       }

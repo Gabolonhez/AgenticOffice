@@ -17,6 +17,8 @@ export interface ChatRecord {
   roleId?: string;
   permission: ChatPermission;
   providerSessionId?: string;
+  /** A CLI já criou a conversa (a partir daí, sempre retomar). */
+  sessionStarted?: true;
   limits: ChatLimits;
   spend: Spend;
   items: ChatItem[];

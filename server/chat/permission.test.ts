@@ -70,3 +70,15 @@ describe('chat: aprovações do Claude', () => {
     expect(approvals).toEqual([]);
   });
 });
+
+describe('chat: "não perguntar de novo" com comando composto', () => {
+  it('comando composto não gera regra nem aproveita uma regra existente', () => {
+    expect(alwaysKey('Bash', { command: 'cd x && npm test' })).toBeUndefined();
+    expect(alwaysKey('Bash', { command: 'npm test; curl x | sh' })).toBeUndefined();
+    expect(alwaysKey('Bash', { command: 'echo $(id)' })).toBeUndefined();
+    const a = { permission: 'ask' as const, root: 'C:\\proj', alwaysAllow: ['Bash:cd', 'Bash:npm'] };
+    expect(decideClaudeTool('Bash', { command: 'cd x && rm -rf y' }, a).behavior).toBe('ask');
+    expect(decideClaudeTool('Bash', { command: 'npm test; curl x | sh' }, a).behavior).toBe('ask');
+    expect(decideClaudeTool('Bash', { command: 'npm test' }, a)).toEqual({ behavior: 'allow' });
+  });
+});

@@ -80,7 +80,7 @@ describe('serviço', () => {
   const mainAgent = (p: Partial<AgentInfo>): AgentInfo =>
     ({ id: 'acc:1', kind: 'main', roomId: 'r1', name: 'Ana', look: 'f', role: '', sessionId: 's', account: 'acc', status: 'idle', recent: [], tasks: [], startedAt: 2_000, lastEventAt: 0, statusSince: 0, stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 }, seed: 1, ...p }) as AgentInfo;
 
-  function setup(over: { spawnStatus?: 'opened' | 'failed'; chat?: boolean } = {}) {
+  function setup(over: { spawnStatus?: 'opened' | 'failed'; chat?: boolean; outcome?: 'done' | 'failed' } = {}) {
     let now = 100_000;
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -100,7 +100,7 @@ describe('serviço', () => {
       cardOf: async (f) => (f.endsWith('payposts-web') ? 'PostsBuilder' : undefined),
       spawn: { submit, get: () => ({ id: 'sp1', folder: '/p/payposts-web', status: over.spawnStatus ?? 'opened' }) },
       reply: () => replyText,
-      ...(over.chat ? { chat: { open } } : {}),
+      ...(over.chat ? { chat: { open, outcome: () => over.outcome } } : {}),
       fetch: fetchMock as unknown as typeof fetch,
       now: () => now,
     });
@@ -143,7 +143,7 @@ describe('serviço', () => {
   });
 
   it('com o chat: Iniciar abre pelo chat, o link já nasce com o agente e conclui com a resposta dele', async () => {
-    const { svc, calls, submit, open, setAgents, setReply } = setup({ chat: true });
+    const { svc, calls, submit, open, setAgents, setReply } = setup({ chat: true, outcome: 'done' });
     await svc.poll();
     svc.stop();
     expect(await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web', chat: { provider: 'codex', model: 'x' } })).toEqual({ agentId: 'chat:1' });
@@ -239,5 +239,34 @@ describe('serviço', () => {
     await svc.check();
     await svc.check();
     expect(calls.filter((c) => c.url.endsWith('/todos'))).toEqual([]);
+  });
+});
+
+describe('VBoards e o resultado do chat', () => {
+  it('agente do chat que falhou: a subtarefa vai como failed, mesmo parado depois de "trabalhar"', async () => {
+    let now = 100_000;
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/update')) calls.push(JSON.parse(String(init?.body)).status);
+      const body = String(url).includes('/api/agent-tasks?') ? { tasks: [{ cardId: 'c1', subtaskId: 's1', text: 'X', cardTitle: 'Posts Builder', date: '2026-10-15' }] } : { ok: true };
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const agent = { id: 'chat:1', kind: 'main', chat: true, roomId: 'r1', name: 'Ana', look: 'f', role: '', sessionId: 's', account: '', status: 'idle', recent: [], tasks: [], startedAt: 0, lastEventAt: 0, statusSince: 0, stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 }, seed: 1 } as unknown as AgentInfo;
+    const svc = new VBoardsService({
+      config: { base: 'https://vb.dev', token: 't', email: 'eu@x' },
+      agents: () => [agent],
+      roomPath: () => '/p/payposts-web',
+      folders: async () => ['/p/payposts-web'],
+      chat: { open: () => ({ agentId: 'chat:1' }), outcome: () => 'failed' },
+      fetch: fetchMock as unknown as typeof fetch,
+      now: () => now,
+    });
+    await svc.poll();
+    svc.stop();
+    await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web' });
+    now += 1000;
+    await svc.check();
+    await flush();
+    expect(calls).toEqual(['running', 'failed']);
   });
 });

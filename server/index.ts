@@ -61,7 +61,7 @@ import { BuildingUplink } from './world/uplink';
 import { WorldViewer } from './world/viewer';
 import { lastReply, loadVBoardsConfig, VBoardsService } from './vboards/vboards';
 import { createChatRoutes } from './chat/http';
-import { ChatService } from './chat/service';
+import { ChatService, chatOffReason } from './chat/service';
 import { createWorktreeOps } from './chat/worktree';
 
 const config = loadConfig();
@@ -334,6 +334,8 @@ const knownFolders = async (limit?: number) => {
   const rooms = snap.rooms.filter((r) => !isDemoId(r.id)).map((r) => ({ path: r.path, lastAt: last.get(r.id) ?? 0 }));
   return recentFolders(history ? await history.list().catch(() => []) : [], rooms, limit);
 };
+// Chat com agentes: abre processos com acesso total, então segue a mesma trava do terminal (e HABBLAUD_PTY, fora do Docker).
+const chatOff = chatOffReason({ inDocker: config.inDocker, ptyOptIn, terminal: config.terminal, terminalReason: terminalOffReason(process.env, config.host, config.inDocker) });
 // Ponte com o VBoards (vboards/vboards.ts): git config --global vboards.url/vboards.token/user.email ou
 // HABBLAUD_VBOARDS_URL/_TOKEN/_EMAIL; HABBLAUD_VBOARDS=0 desliga. A fila só é buscada com o Novo agente ligado.
 const vboardsConfig = await loadVBoardsConfig(process.env);
@@ -347,7 +349,9 @@ const vboards =
         folders: async () => (await knownFolders(100)).map((f) => f.path),
         spawn,
         // Com o chat (fora do Docker e com HABBLAUD_PTY=1), o "Iniciar" abre o agente por ele (o chat nasce mais abaixo).
-        chat: !config.inDocker && ptyOptIn ? { open: (raw: unknown) => late.chat?.open(raw) ?? { error: 'unavailable', reason: tr('Chat com agentes indisponível no Docker: rode o servidor direto no computador.') } } : undefined,
+        chat: chatOff
+          ? undefined
+          : { open: (raw: unknown) => late.chat?.open(raw) ?? { error: 'unavailable', reason: chatOff ?? '' }, outcome: (id: string) => late.chat?.turnOutcome(id) },
         reply: (id) => {
           const fromChat = late.chat?.lastReply(id);
           if (fromChat) return fromChat;
@@ -384,11 +388,6 @@ const ticker = setInterval(() => {
 
 // Chat com agentes (server/chat): abre Claude Code, Codex e Antigravity sem tela e conversa pelo escritório. Fora do
 // Docker e com HABBLAUD_PTY=1 (abre processos na máquina, a mesma escolha do terminal interativo).
-const chatOff = config.inDocker
-  ? tr('Chat com agentes indisponível no Docker: rode o servidor direto no computador.')
-  : !ptyOptIn
-    ? tr('Chat com agentes desligado: inicie o servidor com HABBLAUD_PTY=1.')
-    : undefined;
 // As pastas conhecidas são assíncronas (histórico); o chat consulta a última lista, renovada a cada 30 s.
 let chatFolders: Array<{ path: string; name?: string }> = [];
 const refreshChatFolders = () =>
@@ -635,6 +634,7 @@ function shutdown(signal: string): void {
   accounts.stop();
   hub.stop();
   terminals?.stop();
+  chat?.stopAll();
   timeline?.stop();
   permissions?.stop();
   messages?.stop();

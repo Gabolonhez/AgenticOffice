@@ -3377,4 +3377,5 @@ export const ES: Readonly<Record<string, string>> = {
   "sem limite": "sin límite",
   "sorteado": "al azar",
   "Tarefa do VBoards: ao começar, ela fica ligada a este agente.": "Tarea de VBoards: al empezar, queda ligada a este agente.",
+  "Chat com agentes desligado pela trava do terminal ({0}).": "Chat con agentes apagado por el bloqueo de la terminal ({0}).",
 };

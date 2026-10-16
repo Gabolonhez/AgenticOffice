@@ -465,8 +465,10 @@ export class PermissionRegistry {
     if (view.input) info.input = view.input;
     if (view.inputKind) info.inputKind = view.inputKind;
     // "Aprovar e não perguntar de novo" (sugestão 0): vale para esta conversa, guardado pelo chat (alwaysAllow).
-    const cmd = typeof p.input.command === 'string' ? p.input.command.trim().split(/\s+/)[0] : '';
-    info.suggestions = [{ index: 0, rules: [cmd ? `${p.tool}(${cmd}:*)` : p.tool], destination: 'session' }];
+    // Comando composto (&&, ;, |...) não ganha a sugestão: o primeiro termo não diz o que roda.
+    const command = typeof p.input.command === 'string' ? p.input.command.trim() : undefined;
+    if (command === undefined) info.suggestions = [{ index: 0, rules: [p.tool], destination: 'session' }];
+    else if (command && !/&&|\|\||[;|`\n]|\$\(/.test(command)) info.suggestions = [{ index: 0, rules: [`${p.tool}(${command.split(/\s+/)[0]}:*)`], destination: 'session' }];
     this.pending.set(id, { info, chat: true, agentId: p.agentId, sessionId: p.sessionId, signature: '', lastScanAt: 0, waiters: new Set(), idleSince: now });
     this.opts.office.addActivity(p.agentId, { id: `${p.agentId}#perm:${id}`, at: now, kind: 'wait', icon: '🔐', text: truncate(tr('Pede permissão: {0}', [desc.text]), 46), detail: view.title, tool: 'PermissionRequest' }, false);
     this.opts.office.noticePermission(p.agentId, desc.text);

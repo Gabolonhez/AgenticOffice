@@ -39,10 +39,13 @@ describe('chat: driver do Claude', () => {
     expect(ev.filter((e) => e.type === 'thinking').length).toBeGreaterThan(0);
   });
 
-  it('erro: done com a mensagem de errors[], sem uso de custo', () => {
+  it('erro: done com a mensagem de errors[]; o custo da rodada que falhou também conta', () => {
     const ev = run('claude-error.jsonl', 1);
     expect(ev.at(-1)).toEqual({ type: 'done', ok: false, error: 'No conversation found with session ID: 00000000-0000-4000-8000-000000000000' });
-    expect(ev.some((e) => e.type === 'usage' && e.costUsd !== undefined)).toBe(false);
+    const p = claudeDriver.parser();
+    const budget = p.line(JSON.stringify({ type: 'result', subtype: 'error_max_budget_usd', is_error: true, session_id: 's', total_cost_usd: 0.52, usage: { input_tokens: 10, output_tokens: 3 }, errors: ['budget'] }));
+    expect(budget).toContainEqual({ type: 'usage', tokensIn: 10, tokensOut: 3, costUsd: 0.52, costIsCumulative: true });
+    expect(budget.at(-1)).toEqual({ type: 'done', ok: false, error: 'budget' });
   });
 
   it('linha quebrada ou desconhecida é ignorada; sem result = falha com stderr', () => {

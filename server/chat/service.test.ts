@@ -6,7 +6,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Office } from '../model/office';
 import { NameStore } from '../model/names';
-import { ChatService, defaultKill, type ChatProcess, type ChatServiceDeps } from './service';
+import { ChatService, chatOffReason, defaultKill, type ChatProcess, type ChatServiceDeps } from './service';
 
 const fixture = (n: string) => readFileSync(join(__dirname, 'fixtures', n), 'utf8').split(/\r?\n/).filter(Boolean);
 
@@ -197,5 +197,69 @@ describe('chat: ChatService', () => {
     await flush();
     const tool = chat.view(id)!.items.find((i) => i.kind === 'tool');
     expect(tool && 'output' in tool ? tool.output : '').not.toContain(secret);
+  });
+});
+
+describe('chat: correções da revisão', () => {
+  it('erro ao abrir o processo (pasta sumiu) vira aviso, sem derrubar o servidor', async () => {
+    const { chat, spawned } = setup();
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }));
+    const p = spawned[0].proc;
+    p.emit('error', Object.assign(new Error('spawn claude.exe ENOENT'), { code: 'ENOENT' }));
+    p.stdin.emit('error', new Error('EPIPE'));
+    p.finish([], -4058);
+    await flush();
+    expect(chat.view(id)!.items.at(-1)).toMatchObject({ kind: 'notice', level: 'error', text: 'spawn claude.exe ENOENT' });
+    expect(chat.view(id)!.state.phase).toBe('idle');
+  });
+
+  it('descartar a cópia volta o agente para a pasta do projeto', async () => {
+    const { chat, spawned } = setup({ worktrees: { create: async () => ({ path: 'C:\\wt\\a', branch: 'agentic/a', base: 'b' }), summary: async () => ({ files: 0, added: 0, removed: 0, commits: 0, stat: '' }), merge: async () => ({ ok: true as const }), discard: async () => ({ ok: true as const }) } });
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi', isolated: true }));
+    await flush();
+    expect(spawned[0].cwd).toBe('C:\\wt\\a');
+    spawned[0].proc.finish(fixture('claude-turn.jsonl'));
+    await flush();
+    chat.markIsolated(id, { discarded: true });
+    expect(chat.send(id, { text: 'de novo' })).toBe('ok');
+    expect(spawned[1].cwd).toBe('C:\\proj');
+  });
+
+  it('1ª rodada do Claude interrompida depois de criar a sessão: a próxima retoma (não repete --session-id)', async () => {
+    const { chat, spawned } = setup();
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }));
+    const sid = spawned[0].args[spawned[0].args.indexOf('--session-id') + 1];
+    chat.stop(id);
+    spawned[0].proc.finish(fixture('claude-turn.jsonl').slice(0, 2), 1);
+    await flush();
+    expect(chat.send(id, { text: 'de novo' })).toBe('ok');
+    expect(spawned[1].args.slice(4, 6)).toEqual(['--resume', sid]);
+  });
+
+  it('stopAll encerra as rodadas em andamento (desligar o servidor)', () => {
+    const { chat, kills } = setup();
+    chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' });
+    chat.stopAll();
+    expect(kills).toEqual([4242]);
+  });
+
+  it('resultado da última rodada: feita com resposta, falha sem resposta, nada enquanto roda', async () => {
+    const { chat, spawned } = setup();
+    const ok = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }));
+    expect(chat.turnOutcome(ok)).toBeUndefined();
+    spawned[0].proc.finish(fixture('claude-turn.jsonl'));
+    await flush();
+    expect(chat.turnOutcome(ok)).toBe('done');
+    const bad = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }));
+    spawned[1].proc.finish(fixture('claude-error.jsonl'), 1);
+    await flush();
+    expect(chat.turnOutcome(bad)).toBe('failed');
+  });
+
+  it('chat desligado: Docker, sem HABBLAUD_PTY ou com a trava do terminal', () => {
+    expect(chatOffReason({ inDocker: true, ptyOptIn: true, terminal: true })).toBe('Chat com agentes indisponível no Docker: rode o servidor direto no computador.');
+    expect(chatOffReason({ inDocker: false, ptyOptIn: false, terminal: true })).toBe('Chat com agentes desligado: inicie o servidor com HABBLAUD_PTY=1.');
+    expect(chatOffReason({ inDocker: false, ptyOptIn: true, terminal: false, terminalReason: 'HABBLAUD_TERMINAL=0' })).toBe('Chat com agentes desligado pela trava do terminal (HABBLAUD_TERMINAL=0).');
+    expect(chatOffReason({ inDocker: false, ptyOptIn: true, terminal: true })).toBeUndefined();
   });
 });
