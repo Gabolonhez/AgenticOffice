@@ -5,7 +5,7 @@
 // - conclusão: o agente aberto para a subtarefa fica ligado a ela (<dataDir>/vboards-links.json, sobrevive a um
 //   reinício); quando ele termina o turno depois de ter trabalhado, ou a sessão acaba, a subtarefa vira 'done' com a
 //   última resposta como resumo (ou 'failed', se nunca trabalhou). Uma vez por subtarefa;
-// - conversas: cada agente principal do Claude Code (fora os ligados a uma subtarefa) vira um item no card do projeto
+// - conversas: cada agente principal do Claude Code (fora os ligados a uma subtarefa) que mexeu em código (editou arquivos ou fez commit) vira um item no card do projeto
 //   (POST /api/agent-tasks/todos): o título da conversa, done quando terminou o turno depois de trabalhar, com o
 //   resumo da última resposta. ~15 s de calma e só quando mudou.
 // O token só vai no cabeçalho Authorization: nunca em log, snapshot ou página. Git sem shell (execFile).
@@ -139,6 +139,18 @@ export function decideCompletion(link: Pick<TaskLink, 'worked'>, agent: Pick<Age
   return worked && agent.status === 'idle' ? 'done' : undefined;
 }
 
+const EDIT_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit|apply_patch|file_change)$/;
+const GIT_COMMIT = /\bgit\s+(?:-\S+\s+)*commit\b/;
+
+/**
+ * A conversa mexeu em código: linhas somadas/removidas (total do transcript) ou, nas atividades recentes, uma edição
+ * de arquivo ou um `git commit`. Conversa só de perguntas e respostas não conta.
+ */
+export function changedCode(a: Pick<AgentInfo, 'stats' | 'recent' | 'activity'>): boolean {
+  if ((a.stats?.linesAdded ?? 0) > 0 || (a.stats?.linesRemoved ?? 0) > 0) return true;
+  return [...(a.recent ?? []), ...(a.activity ? [a.activity] : [])].some((x) => (!!x.tool && EDIT_TOOLS.test(x.tool)) || (!x.error && /^(Bash|shell|command_execution)$/i.test(x.tool ?? '') && GIT_COMMIT.test(x.detail ?? x.text)));
+}
+
 /** Item da conversa no card: o título, feito ou não e, feito, o resumo. */
 export interface ConversationItem {
   text: string;
@@ -248,6 +260,8 @@ export class VBoardsService {
   private readonly todos = new TodoTracker();
   /** Agentes de conversa (sem subtarefa) que já trabalharam. */
   private readonly worked = new Set<string>();
+  /** Agentes que já mexeram em código (fica marcado: `recent` rola e perde as edições antigas). */
+  private readonly coded = new Set<string>();
   private readonly cards = new Map<string, { card?: string; at: number }>();
   private pollTimer?: ReturnType<typeof setTimeout>;
   private checkTimer?: ReturnType<typeof setInterval>;
@@ -467,6 +481,8 @@ export class VBoardsService {
     for (const a of agents) {
       const text = conversationText(a.title);
       if (!text) continue;
+      if (changedCode(a)) this.coded.add(a.id);
+      if (!this.coded.has(a.id)) continue;
       if (hasWorked(a)) this.worked.add(a.id);
       const done = decideCompletion({ worked: this.worked.has(a.id) }, a) === 'done';
       const summary = done ? summaryText(this.opts.reply?.(a.id)) : undefined;

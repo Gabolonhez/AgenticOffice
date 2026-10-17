@@ -78,7 +78,7 @@ describe('debounce das conversas', () => {
 describe('serviço', () => {
   const cfg = { base: 'https://vb.dev', token: 'segredo', email: 'eu@x' };
   const mainAgent = (p: Partial<AgentInfo>): AgentInfo =>
-    ({ id: 'acc:1', kind: 'main', roomId: 'r1', name: 'Ana', look: 'f', role: '', sessionId: 's', account: 'acc', status: 'idle', recent: [], tasks: [], startedAt: 2_000, lastEventAt: 0, statusSince: 0, stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0 }, seed: 1, ...p }) as AgentInfo;
+    ({ id: 'acc:1', kind: 'main', roomId: 'r1', name: 'Ana', look: 'f', role: '', sessionId: 's', account: 'acc', status: 'idle', recent: [], tasks: [], startedAt: 2_000, lastEventAt: 0, statusSince: 0, stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0, linesAdded: 1 }, seed: 1, ...p }) as AgentInfo;
 
   function setup(over: { spawnStatus?: 'opened' | 'failed'; chat?: boolean; outcome?: 'done' | 'failed' } = {}) {
     let now = 100_000;
@@ -182,7 +182,7 @@ describe('serviço', () => {
     await svc.poll();
     svc.stop();
     await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web' });
-    const worked = { toolCalls: 1, tokensIn: 10, tokensOut: 5, subagents: 0 };
+    const worked = { toolCalls: 1, tokensIn: 10, tokensOut: 5, subagents: 0, linesAdded: 2 };
     setAgents([mainAgent({ id: 'chat:1', chat: true, title: 'Corrigir o login', status: 'working', stats: worked }), mainAgent({ id: 'chat:2', chat: true, title: 'Ajustar o paywall', status: 'working', stats: worked })]);
     for (let i = 0; i < 2; i++) {
       await svc.check();
@@ -236,6 +236,29 @@ describe('serviço', () => {
     await settle();
     expect(posts().at(-1)).toEqual(item(true, 'Segundo resumo'));
     expect(posts()).toHaveLength(4);
+  });
+
+  it('só conversa que mexeu em código vira item: pergunta e resposta não; edição ou commit sim', async () => {
+    const { svc, calls, setAgents, tick } = setup();
+    const noStats = { toolCalls: 3, tokensIn: 1, tokensOut: 1, subagents: 0 };
+    const act = (tool: string, detail = '') => ({ id: tool, kind: 'tool', icon: '', text: tool, tool, detail, at: 1 }) as AgentInfo['recent'][number];
+    const titles = () => calls.filter((c) => c.url.endsWith('/todos')).map((c) => JSON.parse(String(c.init.body)).todos[0].text);
+    const settle = async () => {
+      await svc.check();
+      tick(TODOS_QUIET_MS);
+      await svc.check();
+      await svc.check();
+    };
+    setAgents([mainAgent({ id: 'a:1', title: 'Só perguntas', status: 'idle', stats: noStats, recent: [act('Read'), act('Bash', 'git status')] })]);
+    await settle();
+    expect(titles()).toEqual([]);
+    setAgents([
+      mainAgent({ id: 'a:1', title: 'Só perguntas', status: 'idle', stats: noStats, recent: [act('Read')] }),
+      mainAgent({ id: 'a:2', title: 'Com edição', status: 'idle', stats: noStats, recent: [act('Edit')] }),
+      mainAgent({ id: 'a:3', title: 'Só commit', status: 'idle', stats: noStats, recent: [act('Bash', 'git commit -m "x"')] }),
+    ]);
+    await settle();
+    expect(titles().sort()).toEqual(['Com edição', 'Só commit']);
   });
 
   it('agente ligado a uma subtarefa não vira item de conversa', async () => {
