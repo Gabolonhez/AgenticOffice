@@ -372,6 +372,17 @@ export class ChatService {
     return undefined;
   }
 
+  /** Conversas com atividade desde `since`: os pedidos do usuário de hoje e a última resposta (resumo do dia). */
+  conversationsSince(since: number): Array<{ name: string; folder: string; prompts: string[]; lastReply?: string; working: boolean; lastAt: number }> {
+    return [...this.agents.values()].flatMap(({ rec }) => {
+      const lastAt = rec.items.at(-1)?.at ?? 0;
+      const working = !!this.deps.office.get(rec.agentId) && ['working', 'waiting'].includes(this.deps.office.get(rec.agentId)!.status);
+      if (lastAt < since && !working) return [];
+      const prompts = rec.items.flatMap((i) => (i.kind === 'user' && i.at >= since && !i.from ? [i.text] : []));
+      return [{ name: this.deps.office.get(rec.agentId)?.name || rec.name || rec.agentId, folder: rec.folder, prompts, lastReply: this.lastReply(rec.agentId), working, lastAt }];
+    });
+  }
+
   tokenOwner(token: string): string | undefined {
     for (const [id, rt] of this.agents) if (rt.token === token) return id;
     return undefined;

@@ -4,6 +4,7 @@
 // Bearer do próprio agente.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tr } from '../../shared/i18n';
+import type { DaySummary, SummaryMode } from '../../shared/summary';
 import type { Provider } from '../../shared/types';
 import { HttpError, readJson, sendJson } from '../http/app';
 import { ptyRequestProblem } from '../http/pty';
@@ -27,6 +28,8 @@ export interface ChatRouteDeps {
   /** Listas que rodam um agente por item (runs.ts); sem ela, 404. */
   runs?: Pick<RunService, 'list' | 'get' | 'create' | 'stop' | 'continue' | 'merge' | 'discard'>;
   /** Gatilhos (triggers.ts); sem eles, 404. */
+  /** Resumo do dia (server/summary); sem ele, 404. */
+  summary?: { generate(mode: SummaryMode): Promise<DaySummary>; last(): DaySummary | undefined };
   triggers?: Pick<TriggerService, 'list' | 'history' | 'create' | 'update' | 'remove' | 'test'>;
 }
 
@@ -113,6 +116,14 @@ export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
     if (problem) {
       req.resume();
       return sendJson(res, 403, { error: problem });
+    }
+
+    if (path === '/api/summary/day') {
+      if (!d.summary) return sendJson(res, 404, { error: tr('rota desconhecida') });
+      if (method === 'GET') return sendJson(res, 200, d.summary.last() ?? {});
+      if (method !== 'POST') return notAllowed(res, 'GET, POST');
+      const body = (await readJson(req)) as { mode?: unknown } | null;
+      return sendJson(res, 200, await d.summary.generate(body?.mode === 'list' ? 'list' : 'ai'));
     }
 
     if (path === '/api/chat/links') {

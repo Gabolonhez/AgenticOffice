@@ -460,7 +460,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       }
       return true;
     }
-    if (path === '/api/chat' || path.startsWith('/api/chat/')) {
+    if (path === '/api/chat' || path.startsWith('/api/chat/') || path === '/api/summary/day') {
       // Abre processos na máquina: pela porta remota só com "chat" liberado, e o MCP nunca (o resto da trava fica em
       // chat/http.ts, que recebe o mesmo critério).
       if (isRemote(req) && (!trusted(req, 'chat') || path.startsWith('/api/chat/mcp/'))) {

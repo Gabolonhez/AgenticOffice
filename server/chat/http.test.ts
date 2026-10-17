@@ -46,11 +46,16 @@ async function start() {
     remove: (id: string) => id === 't1',
     test: (id: string) => (id === 't1' ? 'ok' : 'not-found'),
   } as unknown as ChatRouteDeps['triggers'];
-  const routes = createChatRoutes({ chat, folders: () => [], accounts: () => [], delegation, runs, triggers });
+  const modes: string[] = [];
+  const summary = {
+    generate: async (mode: string) => (modes.push(mode), mode === 'ai' ? { text: 'IA', costUsd: 0.001, generatedAt: 1 } : { text: 'lista', generatedAt: 1 }),
+    last: () => undefined,
+  } as unknown as ChatRouteDeps['summary'];
+  const routes = createChatRoutes({ chat, folders: () => [], accounts: () => [], delegation, runs, triggers, summary });
   const server = http.createServer((req, res) => routes(req, res, new URL(req.url ?? '/', 'http://x')));
   servers.push(server);
   await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
-  return { port: (server.address() as AddressInfo).port, afters };
+  return { port: (server.address() as AddressInfo).port, afters, modes };
 }
 
 function raw(port: number, path: string, opts: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<{ status: number; body: string }> {
@@ -75,6 +80,19 @@ describe('chat: rotas HTTP', () => {
     expect(JSON.parse(lan.body).error).toBe('abra o Habblaud por http://localhost para usar o terminal interativo');
     const evil = await raw(port, '/api/chat/agents', { method: 'POST', headers: { ...json, origin: 'http://evil' }, body: '{}' });
     expect(evil.status).toBe(403);
+  });
+
+  it('resumo do dia: POST devolve IA (padrão) ou lista; só pelo próprio computador', async () => {
+    const { port, modes } = await start();
+    const ai = await raw(port, '/api/summary/day', { method: 'POST', headers: json, body: '{}' });
+    expect(JSON.parse(ai.body)).toEqual({ text: 'IA', costUsd: 0.001, generatedAt: 1 });
+    const list = await raw(port, '/api/summary/day', { method: 'POST', headers: json, body: '{"mode":"list"}' });
+    expect(JSON.parse(list.body).text).toBe('lista');
+    expect(modes).toEqual(['ai', 'list']);
+    expect(JSON.parse((await raw(port, '/api/summary/day')).body)).toEqual({});
+    expect((await raw(port, '/api/summary/day', { method: 'POST', headers: { ...json, host: '192.168.0.10' }, body: '{}' })).status).toBe(403);
+    expect((await raw(port, '/api/summary/day', { method: 'POST', headers: { ...json, origin: 'http://evil' }, body: '{}' })).status).toBe(403);
+    expect(modes).toHaveLength(2);
   });
 
   it('MCP exige o Bearer do próprio agente', async () => {

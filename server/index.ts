@@ -62,6 +62,7 @@ import { WorldViewer } from './world/viewer';
 import { lastReply, loadVBoardsConfig, VBoardsService } from './vboards/vboards';
 import { Delegation } from './chat/delegation';
 import { createChatRoutes } from './chat/http';
+import { claudeRunner, DaySummaryService, gitSubjectsToday, summaryCwd } from './summary/service';
 import { ChatService, chatOffReason } from './chat/service';
 import { createWorktreeOps } from './chat/worktree';
 import { RunService } from './chat/runs';
@@ -417,6 +418,22 @@ const triggers =
   chat && permissions
     ? new TriggerService({ chat, approve: officeApprover({ office, registry: permissions }), roleName: (id) => chat.roles.get(id)?.name, folders: () => chatFolders, file: join(config.dataDir, 'chat', 'triggers.json') })
     : undefined;
+// Resumo do dia (server/summary): atividade de hoje no escritório, conversas do chat e commits das pastas conhecidas.
+const daySummary = chat
+  ? new DaySummaryService({
+      runner: claudeRunner(summaryCwd(config.dataDir)),
+      gather: async (since) => {
+        const agents = office.list().filter((a) => a.kind === 'main' && !a.chat && office.roomPath(a.roomId));
+        const convs = chat.conversationsSince(since);
+        const folders = [...new Set([...agents.map((a) => office.roomPath(a.roomId)!), ...convs.map((c) => c.folder), ...chatFolders.map((f) => f.path)])].slice(0, 25);
+        return {
+          agents: agents.map((a) => ({ project: office.roomPath(a.roomId)!, title: a.title, working: a.status === 'working' || a.status === 'waiting', current: a.activity?.text, recent: a.recent, lastEventAt: a.lastEventAt })),
+          chats: convs.map((c) => ({ project: c.folder, name: c.name, prompts: c.prompts, lastReply: c.lastReply, working: c.working, lastAt: c.lastAt })),
+          commits: await Promise.all(folders.map(async (project) => ({ project, subjects: await gitSubjectsToday(project, since) }))),
+        };
+      },
+    })
+  : undefined;
 const chatRoutes = chat
   ? createChatRoutes({
       chat,
@@ -427,6 +444,7 @@ const chatRoutes = chat
       delegation,
       runs,
       triggers,
+      summary: daySummary,
     })
   : undefined;
 if (chat) {

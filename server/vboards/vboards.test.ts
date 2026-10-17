@@ -241,7 +241,7 @@ describe('serviço', () => {
   it('só conversa que mexeu em código vira item: pergunta e resposta não; edição ou commit sim', async () => {
     const { svc, calls, setAgents, tick } = setup();
     const noStats = { toolCalls: 3, tokensIn: 1, tokensOut: 1, subagents: 0 };
-    const act = (tool: string, detail = '') => ({ id: tool, kind: 'tool', icon: '', text: tool, tool, detail, at: 1 }) as AgentInfo['recent'][number];
+    const act = (tool: string, detail = '') => ({ id: tool, kind: 'other', icon: '', text: tool, tool, detail, at: 1 }) as AgentInfo['recent'][number];
     const titles = () => calls.filter((c) => c.url.endsWith('/todos')).map((c) => JSON.parse(String(c.init.body)).todos[0].text);
     const settle = async () => {
       await svc.check();
