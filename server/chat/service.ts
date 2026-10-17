@@ -654,6 +654,7 @@ export class ChatService {
     delete rt.timer;
     delete rt.proc;
     rec.running = false;
+    const stopped = !!rt.stopReason;
     if (rt.stopReason) this.pushItem(rt, { kind: 'notice', level: 'info', text: rt.stopReason });
     const blocked = overLimit(rec.spend, rec.limits);
     if (blocked) {
@@ -670,7 +671,9 @@ export class ChatService {
       delete rt.waiter;
       waiter?.(this.turnResult(rt));
       for (const cb of this.turnEndListeners) cb(rec.agentId);
-      this.runQueued(rt);
+      // Parado pelo usuário (ou pelo tempo): a fila não começa sozinha uma rodada nova com acesso total.
+      if (stopped) for (const q of rt.queue.splice(0)) q.done({ ok: false, error: tr('O agente foi parado.') });
+      else this.runQueued(rt);
     });
   }
 

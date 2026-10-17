@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { NameStore } from '../model/names';
 import { Office } from '../model/office';
 import { PermissionRegistry } from '../permissions/registry';
-import { Delegation } from './delegation';
+import { Delegation, DELEGATION_TEXT_MAX } from './delegation';
 import { ChatService, type ChatProcess } from './service';
 
 const fixture = (n: string) => readFileSync(join(__dirname, 'fixtures', n), 'utf8').split(/\r?\n/).filter(Boolean);
@@ -110,6 +110,17 @@ describe('chat: delegação entre agentes (sempre com aprovação do usuário)',
       expect(delegation.links()).toEqual([{ from: a, to: b, at: expect.any(Number) }]);
     });
   }
+
+  it('texto maior que o cartão mostra é recusado antes de qualquer cartão', async () => {
+    const { a, b, tool, card } = await setup();
+    const longo = 'x'.repeat(DELEGATION_TEXT_MAX + 1);
+    const ask = await tool(a, 'office_ask_agent').run({ agentId: b, message: longo });
+    expect(ask).toMatchObject({ isError: true });
+    const open = await tool(a, 'office_open_agent').run({ prompt: longo });
+    expect(open).toMatchObject({ isError: true });
+    expect(card(a)).toBeUndefined();
+    expect(DELEGATION_TEXT_MAX).toBe(2000);
+  });
 
   it('recusado: devolve a recusa e nada é entregue', async () => {
     const { chat, registry, delegation, procs, a, b, tool, card } = await setup();

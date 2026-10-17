@@ -3591,4 +3591,8 @@ export const ES: Readonly<Record<string, string>> = {
   "Últimos disparos": "Últimas activaciones",
   "às {0} ({1})": "a las {0} ({1})",
   "   Acesso remoto: \"chat\" liberado. Agentes que podem ter acesso total a este computador podem ser comandados pelo celular (o MCP e as pastas desconhecidas continuam bloqueados).": "   Acceso remoto: \"chat\" permitido. Agentes que pueden tener acceso total a esta computadora pueden ser comandados desde el celular (el MCP y las carpetas desconocidas siguen bloqueados).",
+  "Fechar agente": "Cerrar agente",
+  "Fechar este agente? Ele sai do escritório e a conversa é apagada.": "¿Cerrar este agente? Sale de la oficina y la conversación se borra.",
+  "O agente foi parado.": "El agente fue detenido.",
+  "Tira o agente do escritório (a conversa é apagada)": "Saca al agente de la oficina (la conversación se borra)",
 };

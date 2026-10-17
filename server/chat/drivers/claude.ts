@@ -4,6 +4,8 @@ import { tr } from '../../../shared/i18n';
 import type { ChatDriver, ChatEvent, StreamParser, TurnSpec } from '../types';
 
 export const PERMISSION_TOOL = 'mcp__habblaud__approve';
+/** Prazo do servidor MCP do escritório: aprovações e respostas de outros agentes podem demorar (o padrão do Claude corta antes). */
+export const MCP_SERVER_TIMEOUT_MS = 2.5 * 60 * 60_000;
 export const MCP_TOOL_TIMEOUT_MS = 150 * 60_000;
 
 export function claudeArgs(spec: TurnSpec): string[] {
@@ -16,7 +18,7 @@ export function claudeArgs(spec: TurnSpec): string[] {
   if (spec.budgetUsd !== undefined) args.push('--max-budget-usd', String(spec.budgetUsd));
   // MCP do escritório sempre (ferramentas office_*); no automático sem strict, para os MCPs do usuário continuarem.
   if (spec.mcp) {
-    const config = { mcpServers: { habblaud: { type: 'http', url: spec.mcp.url, headers: { Authorization: `Bearer ${spec.mcp.token}` } } } };
+    const config = { mcpServers: { habblaud: { type: 'http', url: spec.mcp.url, headers: { Authorization: `Bearer ${spec.mcp.token}` }, timeout: MCP_SERVER_TIMEOUT_MS } } };
     if (spec.permission === 'ask') args.push('--strict-mcp-config');
     args.push('--mcp-config', JSON.stringify(config));
     if (spec.permission === 'ask') args.push('--permission-prompt-tool', PERMISSION_TOOL);

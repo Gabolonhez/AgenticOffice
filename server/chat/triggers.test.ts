@@ -120,6 +120,19 @@ describe('gatilhos: regras e rotas', () => {
   });
 });
 
+describe('gatilhos: o cartão diz o que vai rodar de verdade', () => {
+  it('Codex sempre roda no automático, mesmo com "ask" salvo; papel pelo nome', () => {
+    const { svc, cards } = setup({ roleName: (id: string) => (id === 'qa' ? 'QA' : undefined) });
+    const codex = rule(svc.create({ name: 'C', when: { kind: 'interval', minutes: 15 }, do: { ...openDo, options: { ...openDo.options, provider: 'codex', permission: 'ask' } } }));
+    svc.test(codex.id);
+    const shown = `${cards[0].text}\n${cards[0].detail}`;
+    expect(shown).toContain('permissão automática');
+    expect(shown).not.toContain('pede aprovação a cada ação');
+    expect(shown).toContain('papel QA');
+    expect(shown).not.toContain('papel qa');
+  });
+});
+
 describe('gatilhos: aprovação', () => {
   it('nada roda sem aprovar; aprovado roda uma vez o que o cartão mostrou', async () => {
     const { svc, chat, cards } = setup();

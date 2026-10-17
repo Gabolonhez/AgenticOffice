@@ -45,6 +45,8 @@ export type Watcher = (folder: string, onChange: (rel: string) => void) => () =>
 export interface TriggerDeps {
   chat: Pick<ChatService, 'check' | 'open' | 'deliver' | 'onTurnEnd' | 'turnOutcome' | 'lastReply' | 'record' | 'displayName'>;
   approve: Approver;
+  /** Nome do papel para o cartão (o id não diz nada ao usuário). */
+  roleName?: (id: string) => string | undefined;
   folders: () => Array<{ path: string }>;
   file: string;
   watch?: Watcher;
@@ -412,8 +414,9 @@ export class TriggerService {
     const facts = [
       tr('provedor {0}', [o.provider]),
       o.model ? tr('modelo {0}', [o.model]) : '',
-      o.roleId ? tr('papel {0}', [o.roleId]) : '',
-      o.permission === 'ask' ? tr('pede aprovação a cada ação') : tr('permissão automática'),
+      o.roleId ? tr('papel {0}', [this.deps.roleName?.(o.roleId) ?? o.roleId]) : '',
+      // Igual ao ChatService.open: só o Claude pede aprovação; Codex e Antigravity rodam no automático.
+      o.provider === 'claude' && o.permission === 'ask' ? tr('pede aprovação a cada ação') : tr('permissão automática'),
       o.isolated ? tr('cópia isolada') : '',
       o.name ? tr('nome {0}', [o.name]) : '',
     ].filter(Boolean);

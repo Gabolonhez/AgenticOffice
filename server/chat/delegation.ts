@@ -2,7 +2,8 @@
 // chat. Regra do dono do produto: um agente NUNCA abre nem manda mensagem a outro sozinho. Toda delegação vira um cartão
 // de aprovação (askHuman) nos dois modos de permissão; recusa, prazo ou rodada parada = recusa a quem pediu, nada roda.
 import { basename } from 'node:path';
-import { CHAT_TEXT_MAX } from '../../shared/chat';
+/** O cartão mostra até 2000 caracteres: um pedido maior esconderia do usuário parte do que ele aprova. */
+export const DELEGATION_TEXT_MAX = 2000;
 import { maskSecrets, truncate } from '../../shared/activity';
 import { tr } from '../../shared/i18n';
 import type { Provider } from '../../shared/types';
@@ -103,7 +104,7 @@ export class Delegation {
     const rec = chat.record(caller);
     if (!rec) return fail(tr('Agente não encontrado.'));
     const prompt = str(args.prompt);
-    if (!prompt || prompt.length > CHAT_TEXT_MAX) return fail(tr('Escreva o pedido (até {0} caracteres).', [CHAT_TEXT_MAX]));
+    if (!prompt || prompt.length > DELEGATION_TEXT_MAX) return fail(tr('Escreva o pedido (até {0} caracteres).', [DELEGATION_TEXT_MAX]));
     const provider = (str(args.provider) || 'claude') as Provider;
     const option = chat.providers().find((p) => p.id === provider);
     if (!option) return fail(tr('Provedor inválido.'));
@@ -136,7 +137,7 @@ export class Delegation {
     const { chat } = this.deps;
     const target = str(args.agentId);
     const message = str(args.message);
-    if (!message || message.length > CHAT_TEXT_MAX) return fail(tr('Escreva a mensagem (até {0} caracteres).', [CHAT_TEXT_MAX]));
+    if (!message || message.length > DELEGATION_TEXT_MAX) return fail(tr('Escreva a mensagem (até {0} caracteres).', [DELEGATION_TEXT_MAX]));
     if (target === caller) return fail(tr('Você não pode mandar mensagem para si mesmo.'));
     if (!chat.record(caller)) return fail(tr('Agente não encontrado.'));
     if (!chat.record(target)) return fail(tr('Agente não encontrado: {0}. Veja os ids em office_list_agents.', [target]));

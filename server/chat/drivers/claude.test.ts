@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { claudeArgs, claudeDriver, PERMISSION_TOOL } from './claude';
+import { claudeArgs, claudeDriver, MCP_SERVER_TIMEOUT_MS, PERMISSION_TOOL } from './claude';
 import type { ChatEvent, TurnSpec } from '../types';
 
 const fx = (n: string) => readFileSync(join(__dirname, '..', 'fixtures', n), 'utf8').split(/\r?\n/).filter(Boolean);
@@ -19,7 +19,8 @@ describe('chat: driver do Claude', () => {
     expect(next[next.indexOf('--permission-mode') + 1]).toBe('default');
     expect(next[next.indexOf('--append-system-prompt') + 1]).toBe('Seja breve.');
     expect(next[next.indexOf('--max-budget-usd') + 1]).toBe('0.5');
-    expect(JSON.parse(next[next.indexOf('--mcp-config') + 1])).toEqual({ mcpServers: { habblaud: { type: 'http', url: 'http://127.0.0.1:4747/api/chat/mcp/chat:1', headers: { Authorization: 'Bearer t0k' } } } });
+    expect(JSON.parse(next[next.indexOf('--mcp-config') + 1])).toEqual({ mcpServers: { habblaud: { type: 'http', url: 'http://127.0.0.1:4747/api/chat/mcp/chat:1', headers: { Authorization: 'Bearer t0k' }, timeout: MCP_SERVER_TIMEOUT_MS } } });
+      expect(MCP_SERVER_TIMEOUT_MS).toBeGreaterThanOrEqual(2 * 60 * 60_000);
     expect(next).toContain('--strict-mcp-config');
     expect(next.join(' ')).not.toContain('-oi');
     expect(claudeDriver.invocation(base).stdin).toBe('-oi');

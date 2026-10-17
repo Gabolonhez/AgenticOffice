@@ -415,7 +415,7 @@ const runs = chat ? new RunService({ chat, vboards, worktrees: createWorktreeOps
 // Gatilhos (chat/triggers.ts): todo disparo vira um cartão de aprovação; sem o registro de permissões, não existem.
 const triggers =
   chat && permissions
-    ? new TriggerService({ chat, approve: officeApprover({ office, registry: permissions }), folders: () => chatFolders, file: join(config.dataDir, 'chat', 'triggers.json') })
+    ? new TriggerService({ chat, approve: officeApprover({ office, registry: permissions }), roleName: (id) => chat.roles.get(id)?.name, folders: () => chatFolders, file: join(config.dataDir, 'chat', 'triggers.json') })
     : undefined;
 const chatRoutes = chat
   ? createChatRoutes({

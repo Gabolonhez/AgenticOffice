@@ -72,6 +72,7 @@ export class ChatPanel {
   private readonly stopBtn: HTMLButtonElement;
   private readonly mergeBtn: HTMLButtonElement;
   private readonly discardBtn: HTMLButtonElement;
+  private readonly closeBtn: HTMLButtonElement;
   private readonly limitRow: HTMLElement;
   private readonly limitInput: HTMLInputElement;
   private readonly error: HTMLElement;
@@ -91,6 +92,7 @@ export class ChatPanel {
     this.sendBtn = h('button', { class: 'ui-btn ui-chat__send', type: 'button', text: tr('Enviar'), on: { click: () => void this.send() } });
     this.stopBtn = h('button', { class: 'ui-btn', type: 'button', text: tr('Parar'), on: { click: () => void this.action('stop') } });
     this.mergeBtn = h('button', { class: 'ui-btn', type: 'button', text: tr('Juntar ao projeto'), on: { click: () => void this.action('merge') } });
+    this.closeBtn = h('button', { class: 'ui-btn', type: 'button', text: tr('Fechar agente'), attrs: { title: tr('Tira o agente do escritório (a conversa é apagada)') }, on: { click: () => void this.closeAgent() } });
     this.discardBtn = h('button', { class: 'ui-btn', type: 'button', text: tr('Descartar cópia'), on: { click: () => void this.discard() } });
     this.limitInput = h('input', { class: 'ui-chat__limit', attrs: { type: 'number', min: '0', step: 'any', 'aria-label': tr('Novo limite') } }) as HTMLInputElement;
     this.limitRow = h('div', { class: 'ui-chat__row' }, this.limitInput, h('button', { class: 'ui-btn', type: 'button', text: tr('Aumentar limite'), on: { click: () => void this.raiseLimit() } }));
@@ -100,7 +102,7 @@ export class ChatPanel {
       { class: 'ui-chat' },
       listEl,
       this.status,
-      h('div', { class: 'ui-chat__row' }, this.stopBtn, this.mergeBtn, this.discardBtn),
+      h('div', { class: 'ui-chat__row' }, this.stopBtn, this.mergeBtn, this.discardBtn, this.closeBtn),
       this.limitRow,
       // No celular a caixa fica presa no rodapé da gaveta, como a das mensagens (styles.css, .ui-chat__compose).
       h('div', { class: 'ui-chat__row ui-chat__compose' }, this.box, this.sendBtn),
@@ -167,6 +169,8 @@ export class ChatPanel {
     const openCopy = !!iso && !iso.merged && !iso.discarded && !busy;
     setHidden(this.mergeBtn, !openCopy);
     setHidden(this.discardBtn, !openCopy);
+    // Fecha só parado; com cópia isolada aberta, primeiro Juntar ou Descartar.
+    setHidden(this.closeBtn, busy || (!!iso && !iso.merged && !iso.discarded));
     setHidden(this.limitRow, !this.state.blocked);
     this.sendBtn.disabled = busy || !!this.state.blocked;
   }
@@ -190,6 +194,16 @@ export class ChatPanel {
     if (status >= 400) setText(this.error, String(data.error ?? tr('erro {0}', [status])));
     else setText(this.error, '');
     this.restartPoll();
+  }
+
+  /** Tira o agente do escritório (DELETE): sem isso, depois de 8 agentes não dava para abrir outro. */
+  private async closeAgent(): Promise<void> {
+    if (!confirm(tr('Fechar este agente? Ele sai do escritório e a conversa é apagada.'))) return;
+    const { status, data } = await call(this.url(), 'DELETE', {});
+    if (status >= 400) return setText(this.error, String(data.error ?? tr('erro {0}', [status])));
+    this.close();
+    this.ctx.select(null);
+    this.ctx.invalidate();
   }
 
   private async discard(): Promise<void> {

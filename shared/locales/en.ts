@@ -3590,4 +3590,8 @@ export const EN: Readonly<Record<string, string>> = {
   "Últimos disparos": "Recent firings",
   "às {0} ({1})": "at {0} ({1})",
   "   Acesso remoto: \"chat\" liberado. Agentes que podem ter acesso total a este computador podem ser comandados pelo celular (o MCP e as pastas desconhecidas continuam bloqueados).": "   Remote access: \"chat\" allowed. Agents that may have full access to this computer can be commanded from the phone (the MCP and unknown folders stay blocked).",
+  "Fechar agente": "Close agent",
+  "Fechar este agente? Ele sai do escritório e a conversa é apagada.": "Close this agent? It leaves the office and the conversation is deleted.",
+  "O agente foi parado.": "The agent was stopped.",
+  "Tira o agente do escritório (a conversa é apagada)": "Removes the agent from the office (the conversation is deleted)",
 };

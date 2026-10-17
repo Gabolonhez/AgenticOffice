@@ -322,6 +322,17 @@ describe('chat: mensagens entre agentes (deliver)', () => {
     expect(chat.deliver('chat:x', 'a', from)).toBeUndefined();
   });
 
+  it('parar o agente cancela a fila: a mensagem de outro agente não começa sozinha', async () => {
+    const { chat, spawned } = setup();
+    const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' }));
+    const a = chat.deliver(id, 'na fila', from)!;
+    chat.stop(id);
+    spawned[0].proc.finish([], 1);
+    await flush();
+    expect(spawned).toHaveLength(1);
+    expect(await a.result).toMatchObject({ ok: false });
+  });
+
   it('quem espera sempre recebe um fim: CLI sumiu ou limite estourado com várias na fila', async () => {
     let bin = true;
     const { chat, spawned } = setup({ bins: () => (bin ? { file: 'claude.exe', prefix: [] } : undefined) });
