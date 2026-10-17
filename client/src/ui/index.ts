@@ -13,6 +13,7 @@ import type { OfficeStore } from '../net/store';
 import type { Selection, WorldApi } from '../world/api';
 import type { PanelName, TerminalRouter, UiComponent, UiContext } from './context';
 import { DayLauncher } from './daystats-launcher';
+import { SummaryPanel } from './summary';
 import { RoomRenamer } from './roomrename';
 import { h } from './dom';
 import { CanvasView } from './canvas';
@@ -273,6 +274,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   const vboards = new VBoardsPanel(ctx);
   topbar.addCounter(vboards.button);
   root.append(vboards.el);
+  const summary = new SummaryPanel(ctx);
+  topbar.addPanelButton(summary.button);
+  root.append(summary.el);
   const day = new DayLauncher(ctx, (el) => root.append(el));
   topbar.addPanelButton(day.button);
   // Quadro: os agentes em cartões, alternando com a pixel art (atalho V).
@@ -300,7 +304,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   }));
   drawer.onLayoutChange = () => applyLayout();
 
-  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, updateToaster, invite, worldChip, vboards, canvas];
+  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, summary, updateToaster, invite, worldChip, vboards, canvas];
   if (scene) components.push(scene);
   root.append(worldSocial.el);
   components.push(worldSocial);
