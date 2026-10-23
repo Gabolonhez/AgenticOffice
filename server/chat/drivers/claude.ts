@@ -8,6 +8,11 @@ export const PERMISSION_TOOL = 'mcp__habblaud__approve';
 export const MCP_SERVER_TIMEOUT_MS = 2.5 * 60 * 60_000;
 export const MCP_TOOL_TIMEOUT_MS = 150 * 60_000;
 
+/** O --mcp-config com o MCP do escritório (o Bearer do agente vai no cabeçalho). */
+export function claudeMcpConfig(mcp: { url: string; token: string }): unknown {
+  return { mcpServers: { habblaud: { type: 'http', url: mcp.url, headers: { Authorization: `Bearer ${mcp.token}` }, timeout: MCP_SERVER_TIMEOUT_MS } } };
+}
+
 export function claudeArgs(spec: TurnSpec): string[] {
   const args = ['-p', '--output-format', 'stream-json', '--verbose'];
   if (spec.first) args.push('--session-id', spec.sessionId ?? '');
@@ -18,11 +23,13 @@ export function claudeArgs(spec: TurnSpec): string[] {
   if (spec.budgetUsd !== undefined) args.push('--max-budget-usd', String(spec.budgetUsd));
   // A regra de negação vale mesmo com bypassPermissions.
   if (spec.denyPush) args.push('--disallowedTools', 'Bash(git push:*)');
+  // `--tools ''` desliga todas as internas (Bash, Edit, Read...); as do MCP continuam.
+  if (spec.tools !== undefined) args.push('--tools', spec.tools);
   // MCP do escritório sempre (ferramentas office_*); no automático sem strict, para os MCPs do usuário continuarem.
   if (spec.mcp) {
-    const config = { mcpServers: { habblaud: { type: 'http', url: spec.mcp.url, headers: { Authorization: `Bearer ${spec.mcp.token}` }, timeout: MCP_SERVER_TIMEOUT_MS } } };
     if (spec.permission === 'ask') args.push('--strict-mcp-config');
-    args.push('--mcp-config', JSON.stringify(config));
+    // Com `mcpConfigFile` (o ChatService grava, modo 600), o token não fica no argv, que outros processos leem.
+    args.push('--mcp-config', spec.mcpConfigFile ?? JSON.stringify(claudeMcpConfig(spec.mcp)));
     if (spec.permission === 'ask') args.push('--permission-prompt-tool', PERMISSION_TOOL);
   }
   return args;

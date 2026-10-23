@@ -1,0 +1,78 @@
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import type { RunMetric } from '../../shared/runs';
+import { setQuiet } from '../log';
+import { Briefing, briefingMaterial, briefingPrompt, type BriefingInput } from './briefing';
+
+setQuiet(true);
+
+const metric = (o: Partial<RunMetric> = {}): RunMetric => ({ at: 1, runId: 'r', folder: 'C:\\p\\app', state: 'review', gate: 'pass', retried: false, ms: 1000, usd: 0.5, tokens: 100, provider: 'claude', ...o });
+const input = (o: Partial<BriefingInput> = {}): BriefingInput => ({
+  since: new Date(2026, 9, 23, 8, 0).getTime(),
+  summary: {
+    subtasks: { queued: { count: 2, items: [] }, running: { count: 1, items: [] }, review: { count: 1, items: [{ id: 's', title: 'Botão novo', project: 'app' }] }, failed: { count: 1, items: [{ id: 'f', title: 'Migração', project: 'api' }] }, doneToday: { count: 3, items: [] } },
+    refines: { queued: { count: 0, items: [] }, running: { count: 0, items: [] }, ready: { count: 1, items: [] }, failed: { count: 0, items: [] } },
+    tasks: { ideas: { count: 4, items: [] }, backlog: { count: 5, items: [] }, in_progress: { count: 2, items: [] }, code_review: { count: 1, items: [] } },
+  },
+  metrics: [metric(), metric({ gate: 'fail', retried: true, usd: 1, state: 'failed' })],
+  quota: ['Conta a (claude): 5 h 40%, semana 70%'],
+  failures: ['gatilho "x": erro'],
+  ...o,
+});
+
+describe('Jarvis: briefing', () => {
+  it('material: listas (contagem, % do portão, voltas, custo, por pasta), VBoards, cota e falhas', () => {
+    const m = briefingMaterial(input());
+    expect(m).toContain('Desde 08:00');
+    expect(m).toContain('2 itens terminaram, portão 50%, 1 voltas de correção, US$ 1.50');
+    expect(m).toContain('- app: 2 itens, US$ 1.50, 1 falhas');
+    expect(m).toContain('subtarefas na fila 2, rodando 1, em revisão 1, falharam 1, feitas hoje 3');
+    expect(m).toContain('Botão novo (app)');
+    expect(m).toContain('Migração (api)');
+    expect(m).toContain('semana 70%');
+    expect(m).toContain('gatilho "x": erro');
+    expect(briefingMaterial(input({ summary: undefined, summaryError: 'O token do VBoards precisa do escopo read.', metrics: [] }))).toContain('sem o resumo (O token do VBoards precisa do escopo read.)');
+    expect(briefingPrompt(m)).toContain('<dados_nao_confiaveis origem="briefing"');
+  });
+
+  it('IA respondeu: o texto dela vai na conversa, a manchete no ntfy e tudo no WhatsApp; guarda o último', async () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'hb-brief-')), 'briefing.json');
+    const post = vi.fn();
+    const notify = vi.fn(async () => undefined);
+    const b = new Briefing({ settings: () => ({ time: '', days: [] }), gather: async () => input(), runner: async () => ({ text: 'Manchete do dia\nlinha 2' }), post, notify, file, now: () => 5_000 });
+    const r = await b.run();
+    expect(r.fallback).toBeUndefined();
+    expect(post.mock.calls[0][0]).toContain('Manchete do dia\nlinha 2');
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining('linha 2'), 'Manchete do dia');
+    expect(post.mock.calls[0][0]).toMatch(/^Briefing \d\d:\d\d\n/);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ lastAt: 5_000 });
+    expect(new Briefing({ settings: () => ({ time: '', days: [] }), gather: async () => input(), runner: async () => ({ text: '' }), post, notify, file }).lastAt()).toBe(5_000);
+  });
+
+  it('IA falhou: vai a lista simples (o material), com o motivo', async () => {
+    const post = vi.fn();
+    const b = new Briefing({ settings: () => ({ time: '', days: [] }), gather: async () => input(), runner: async () => Promise.reject(new Error('a IA demorou')), post, notify: async () => undefined, file: join(mkdtempSync(join(tmpdir(), 'hb-brief-')), 'b.json') });
+    const r = await b.run();
+    expect(r.fallback).toBe('a IA demorou');
+    expect(post.mock.calls[0][0]).toContain('subtarefas na fila 2');
+  });
+
+  it('relógio: roda no horário; sem hora, nunca', async () => {
+    let now = new Date(2026, 9, 23, 8, 59).getTime();
+    let time = '09:00';
+    const gather = vi.fn(async () => input());
+    const b = new Briefing({ settings: () => ({ time, days: [] }), gather, runner: async () => ({ text: 'ok' }), post: () => {}, notify: async () => undefined, file: join(mkdtempSync(join(tmpdir(), 'hb-brief-')), 'b.json'), now: () => now });
+    await b.tick();
+    expect(gather).not.toHaveBeenCalled();
+    now += 2 * 60_000;
+    await b.tick();
+    await b.tick();
+    expect(gather).toHaveBeenCalledTimes(1);
+    time = '';
+    now += 24 * 60 * 60_000;
+    await b.tick();
+    expect(gather).toHaveBeenCalledTimes(1);
+  });
+});

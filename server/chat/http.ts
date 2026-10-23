@@ -10,7 +10,7 @@ import { HttpError, readJson, sendJson } from '../http/app';
 import { ptyRequestProblem } from '../http/pty';
 import type { PermissionRegistry } from '../permissions/registry';
 import type { Delegation } from './delegation';
-import { handleMcp, makeApprovalCall } from './permission';
+import { handleMcp, makeApprovalCall, type McpTool } from './permission';
 import type { RoleStore } from './roles';
 import type { RunService } from './runs';
 import type { ChatService } from './service';
@@ -31,6 +31,10 @@ export interface ChatRouteDeps {
   /** Resumo do dia (server/summary); sem ele, 404. */
   summary?: { generate(mode: SummaryMode): Promise<DaySummary>; last(): DaySummary | undefined };
   triggers?: Pick<TriggerService, 'list' | 'history' | 'create' | 'update' | 'remove' | 'test'>;
+  /** Ferramentas a mais no MCP de um agente (as do Jarvis, só no agente do sistema); somam com as office_*. */
+  extraTools?: (agentId: string) => McpTool[];
+  /** Rotas do Jarvis (/api/chat/jarvis*, server/jarvis/http.ts), com a mesma trava do resto do chat. */
+  jarvis?: (req: IncomingMessage, res: ServerResponse, url: URL, isRemote: boolean) => Promise<boolean>;
 }
 
 /** Batida do SSE enquanto uma ferramenta espera (aprovação, resposta de outro agente). */
@@ -87,7 +91,7 @@ export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
       }
       const body = await readJson(req);
       const registry = d.registry ?? { registerChat: () => ({ skip: 'too-many' as const }), wait: () => undefined };
-      const run = () => handleMcp(body, makeApprovalCall({ registry, chat: d.chat }, agentId), d.delegation?.tools(agentId));
+      const run = () => handleMcp(body, makeApprovalCall({ registry, chat: d.chat }, agentId), [...(d.delegation?.tools(agentId) ?? []), ...(d.extraTools?.(agentId) ?? [])]);
       // tools/call pode esperar muito (cartão, resposta de outro agente): por SSE, com batidas, nenhum prazo de
       // cabeçalho/corpo do cliente HTTP estoura. O Streamable HTTP do MCP aceita os dois formatos.
       if ((body as { method?: unknown })?.method === 'tools/call' && String(req.headers.accept ?? '').includes('text/event-stream')) {
@@ -127,6 +131,8 @@ export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
       return sendJson(res, 200, await d.summary.generate(body?.mode === 'list' ? 'list' : 'ai'));
     }
 
+    if (d.jarvis && (path === '/api/chat/jarvis' || path.startsWith('/api/chat/jarvis/')) && (await d.jarvis(req, res, url, isRemote))) return;
+
     if (path === '/api/chat/links') {
       if (method !== 'GET') return notAllowed(res, 'GET');
       return sendJson(res, 200, d.delegation?.links() ?? []);
@@ -156,6 +162,7 @@ export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
         }
         if (method === 'DELETE') {
           const r = d.chat.close(id);
+          if (r === 'system') return sendJson(res, 403, { error: tr('O Jarvis não fecha: use "Conversa nova" para recomeçar.') });
           return sendJson(res, r === 'ok' ? 200 : r === 'busy' ? 409 : 404, r === 'ok' ? {} : { error: r });
         }
         return notAllowed(res, 'GET, DELETE');

@@ -8,6 +8,7 @@
 //   POST /api/permissions/:id/decision    (página)  {behavior: allow | deny | terminal | answer, message?, answers?, ...}
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { HttpError, readJson, sendJson } from '../http/app';
+import { pinError, type ApprovalPin } from './pin';
 import { InvalidRequest, parseDecision, WAIT_MAX_MS, type PermissionRegistry } from './registry';
 import { tr } from '../../shared/i18n';
 
@@ -32,7 +33,11 @@ export function waitMs(url: URL): number {
   return Math.min(WAIT_MAX_MS, Math.max(50, raw * 1_000));
 }
 
-export function createPermissionRoutes(registry: PermissionRegistry): (req: IncomingMessage, res: ServerResponse, path: string) => void {
+/**
+ * `pin`: o PIN de aprovação (pin.ts). Aprovar (ou responder) um cartão crítico, ou qualquer um com "exigir em todos",
+ * pede o PIN no corpo; vale igual pela porta local e pela do celular (as duas chegam aqui).
+ */
+export function createPermissionRoutes(registry: PermissionRegistry, pin?: Pick<ApprovalPin, 'check' | 'triesLeft'>): (req: IncomingMessage, res: ServerResponse, path: string) => void {
   const register = async (req: IncomingMessage, res: ServerResponse) => {
     const body = await readJson(req);
     const r = registry.register(body);
@@ -60,6 +65,14 @@ export function createPermissionRoutes(registry: PermissionRegistry): (req: Inco
     const d = parseDecision(await readJson(req));
     if (!d) {
       throw new HttpError(400, 'esperado {behavior: "allow" | "deny" | "terminal", message?, interrupt?, suggestion?} ou {behavior: "answer", answers: [{question, options?, other?}]}');
+    }
+    // Recusar e devolver ao terminal nunca pedem o PIN (não liberam nada).
+    if ((d.behavior === 'allow' || d.behavior === 'answer') && registry.needsPin(id)) {
+      const c = pin ? await pin.check(d.pin) : 'unset';
+      if (c !== 'ok') {
+        const e = pinError(c, pin?.triesLeft() ?? 0);
+        return sendJson(res, e.status, { error: e.error, pin: c });
+      }
     }
     switch (registry.decide(id, d)) {
       case 'ok':

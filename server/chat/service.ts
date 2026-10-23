@@ -3,6 +3,7 @@
 // conversa fica em <dataDir>/chat/agents/ (store.ts), para voltar depois de reiniciar o servidor.
 import { execFile, spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { CHAT_TEXT_MAX, CHAT_TOOL_OUTPUT_MAX, type ChatFrom, type ChatItem, type ChatLimits, type ChatOpenRequest, type ChatState, type ChatView } from '../../shared/chat';
@@ -14,8 +15,9 @@ import type { Office } from '../model/office';
 import { INHERITED_SESSION_VARS } from '../pty/manager';
 import { resolveCliBin, type CliBin } from './bins';
 import { agyDriver } from './drivers/agy';
-import { claudeDriver } from './drivers/claude';
-import { codexDriver } from './drivers/codex';
+import { claudeDriver, claudeMcpConfig } from './drivers/claude';
+import { codexDriver, defaultCodexHome, prepareCodexHome } from './drivers/codex';
+import { wrapUntrusted } from '../jarvis/prompt';
 import { RoleStore } from './roles';
 import { ChatStore, type ChatRecord } from './store';
 import { noPushEnv } from './worktree';
@@ -49,7 +51,12 @@ export interface ChatServiceDeps {
   platform?: NodeJS.Platform;
   worktrees?: WorktreeOps;
   onFinish?: (agentId: string) => void;
+  /** Prompt de sistema de um agente do sistema (o Jarvis, server/jarvis/prompt.ts), montado a cada rodada. */
+  systemPrompt?: (rec: ChatRecord) => string | undefined;
 }
+
+/** Agente do sistema (o Jarvis): sem pasta conhecida, fora do limite de agentes, sem fechar. */
+export interface SystemAgentSpec { system: 'jarvis'; agentId: string; folder: string; provider: Provider; model?: string; name: string; limits?: ChatLimits }
 
 /** Um item novo, antes de ganhar seq e hora (Omit distributivo sobre a união). */
 type NewItem = ChatItem extends infer T ? (T extends ChatItem ? Omit<T, 'seq' | 'at'> : never) : never;
@@ -96,7 +103,7 @@ interface Runtime {
   turnStart: number;
   token: string;
   /** Mensagens de outros agentes esperando a rodada atual terminar (deliver). */
-  queue: Array<{ text: string; from: ChatFrom; done: (r: DeliverResult) => void }>;
+  queue: Array<{ text: string; from: ChatFrom; raw?: boolean; done: (r: DeliverResult) => void }>;
   /** Quem espera o fim da rodada atual (a mensagem entregue que ela está rodando). */
   waiter?: (r: DeliverResult) => void;
 }
@@ -180,7 +187,7 @@ export class ChatService {
     const prompt = r.prompt.trim();
     const limits = parseLimits(r.limits)!;
     const name = typeof r.name === 'string' ? r.name.trim() : '';
-    if (!run && this.agents.size >= MAX_CHAT_AGENTS) return { error: 'too-many', reason: tr('Já há {0} agentes do chat abertos; feche um antes.', [MAX_CHAT_AGENTS]) };
+    if (!run && [...this.agents.values()].filter((a) => !a.rec.system).length >= MAX_CHAT_AGENTS) return { error: 'too-many', reason: tr('Já há {0} agentes do chat abertos; feche um antes.', [MAX_CHAT_AGENTS]) };
 
     const agentId = `chat:${(this.deps.newId ?? randomUUID)()}`;
     const rec: ChatRecord = {
@@ -204,6 +211,7 @@ export class ChatService {
       seed: randomBytes(4).readUInt32LE(0),
       createdAt: this.now(),
       alwaysAllow: [],
+      ...(from ? { openedBy: from.agentId } : {}),
     };
     const rt = this.runtime(rec);
     this.agents.set(agentId, rt);
@@ -230,6 +238,74 @@ export class ChatService {
     return { agentId };
   }
 
+  /**
+   * Cria (sem rodar nada) o agente do sistema, ou devolve o que já existe. Só o servidor chama: `system` nunca vem do
+   * pedido. Sempre em "pedir aprovação" e sem ferramentas internas (runTurn); a pasta é a dele, fora das conhecidas.
+   */
+  openSystem(s: SystemAgentSpec): string {
+    if (this.agents.has(s.agentId)) return s.agentId;
+    const rec: ChatRecord = {
+      v: 1,
+      agentId: s.agentId,
+      provider: s.provider,
+      folder: s.folder,
+      cwd: s.folder,
+      ...(s.model ? { model: s.model } : {}),
+      permission: 'ask',
+      ...(s.provider === 'claude' ? { providerSessionId: randomUUID() } : {}),
+      limits: s.limits ?? {},
+      spend: { usd: 0, tokens: 0 },
+      items: [],
+      name: s.name,
+      seed: randomBytes(4).readUInt32LE(0),
+      createdAt: this.now(),
+      alwaysAllow: [],
+      system: s.system,
+    };
+    this.agents.set(s.agentId, this.runtime(rec));
+    this.enterOffice(rec, 'idle');
+    this.deps.office.setCharacter(s.agentId, { name: s.name, seed: rec.seed, parts: {} });
+    this.store.save(rec);
+    return s.agentId;
+  }
+
+  /** O agente do sistema deste tipo, se já existe. */
+  systemAgent(kind: 'jarvis'): string | undefined {
+    for (const [id, rt] of this.agents) if (rt.rec.system === kind) return id;
+    return undefined;
+  }
+
+  /** Um texto do agente sem rodada (o briefing do Jarvis): vira item da conversa, como uma resposta. */
+  post(agentId: string, text: string): boolean {
+    const rt = this.agents.get(agentId);
+    if (!rt) return false;
+    this.pushItem(rt, { kind: 'assistant', text: maskSecrets(text) });
+    return true;
+  }
+
+  /**
+   * Conversa nova na CLI (agente do sistema): outro id de sessão, sem retomar; troca provedor/modelo se pedido. A
+   * conversa da página fica (com um aviso). Só parado.
+   */
+  resetSession(agentId: string, o: { provider?: Provider; model?: string } = {}): 'ok' | 'not-found' | 'busy' {
+    const rt = this.agents.get(agentId);
+    if (!rt) return 'not-found';
+    if (rt.proc || rt.rec.running || rt.queue.length) return 'busy';
+    const rec = rt.rec;
+    if (o.provider) rec.provider = o.provider;
+    if (o.model !== undefined) {
+      if (o.model) rec.model = o.model;
+      else delete rec.model;
+    }
+    delete rec.sessionStarted;
+    delete rec.providerSessionId;
+    if (rec.provider === 'claude') rec.providerSessionId = randomUUID();
+    rec.spend = { usd: rec.spend.usd, tokens: rec.spend.tokens };
+    this.enterOffice(rec, 'idle');
+    this.pushItem(rt, { kind: 'notice', level: 'info', text: tr('Conversa nova ({0}{1}).', [rec.provider, rec.model ? ` · ${rec.model}` : '']) });
+    return 'ok';
+  }
+
   send(agentId: string, raw: unknown): 'ok' | 'not-found' | 'busy' | 'blocked' | 'invalid' {
     const rt = this.agents.get(agentId);
     if (!rt) return 'not-found';
@@ -245,11 +321,12 @@ export class ChatService {
    * Mensagem de outro agente (já aprovada pelo usuário): roda agora se o agente estiver livre, senão espera na fila.
    * `result` resolve no fim da rodada dela; `cancel` tira da fila (se já roda, só deixa de esperar).
    */
-  deliver(agentId: string, text: string, from: ChatFrom): { result: Promise<DeliverResult>; cancel: () => void } | undefined {
+  deliver(agentId: string, text: string, from: ChatFrom, o: { raw?: boolean } = {}): { result: Promise<DeliverResult>; cancel: () => void } | undefined {
     const rt = this.agents.get(agentId);
     if (!rt) return undefined;
     let entry!: Runtime['queue'][number];
-    const result = new Promise<DeliverResult>((done) => (entry = { text, from, done }));
+    // raw: o texto já vem pronto (o Jarvis embrulha o que não é da página), sem o aviso de "outro agente".
+    const result = new Promise<DeliverResult>((done) => (entry = { text, from, ...(o.raw ? { raw: true } : {}), done }));
     rt.queue.push(entry);
     this.runQueued(rt);
     return {
@@ -331,12 +408,13 @@ export class ChatService {
       limits: rec.limits,
       ...(rec.isolated ? { isolated: { branch: rec.isolated.branch, ...(rec.isolated.merged ? { merged: true } : {}), ...(rec.isolated.discarded ? { discarded: true } : {}) } } : {}),
     };
-    return { agentId, provider: rec.provider, items: rec.items.filter((i) => i.seq > after), state, lastSeq: rec.items.at(-1)?.seq ?? 0 };
+    return { agentId, provider: rec.provider, items: rec.items.filter((i) => i.seq > after), state, lastSeq: rec.items.at(-1)?.seq ?? 0, ...(rec.system ? { system: rec.system } : {}) };
   }
 
-  close(agentId: string): 'ok' | 'not-found' | 'busy' {
+  close(agentId: string): 'ok' | 'not-found' | 'busy' | 'system' {
     const rt = this.agents.get(agentId);
     if (!rt) return 'not-found';
+    if (rt.rec.system) return 'system';
     if (rt.proc || rt.rec.running) return 'busy';
     this.agents.delete(agentId);
     this.store.remove(agentId);
@@ -505,7 +583,7 @@ export class ChatService {
         continue;
       }
       rt.waiter = q.done;
-      this.runTurn(rt, q.text, q.from);
+      this.runTurn(rt, q.text, q.from, q.raw);
       if (rt.proc || rt.rec.running) return;
       delete rt.waiter;
       q.done(this.turnResult(rt));
@@ -522,7 +600,7 @@ export class ChatService {
     return { ok: false, error: notice && notice.kind === 'notice' ? notice.text : tr('O agente terminou sem responder.') };
   }
 
-  private runTurn(rt: Runtime, prompt: string, from?: ChatFrom): void {
+  private runTurn(rt: Runtime, prompt: string, from?: ChatFrom, raw?: boolean): void {
     const { rec } = rt;
     const bin = this.bin(rec.provider);
     this.pushItem(rt, { kind: 'user', text: prompt, ...(from ? { from } : {}) });
@@ -532,21 +610,44 @@ export class ChatService {
       return;
     }
     const first = !rec.sessionStarted;
+    let accountDir = rec.account && this.deps.accounts.find(rec.account) ? this.deps.accounts.find(rec.account)!.dir : undefined;
+    const mcpUrl = `http://127.0.0.1:${this.deps.port}/api/chat/mcp/${encodeURIComponent(rec.agentId)}`;
+    // Jarvis no Codex: CODEX_HOME isolado (só o auth.json e o MCP do escritório), nunca o ~/.codex do usuário.
+    if (rec.system && rec.provider === 'codex') {
+      const home = prepareCodexHome(join(this.deps.dataDir, 'jarvis', 'codex-home'), accountDir ?? defaultCodexHome(), mcpUrl);
+      if ('error' in home) {
+        this.pushItem(rt, { kind: 'notice', level: 'error', text: home.error });
+        this.finishOffice(rt);
+        return;
+      }
+      accountDir = home.dir;
+    }
+    const mcp = rec.provider === 'claude' || rec.system ? { url: mcpUrl, token: rt.token } : undefined;
+    // Claude: o --mcp-config num arquivo 600 (o token do agente fora do argv); sem conseguir gravar, vai no argv.
+    const mcpConfigFile = mcp && rec.provider === 'claude' ? this.writeMcpConfig(rec.agentId, mcp) : undefined;
+    // Agente do sistema: prompt de sistema montado agora, sem ferramentas internas, "pedir aprovação" e o MCP em qualquer provedor.
+    const systemRole = rec.system ? this.deps.systemPrompt?.(rec) : undefined;
     const spec: TurnSpec = {
       folder: rec.cwd,
-      // A CLI de quem recebe precisa saber que o pedido veio de outro agente (no chat, o remetente vai no item).
-      prompt: from ? `[Mensagem de ${from.name}, outro agente do AgenticOffice (id ${from.agentId}). A sua resposta final volta para ele.]\n\n${prompt}` : prompt,
+      // A CLI de quem recebe precisa saber que o pedido veio de outro agente (no chat, o remetente vai no item). Para o
+      // Jarvis, o texto de outro agente entra embrulhado como dado não confiável (e o turno fica contaminado).
+      prompt:
+        from && !raw
+          ? rec.system
+            ? `[Mensagem de outro agente do AgenticOffice (id ${from.agentId}). A sua resposta final volta para ele.]\n\n${wrapUntrusted('agente', from.agentId, prompt)}`
+            : `[Mensagem de ${from.name}, outro agente do AgenticOffice (id ${from.agentId}). A sua resposta final volta para ele.]\n\n${prompt}`
+          : prompt,
       first,
       ...(rec.provider === 'claude' && first ? { sessionId: rec.providerSessionId } : {}),
       ...(!first && rec.providerSessionId ? { resumeId: rec.providerSessionId } : {}),
       ...(rec.model ? { model: rec.model } : {}),
-      ...(rec.roleId && this.roles.get(rec.roleId) ? { role: this.roles.get(rec.roleId)!.text } : {}),
-      permission: rec.permission,
+      ...(systemRole ? { role: systemRole } : rec.roleId && this.roles.get(rec.roleId) ? { role: this.roles.get(rec.roleId)!.text } : {}),
+      permission: rec.system ? 'ask' : rec.permission,
+      ...(rec.system ? { tools: '' } : {}),
       ...(remainingUsd(rec.spend, rec.limits) !== undefined ? { budgetUsd: remainingUsd(rec.spend, rec.limits) } : {}),
-      ...(rec.provider === 'claude'
-        ? { mcp: { url: `http://127.0.0.1:${this.deps.port}/api/chat/mcp/${encodeURIComponent(rec.agentId)}`, token: rt.token } }
-        : {}),
-      ...(rec.account && this.deps.accounts.find(rec.account) ? { accountDir: this.deps.accounts.find(rec.account)!.dir } : {}),
+      ...(mcp ? { mcp } : {}),
+      ...(mcpConfigFile ? { mcpConfigFile } : {}),
+      ...(accountDir ? { accountDir } : {}),
       ...(rec.denyPush ? { denyPush: true } : {}),
     };
     const driver = DRIVERS[rec.provider];
@@ -601,6 +702,20 @@ export class ChatService {
         this.endTurn(rt);
       });
     });
+  }
+
+  /** Grava o --mcp-config do Claude em <dataDir>/chat/mcp/<agente>.json (600); undefined = não gravou (vai no argv). */
+  private writeMcpConfig(agentId: string, mcp: { url: string; token: string }): string | undefined {
+    try {
+      const dir = join(this.deps.dataDir, 'chat', 'mcp');
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      const file = join(dir, `${agentId.replace(/[^\w-]/g, '_')}.json`);
+      writeFileSync(file, JSON.stringify(claudeMcpConfig(mcp)), { mode: 0o600 });
+      chmodSync(file, 0o600);
+      return file;
+    } catch {
+      return undefined;
+    }
   }
 
   private interrupt(rt: Runtime, reason: string): void {

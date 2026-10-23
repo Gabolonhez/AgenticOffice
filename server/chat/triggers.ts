@@ -44,6 +44,11 @@ export type Watcher = (folder: string, onChange: (rel: string) => void) => () =>
 
 export interface TriggerDeps {
   chat: Pick<ChatService, 'check' | 'open' | 'deliver' | 'onTurnEnd' | 'turnOutcome' | 'lastReply' | 'record' | 'displayName'>;
+  /**
+   * O Jarvis (server/jarvis): mensagens de gatilho para ele entram como dado não confiável (say); as regras
+   * `trusted: 'jarvis'` (criadas por ele com um cartão aprovado) disparam sem cartão, só para ele.
+   */
+  jarvis?: { id(): string | undefined; say(text: string, origin: 'schedule', ref: string): { result: Promise<unknown> } };
   approve: Approver;
   /** Nome do papel para o cartão (o id não diz nada ao usuário). */
   roleName?: (id: string) => string | undefined;
@@ -181,11 +186,12 @@ export class TriggerService {
     return this.firings;
   }
 
-  create(raw: unknown): { rule: TriggerRule } | Fail {
+  /** `extra.trusted` só vem do servidor (schedule_create do Jarvis, depois do cartão), nunca do corpo do pedido. */
+  create(raw: unknown, extra: { trusted?: 'jarvis' } = {}): { rule: TriggerRule } | Fail {
     if (this.rules.length >= TRIGGERS_MAX) return { status: 409, error: tr('No máximo {0} gatilhos.', [TRIGGERS_MAX]) };
     const r = this.parse(raw);
     if ('error' in r) return { status: 400, error: r.error };
-    const rule: TriggerRule = { id: (this.deps.newId ?? randomUUID)(), createdAt: this.now(), ...r };
+    const rule: TriggerRule = { id: (this.deps.newId ?? randomUUID)(), createdAt: this.now(), ...r, ...(extra.trusted ? { trusted: extra.trusted } : {}) };
     this.rules.push(rule);
     this.save();
     this.arm(rule);
@@ -377,6 +383,13 @@ export class TriggerService {
     const plan = this.plan(rule, vars);
     if ('error' in plan) return this.end(firing, 'failed', plan.error);
     firing.action = plan.detail;
+    // Agendamento do Jarvis (criado com cartão): só manda para ele mesmo, sem cartão.
+    const jarvisId = this.deps.jarvis?.id();
+    if (rule.trusted === 'jarvis' && plan.run.kind === 'send' && jarvisId && plan.run.agentId === jarvisId) {
+      this.deps.jarvis!.say(plan.run.message, 'schedule', rule.id);
+      firing.agentId = jarvisId;
+      return this.end(firing, 'approved', tr('Agendamento do Jarvis (aprovado na criação).'));
+    }
     const card: TriggerCard = {
       ruleId: rule.id,
       title: rule.name,
@@ -440,6 +453,9 @@ export class TriggerService {
       const r = this.deps.chat.open(plan.req, { agentId: `trigger:${ruleId}`, name: tr('Gatilho "{0}"', [rule.name]) });
       if (!('agentId' in r)) return this.end(firing, 'failed', r.reason);
       firing.agentId = r.agentId;
+    } else if (this.deps.jarvis && plan.agentId === this.deps.jarvis.id()) {
+      this.deps.jarvis.say(plan.message, 'schedule', ruleId);
+      firing.agentId = plan.agentId;
     } else {
       const d = this.deps.chat.deliver(plan.agentId, plan.message, { agentId: `trigger:${ruleId}`, name: tr('Gatilho "{0}"', [rule.name]) });
       if (!d) return this.end(firing, 'failed', tr('Agente não encontrado.'));

@@ -83,6 +83,8 @@ export interface RegistryOptions {
   demoDecide?: (id: string, d: PermissionDecision) => boolean;
   /** Detalhe de um pedido fictício do demo (o snapshot já o traz). */
   demoDetail?: (id: string) => PermissionRequestInfo | undefined;
+  /** PIN de aprovação (pin.ts): definido? "exigir em todos os cartões"? Sem ele, só os críticos pedem (e não aprovam). */
+  pin?: () => { set: boolean; all: boolean };
   now?: () => number;
   /** Intervalo do relógio interno (start). */
   tickMs?: number;
@@ -329,7 +331,7 @@ export function parseDecision(raw: unknown): PermissionDecision | undefined {
   const r = rec(raw);
   if (r?.behavior === 'answer') {
     const answers = parseAnswers(r.answers);
-    return answers ? { behavior: 'answer', answers } : undefined;
+    return answers ? { behavior: 'answer', answers, ...(typeof r.pin === 'string' && r.pin ? { pin: r.pin } : {}) } : undefined;
   }
   if (!r || (r.behavior !== 'allow' && r.behavior !== 'deny' && r.behavior !== 'terminal')) return undefined;
   const d: PermissionDecision = { behavior: r.behavior };
@@ -341,6 +343,7 @@ export function parseDecision(raw: unknown): PermissionDecision | undefined {
     if (typeof r.suggestion !== 'number' || !Number.isInteger(r.suggestion) || r.suggestion < 0) return undefined;
     d.suggestion = r.suggestion;
   }
+  if (typeof r.pin === 'string' && r.pin) d.pin = r.pin;
   return d;
 }
 
@@ -455,20 +458,26 @@ export class PermissionRegistry {
    * Pedido de um agente do chat (o permission tool dele chamou o servidor). Vale sem página aberta: o pedido espera
    * a página abrir, e o chat mostra o mesmo cartão.
    */
-  registerChat(p: { agentId: string; sessionId: string; tool: string; input: Record<string, unknown>; timeoutMs: number; text?: string }): { id: string; expiresAt: number } | { skip: 'too-many' } {
+  registerChat(p: { agentId: string; sessionId: string; tool: string; input: Record<string, unknown>; timeoutMs: number; text?: string; body?: string; critical?: boolean }): { id: string; expiresAt: number } | { skip: 'too-many' } {
     if (this.size >= this.maxPending) return { skip: 'too-many' };
     const now = this.now();
     const id = `p-${now.toString(36)}-${++this.seq}-${randomBytes(9).toString('base64url')}`;
-    // `text`: cartão de delegação (chat/delegation.ts), com o resumo pronto e nunca "sempre permitir".
+    // `text`: cartão de delegação (chat/delegation.ts) ou do Jarvis, com o resumo pronto e nunca "sempre permitir".
     const desc = p.text ? { text: truncate(maskSecrets(p.text), 400), icon: '🤝' } : describeTool(p.tool, p.input);
     const view = toolView(p.tool, p.input, this.opts.office.get(p.agentId)?.roomId ?? '');
     const info: PermissionRequestInfo = { id, tool: p.tool, title: view.title, text: desc.text, icon: desc.icon, createdAt: now, expiresAt: now + p.timeoutMs };
     if (view.input) info.input = view.input;
     if (view.inputKind) info.inputKind = view.inputKind;
+    // `body`: o cartão inteiro (fatos primeiro, depois o texto livre), sem corte: quem chama recusa o que não cabe.
+    if (p.body !== undefined) {
+      info.input = maskSecrets(p.body);
+      info.inputKind = 'text';
+    }
+    if (p.critical) info.critical = true;
     // "Aprovar e não perguntar de novo" (sugestão 0): vale para esta conversa, guardado pelo chat (alwaysAllow).
     // Comando composto (&&, ;, |...) não ganha a sugestão: o primeiro termo não diz o que roda.
     const command = typeof p.input.command === 'string' ? p.input.command.trim() : undefined;
-    if (p.text) delete info.suggestions;
+    if (p.text || p.critical) delete info.suggestions;
     else if (command === undefined) info.suggestions = [{ index: 0, rules: [p.tool], destination: 'session' }];
     else if (command && !/&&|\|\||[;|`\n]|\$\(/.test(command)) info.suggestions = [{ index: 0, rules: [`${p.tool}(${command.split(/\s+/)[0]}:*)`], destination: 'session' }];
     this.pending.set(id, { info, chat: true, agentId: p.agentId, sessionId: p.sessionId, signature: '', lastScanAt: 0, waiters: new Set(), idleSince: now });
@@ -486,7 +495,7 @@ export class PermissionRegistry {
   /** Detalhe completo de um pedido em aberto (com os argumentos), ou undefined. */
   detail(id: string): PermissionRequestInfo | undefined {
     const p = this.pending.get(id);
-    if (p && !p.outcome) return { ...p.info, ...this.queueOf(p) };
+    if (p && !p.outcome) return { ...p.info, ...this.queueOf(p), ...this.pinOf(p.info) };
     return this.opts.demoDetail?.(id);
   }
 
@@ -502,7 +511,7 @@ export class PermissionRegistry {
       counts.set(p.agentId, (counts.get(p.agentId) ?? 0) + 1);
       if (out.has(p.agentId)) continue;
       const { input: _input, inputKind: _kind, ...info } = p.info;
-      out.set(p.agentId, info);
+      out.set(p.agentId, { ...info, ...this.pinOf(p.info) });
     }
     for (const [agentId, info] of out) {
       const n = (counts.get(agentId) ?? 1) - 1;
@@ -532,6 +541,19 @@ export class PermissionRegistry {
       p.waiters.add(waiter);
     });
     return { result, cancel: () => waiter && this.dropWaiter(p, waiter) };
+  }
+
+  /** Aprovar este pedido pede o PIN? (crítico, ou "exigir em todos" com PIN definido; o do demo, nunca.) */
+  needsPin(id: string): boolean {
+    const p = this.pending.get(id);
+    if (!p || p.outcome) return false;
+    return !!p.info.critical || !!this.opts.pin?.().all;
+  }
+
+  private pinOf(info: PermissionRequestInfo): Pick<PermissionRequestInfo, 'pin'> {
+    const pin = this.opts.pin?.();
+    if (!info.critical && !pin?.all) return {};
+    return { pin: pin?.set ? 'required' : 'unset' };
   }
 
   /** Decisão da página. Pedido do demo vai para `demoDecide` (com as mesmas regras para as perguntas). */

@@ -27,6 +27,9 @@ import { Hub } from './sse';
 import { hashPassword, parsePasswordHash } from '../remote/password';
 import { SpawnService } from '../spawn/spawn';
 import { createChatRoutes, type ChatRouteDeps } from '../chat/http';
+import { ApprovalPin } from '../permissions/pin';
+import { createPermissionRoutes } from '../permissions/http';
+import { PermissionRegistry } from '../permissions/registry';
 
 setQuiet(true);
 
@@ -183,7 +186,7 @@ afterEach(async () => {
 });
 
 /** Uma porta local (sem login) e uma remota (com login), sobre a MESMA API, como no server/index.ts. */
-async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness> {
+async function start(allow: RemoteFeature[] = ['permissions'], over: Partial<Parameters<typeof createApiHandler>[0]> = {}): Promise<Harness> {
   const tmp = tempDir();
   const dir = join(tmp.dir, '.claude');
   mkdirSync(join(dir, 'sessions'), { recursive: true });
@@ -245,7 +248,7 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
     }),
     remote: { is: isRemoteRequest, allows: (f) => allowSet.has(f) },
     // VBoards falso: só a trava de quem lê e quem grava a configuração das pastas (http/app.ts) é testada aqui.
-    ntfy: { get: () => ntfyUrl, set: (raw: unknown) => ((ntfyUrl = String(raw)), undefined) },
+    ntfy: { view: (editable: boolean) => ({ configured: !!ntfyUrl, ...(editable ? { url: ntfyUrl } : {}), editable }), update: (raw: unknown) => ((ntfyUrl = String((raw as { url?: unknown }).url)), undefined) },
     vboards: {
       list: async () => [],
       refineList: () => [],
@@ -260,6 +263,7 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
       worldCalls.push(`${req.method} ${url.pathname}`);
       sendJson(res, 200, { ok: true });
     },
+    ...over,
   });
   const guard = createRequestGuard();
   const gate = createRemoteGate({ config: CFG, sessions: new RemoteSessions(SECRET, CFG), secure: false });
@@ -577,6 +581,27 @@ describe('porta remota', () => {
     });
     expect(decision.status).toBe(200);
     expect(h.permissionCalls).toEqual(['remote POST /api/permissions/p1/decision']);
+  });
+
+  it('PIN de aprovação pela porta remota: cartão crítico pede o PIN como na local; ler o estado vale, mudar o PIN não', async () => {
+    const tmp = tempDir();
+    const pin = new ApprovalPin(join(tmp.dir, 'pin.json'), { n: 2 ** 10 });
+    expect(await pin.update({ pin: 'frase longa do dono' })).toBeUndefined();
+    const office = { get: () => undefined, list: () => [], markDirty: () => {}, addActivity: () => {}, noticePermission: () => {} };
+    const registry = new PermissionRegistry({ office, viewers: () => 1, pin: () => ({ set: pin.isSet(), all: pin.all() }) });
+    const h = await start(['permissions'], { permissions: createPermissionRoutes(registry, pin), approvalPin: pin });
+    closers.push(async () => tmp.cleanup());
+    const cookie = await login(h.remoteBase);
+    const card = registry.registerChat({ agentId: 'chat:jarvis', sessionId: 's', tool: 'Jarvis · runs_merge', input: {}, timeoutMs: 60_000, text: 'Jarvis quer: runs_merge', body: 'JUNTAR', critical: true });
+    if (!('id' in card)) throw new Error('sem cartão');
+    const decide = (body: unknown) => request(h.remoteBase, `/api/permissions/${card.id}/decision`, { method: 'POST', headers: { Cookie: cookie }, body });
+    expect((await decide({ behavior: 'allow' })).status).toBe(403);
+    expect((await decide({ behavior: 'allow', pin: 'errado errado' })).status).toBe(403);
+    expect((await decide({ behavior: 'allow', pin: 'frase longa do dono' })).status).toBe(200);
+    expect(JSON.parse((await request(h.remoteBase, '/api/approval-pin', { headers: { Cookie: cookie } })).body)).toEqual({ set: true, all: false, editable: false });
+    const change = await request(h.remoteBase, '/api/approval-pin', { method: 'POST', headers: { Cookie: cookie }, body: { pin: 'outro pin qualquer', current: 'frase longa do dono' } });
+    expect(change.status).toBe(403);
+    expect(await pin.check('frase longa do dono')).toBe('ok');
   });
 
   it('logado com Host imitando localhost: continua sem o que não foi liberado', async () => {

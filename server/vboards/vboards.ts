@@ -26,6 +26,7 @@ import { errMsg, log } from '../log';
 import { FileTail } from '../sources/tail';
 import type { TerminalParser } from '../sources/terminal';
 import { sessionName, type SpawnInfo, type SpawnSubmit } from '../spawn/spawn';
+import { apiErrorText } from './api';
 import type { NotifyEvent } from './ntfy';
 
 export const POLL_MS = 10_000;
@@ -44,6 +45,7 @@ const CARD_CACHE_MS = 5 * 60_000;
 /** Depois de subir: só conclui "a sessão acabou" passado este tempo (o escritório ainda está remontando). */
 const STARTUP_GRACE_MS = 60_000;
 
+/** `token`: o segredo antigo da ponte ou um token `vb_...` da API v1 (com ele o e-mail vem do token e pode faltar). */
 export interface VBoardsConfig {
   base: string;
   token: string;
@@ -168,8 +170,9 @@ export function resolveConfig(env: NodeJS.ProcessEnv, git: { url?: string; token
   const email = env.HABBLAUD_VBOARDS_EMAIL?.trim() || git.email?.trim();
   if (!base) return { off: tr('sem endereço (git config --global vboards.url ou HABBLAUD_VBOARDS_URL)') };
   if (!token) return { off: tr('sem token (git config --global vboards.token ou HABBLAUD_VBOARDS_TOKEN)') };
-  if (!email) return { off: tr('sem e-mail (git config --global user.email ou HABBLAUD_VBOARDS_EMAIL)') };
-  return { base, token, email };
+  // Token vb_ (API v1): o VBoards tira o e-mail do token.
+  if (!email && !token.startsWith('vb_')) return { off: tr('sem e-mail (git config --global user.email ou HABBLAUD_VBOARDS_EMAIL)') };
+  return { base, token, email: email ?? '' };
 }
 
 /** Pastas cujo nome (ou vboards.card) é o título do card. */
@@ -514,6 +517,8 @@ export class VBoardsService {
   private checkTimer?: ReturnType<typeof setInterval>;
   private delay = POLL_MS;
   private lastError?: string;
+  /** Última busca recusada pelo token (401 expirado/inválido, 403 sem escopo): a frase para a página. */
+  private authProblem?: string;
   private checking = false;
   private reporting = false;
   private reportAgain = false;
@@ -551,7 +556,8 @@ export class VBoardsService {
   /** Busca a fila; a próxima busca vem em POLL_MS, ou mais tarde depois de erro (dobra até POLL_MAX_MS). */
   async poll(): Promise<void> {
     try {
-      const r = (await this.call(`/api/agent-tasks?email=${encodeURIComponent(this.opts.config.email)}`)) as { tasks?: unknown; refines?: unknown };
+      const email = this.opts.config.email;
+      const r = (await this.call(`/api/agent-tasks${email ? `?email=${encodeURIComponent(email)}` : ''}`)) as { tasks?: unknown; refines?: unknown };
       this.refines = parseRefines(r?.refines);
       void this.startRefines();
       const list = Array.isArray(r?.tasks) ? r.tasks : [];
@@ -562,12 +568,16 @@ export class VBoardsService {
       });
       this.delay = POLL_MS;
       this.lastError = undefined;
+      this.authProblem = undefined;
       await this.autoStart().catch((err) => log.warnOnce(`vboards:auto:${errMsg(err)}`, tr('VBoards: abertura automática falhou ({0}).', [errMsg(err)])));
     } catch (err) {
       const msg = errMsg(err);
       if (msg !== this.lastError) log.warn(tr('VBoards: falha ao buscar as tarefas ({0}); tentando de novo mais tarde.', [msg]));
       this.lastError = msg;
-      this.delay = Math.min(this.delay * 2, POLL_MAX_MS);
+      // Token sem o escopo ou expirado: repetir não resolve; confere de novo só no intervalo maior, e a página mostra.
+      const status = (err as { status?: unknown })?.status;
+      this.authProblem = status === 401 || status === 403 ? msg : undefined;
+      this.delay = this.authProblem ? POLL_MAX_MS : Math.min(this.delay * 2, POLL_MAX_MS);
     }
     clearTimeout(this.pollTimer);
     this.pollTimer = setTimeout(() => void this.poll(), this.delay);
@@ -632,7 +642,7 @@ export class VBoardsService {
     const error = body.error === undefined ? undefined : cutText(maskSecrets(body.error), REFINE_LIMITS.error);
     this.refineViews.set(r.cardId, { cardId: r.cardId, cardTitle: r.cardTitle, state: body.status, at: this.now(), ...(error ? { error } : {}) });
     if (body.status !== 'running') this.opts.notify?.(r.cardTitle, body.status);
-    return this.sendRefine({ email: this.opts.config.email, cardId: r.cardId, ...body, ...(error === undefined ? {} : { error }) }, 0);
+    return this.sendRefine({ email: this.opts.config.email || undefined, cardId: r.cardId, ...body, ...(error === undefined ? {} : { error }) }, 0);
   }
 
   private async sendRefine(payload: Record<string, unknown>, tries: number): Promise<'ok' | 'rejected' | 'later'> {
@@ -657,6 +667,11 @@ export class VBoardsService {
   }
 
   /** Atividade do "Refinar" para o painel: as rodando e as que acabaram há pouco. */
+  /** O token foi recusado na última busca (escopo que falta, expirado): a frase para o painel; undefined = ok. */
+  problem(): string | undefined {
+    return this.authProblem;
+  }
+
   refineList(): RefineView[] {
     const now = this.now();
     for (const [id, v] of this.refineViews) if (v.state !== 'running' && now - v.at > REFINE_VIEW_MS) this.refineViews.delete(id);
@@ -881,7 +896,7 @@ export class VBoardsService {
       if (l.reported === l.state || (l.retryAt && now < l.retryAt)) continue;
       const state = l.state;
       try {
-        await this.call('/api/agent-tasks/update', { email: this.opts.config.email, cardId: l.cardId, subtaskId: l.subtaskId, status: state, ...(l.summary ? { summary: l.summary } : {}) });
+        await this.call('/api/agent-tasks/update', { email: this.opts.config.email || undefined, cardId: l.cardId, subtaskId: l.subtaskId, status: state, ...(l.summary ? { summary: l.summary } : {}) });
         l.reported = state;
         l.retryAt = undefined;
       } catch (err) {
@@ -913,7 +928,7 @@ export class VBoardsService {
       if (!path) continue;
       const repo = cardName({ path, card: await this.cardOf(path) });
       try {
-        await this.call('/api/agent-tasks/todos', { email: this.opts.config.email, repo, todos: [d.item] });
+        await this.call('/api/agent-tasks/todos', { email: this.opts.config.email || undefined, repo, todos: [d.item] });
         this.todos.posted(d.id, d.sig);
       } catch (err) {
         log.warnOnce(`vboards:todos:${errMsg(err)}`, tr('VBoards: falha ao mandar as conversas ({0}).', [errMsg(err)]));
@@ -946,6 +961,10 @@ export class VBoardsService {
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
+    if (res.status === 401 || res.status === 403) {
+      const j = (await res.json().catch(() => ({}))) as { error?: unknown };
+      throw Object.assign(new Error(apiErrorText(res.status, j.error)), { status: res.status });
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json().catch(() => ({}));
   }

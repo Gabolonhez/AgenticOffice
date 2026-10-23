@@ -664,3 +664,15 @@ describe('Refinar (plano só de leitura)', () => {
     expect(s.refine).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('VBoards: token vb_ recusado na fila', () => {
+  it('403 sem escopo: a frase vai para o painel (problem) e a próxima busca espera o intervalo maior; sem e-mail na URL', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: 'missing scope agent' }), { status: 403 }));
+    const svc = new VBoardsService({ config: { base: 'https://vb.dev', token: 'vb_x', email: '' }, agents: () => [], roomPath: () => undefined, folders: async () => [], chat: { open: () => ({ agentId: 'chat:1' }) }, fetch: fetchMock as unknown as typeof fetch });
+    await svc.poll();
+    svc.stop();
+    expect(svc.problem()).toBe('O token do VBoards precisa do escopo agent.');
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe('https://vb.dev/api/agent-tasks');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

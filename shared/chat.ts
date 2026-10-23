@@ -22,7 +22,8 @@ export interface ChatState {
   limits: ChatLimits;
   isolated?: { branch: string; merged?: boolean; discarded?: boolean };
 }
-export interface ChatView { agentId: string; provider: Provider; items: ChatItem[]; state: ChatState; lastSeq: number }
+/** `system`: agente do próprio Habblaud (o Jarvis, server/jarvis): não fecha e fala pela rota dele. */
+export interface ChatView { agentId: string; provider: Provider; items: ChatItem[]; state: ChatState; lastSeq: number; system?: 'jarvis' }
 export const CHAT_TEXT_MAX = 8000; // igual ao SPAWN_PROMPT_MAX
 export const CHAT_TOOL_OUTPUT_MAX = 4000; // por item, depois de maskSecrets
 

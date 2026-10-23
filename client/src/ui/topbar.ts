@@ -55,6 +55,8 @@ export class TopBar implements UiComponent {
   private readonly runsPanel: RunsPanel;
   private readonly triggersBtn: HTMLButtonElement;
   private readonly triggersPanel: TriggersPanel;
+  /** Jarvis (server/jarvis): abre a conversa com o orquestrador (cria o agente na primeira vez). */
+  private readonly jarvisBtn: HTMLButtonElement;
   /** Grupo dos botões de painéis (feed, configurações, ajuda); o histórico entra aqui (ui/index.ts). */
   readonly panelGroup: HTMLElement;
 
@@ -131,6 +133,8 @@ export class TopBar implements UiComponent {
     this.triggersBtn = iconButton(ICONS.bolt, tr('Gatilhos: quando algo acontecer, propor abrir ou avisar um agente'), () => this.triggersPanel.toggle(this.triggersBtn), 'ui-btn-triggers');
     this.triggersBtn.setAttribute('aria-haspopup', 'dialog');
     this.triggersBtn.hidden = true;
+    this.jarvisBtn = iconButton(ICONS.jarvis, tr('Jarvis: o orquestrador do escritório'), () => void this.openJarvis(), 'ui-btn-jarvis');
+    this.jarvisBtn.hidden = true;
     this.version = new VersionChip(ctx, this.settingsBtn);
     this.status = h('div', { class: 'ui-topbar__status' }, this.pill, this.version.el, this.demoBadge);
     const viewGroup = h(
@@ -143,6 +147,7 @@ export class TopBar implements UiComponent {
     const panelGroup = h(
       'div',
       { class: 'ui-btn-group', role: 'group', attrs: { 'aria-label': tr('Painéis') } },
+      this.jarvisBtn,
       this.spawnBtn,
       this.runsBtn,
       this.triggersBtn,
@@ -245,6 +250,7 @@ export class TopBar implements UiComponent {
     setHidden(this.spawnBtn, !(access().spawn || access().chat) || store.mock || store.replaying);
     setHidden(this.runsBtn, !access().chat || store.mock || store.replaying);
     setHidden(this.triggersBtn, !access().chat || store.mock || store.replaying);
+    setHidden(this.jarvisBtn, !access().chat || store.mock || store.replaying);
 
     this.sidebarBtn.setAttribute('aria-pressed', String(this.ctx.isPanelOpen('sidebar')));
     this.feedBtn.setAttribute('aria-pressed', String(this.ctx.isPanelOpen('feed')));
@@ -283,6 +289,19 @@ export class TopBar implements UiComponent {
     if (sel?.type === 'agent' && agents[i].id === sel.id) i = (i + 1) % agents.length;
     this.shellCursor = i + 1;
     this.ctx.select({ type: 'agent', id: agents[i].id }, { focus: true });
+  }
+
+  /** GET /api/chat/jarvis cria o Jarvis (sem rodar nada) e devolve o id; a gaveta abre na conversa dele. */
+  private async openJarvis(): Promise<void> {
+    try {
+      const res = await fetch('/api/chat/jarvis', { credentials: 'same-origin', cache: 'no-store' });
+      const body = (await res.json().catch(() => ({}))) as { agentId?: string; error?: string };
+      if (!res.ok || !body.agentId) throw new Error(body.error ?? tr('erro {0}', [res.status]));
+      this.ctx.select({ type: 'agent', id: body.agentId }, { focus: true });
+      this.ctx.invalidate();
+    } catch (err) {
+      this.ctx.announce(tr('Jarvis indisponível: {0}', [(err as Error).message]));
+    }
   }
 
   private focusFirstWaiting(): void {

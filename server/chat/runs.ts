@@ -13,14 +13,14 @@
 // aviso no celular; a automática volta sozinha depois do reinício da janela, a manual só com "Continuar" (que, como o
 // "Rodar lista", passa por cima da cota e deixa um aviso).
 // Guardado em <dataDir>/chat/runs.json. Desenho: docs/superpowers/specs/2026-10-16-checklist-design.md.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { truncate } from '../../shared/activity';
 import { CHAT_TEXT_MAX } from '../../shared/chat';
 import { tr } from '../../shared/i18n';
 import { parseDiff } from '../../shared/diff';
-import { RUN_CONTEXT_MAX, RUN_FEEDBACK_MAX, RUN_FEEDBACK_TEXT_MAX, RUN_ITEMS_MAX, type ChatRun, type RunAgentOptions, type RunAuto, type RunFeedbackComment, type RunItem } from '../../shared/runs';
+import { RUN_CONTEXT_MAX, RUN_FEEDBACK_MAX, RUN_FEEDBACK_TEXT_MAX, RUN_ITEMS_MAX, type ChatRun, type RunAgentOptions, type RunAuto, type RunFeedbackComment, type RunItem, type RunMetric } from '../../shared/runs';
 import { errMsg, log } from '../log';
 import type { Provider } from '../../shared/types';
 import type { ChatOpener } from '../vboards/vboards';
@@ -35,13 +35,16 @@ const SUMMARY_MAX = 600;
 const OPTION_KEYS = ['folder', 'provider', 'account', 'model', 'roleId', 'permission', 'limits', 'denyPush'] as const;
 
 export interface RunDeps {
-  chat: Pick<ChatService, 'check' | 'open' | 'turnOutcome' | 'lastReply' | 'stop' | 'onTurnEnd' | 'restoreCwd' | 'send'>;
+  /** `record`: o gasto do agente do item, para a linha de métricas. */
+  chat: Pick<ChatService, 'check' | 'open' | 'turnOutcome' | 'lastReply' | 'stop' | 'onTurnEnd' | 'restoreCwd' | 'send'> & Partial<Pick<ChatService, 'record'>>;
   /** `reopen`: comentários da revisão voltaram ao agente; a subtarefa dele volta a 'running' no VBoards. */
   vboards?: { begin(raw: unknown, open: ChatOpener): Promise<{ agentId: string } | { spawn: unknown } | { status: number; error: string }>; reopen?(agentId: string): boolean };
   worktrees?: WorktreeOps;
   /** Portão das listas automáticas (gate.ts runChecks/reviewDiff); ausente = o item vai para 'review' sem checar. */
   gate?: { checks(cmd: string, cwd: string): Promise<CheckResult>; review(auto: RunAuto, diff: string): Promise<ReviewResult> };
   file: string;
+  /** <dataDir>/chat/run-metrics.jsonl: uma linha por item que terminou (ausente = sem métricas). */
+  metricsFile?: string;
   /** Listas rodando ao mesmo tempo, somando todas as pastas (padrão 2, mínimo 1). */
   maxParallel?: number;
   /** Cota da conta acima do limite (quota.ts), pela conta da lista ou a padrão do provedor; undefined = livre ou desconhecida. */
@@ -55,6 +58,50 @@ export interface RunDeps {
 }
 
 type Fail = { status: number; error: string };
+
+/** Métricas: no load, com o arquivo acima de METRICS_TRIM_BYTES, fica só o que tem até METRICS_KEEP_MS. */
+export const METRICS_TRIM_BYTES = 2 * 1024 * 1024;
+export const METRICS_KEEP_MS = 90 * 24 * 60 * 60_000;
+
+/** Uma linha JSON no fim do arquivo; erro só vira log. */
+export function appendMetric(file: string, m: RunMetric): void {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, `${JSON.stringify(m)}\n`);
+  } catch (err) {
+    log.warnOnce(`runs:metrics:${errMsg(err)}`, tr('Listas: não deu para gravar as métricas ({0}).', [errMsg(err)]));
+  }
+}
+
+/** As linhas desde `since` (linha estragada fica de fora). */
+export function readMetrics(file: string, since = 0): RunMetric[] {
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return [];
+  }
+  return text.split('\n').flatMap((l) => {
+    try {
+      const m = JSON.parse(l) as RunMetric;
+      return m && typeof m.at === 'number' && m.at >= since && typeof m.runId === 'string' ? [m] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** Corte do arquivo de métricas: só acima de METRICS_TRIM_BYTES, mantendo os últimos METRICS_KEEP_MS. */
+export function trimMetrics(file: string, now: number): void {
+  try {
+    if (statSync(file).size <= METRICS_TRIM_BYTES) return;
+    const keep = readMetrics(file, now - METRICS_KEEP_MS);
+    writeFileSync(`${file}.tmp`, keep.map((m) => `${JSON.stringify(m)}\n`).join(''));
+    renameSync(`${file}.tmp`, file);
+  } catch {
+    // sem arquivo: nada a cortar
+  }
+}
 
 const itemPrompt = (run: Pick<ChatRun, 'context'>, text: string) => (run.context ? `${run.context}\n\n${text}` : text);
 const DIFF_VIEW_MAX = 500_000;
@@ -113,6 +160,7 @@ export class RunService {
       return;
     }
     if (!Array.isArray(raw)) return;
+    if (this.deps.metricsFile) trimMetrics(this.deps.metricsFile, this.now());
     this.runs = raw.filter(
       (r): r is ChatRun => !!r && typeof r === 'object' && typeof r.id === 'string' && Array.isArray(r.items) && !!r.options && typeof r.options.folder === 'string' && r.items.every((i: unknown) => !!i && typeof (i as RunItem).text === 'string'),
     );
@@ -259,6 +307,7 @@ export class RunService {
       if (i.state === 'running') {
         i.state = 'interrupted';
         i.endedAt = this.now();
+        this.metric(run, i);
         if (i.agentId) this.deps.chat.stop(i.agentId);
       } else if (i.state === 'pending') i.state = 'canceled';
     }
@@ -544,6 +593,7 @@ export class RunService {
     if (run.auto && run.isolated && item.agentId && (end === 'done' || item.retried)) return void this.gate(run, item, run.auto, run.isolated, item.agentId);
     item.state = end;
     item.endedAt = this.now();
+    this.metric(run, item);
     const text = end === 'done' ? (item.agentId && this.deps.chat.lastReply(item.agentId)) || '' : reason || tr('O agente terminou sem responder.');
     if (text) item.summary = truncate(text.replace(/\s+/g, ' ').trim(), SUMMARY_MAX);
     if (end === 'failed' && run.stopOnFail) return this.halt(run, tr('Parou: um item falhou.'));
@@ -562,7 +612,9 @@ export class RunService {
     }
     // Parada ou servidor desligando durante o portão: o item já mudou de estado.
     if (item.state !== 'running' || run.state !== 'running' || this.frozen) return;
-    if (!gatePassed(checks, review) && !item.retried) {
+    const passed = gatePassed(checks, review);
+    item.gate = passed ? 'pass' : 'fail';
+    if (!passed && !item.retried) {
       item.retried = true;
       this.save();
       // Uma volta só: o próximo fim de rodada (turnEnded → finish) passa de novo pelo portão e termina em 'review'.
@@ -571,8 +623,28 @@ export class RunService {
     item.report = gateReport({ branch: w.branch, checks, review, summary: this.deps.chat.lastReply(agentId), retried: item.retried, missing: w.missing });
     item.state = 'review';
     item.endedAt = this.now();
+    this.metric(run, item);
     item.summary = truncate(item.report.replace(/\s+/g, ' ').trim(), SUMMARY_MAX);
     this.advance(run);
+  }
+
+  /** A linha de métricas de um item que terminou: gasto e tokens do agente dele (o Jarvis e o briefing leem). */
+  private metric(run: ChatRun, item: RunItem): void {
+    if (!this.deps.metricsFile) return;
+    const spend = item.agentId ? this.deps.chat.record?.(item.agentId)?.spend : undefined;
+    appendMetric(this.deps.metricsFile, {
+      at: item.endedAt ?? this.now(),
+      runId: run.id,
+      folder: run.options.folder,
+      state: item.state,
+      gate: run.auto ? (item.gate ?? 'none') : 'none',
+      retried: !!item.retried,
+      ms: item.startedAt ? Math.max(0, (item.endedAt ?? this.now()) - item.startedAt) : 0,
+      usd: spend?.usd ?? 0,
+      tokens: spend?.tokens ?? 0,
+      provider: run.options.provider,
+      ...(run.options.model ? { model: run.options.model } : {}),
+    });
   }
 
   private save(): void {

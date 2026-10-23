@@ -98,3 +98,12 @@ describe('chat: "não perguntar de novo" com comando composto', () => {
     expect(decideClaudeTool('Bash', { command: 'npm test' }, a)).toEqual({ behavior: 'allow' });
   });
 });
+
+describe('chat: agente do sistema (Jarvis) no permission tool', () => {
+  it('todas as mcp__habblaud__* passam (o portão está no run() delas); fora do escritório, nega sem perguntar', () => {
+    const j = { permission: 'ask' as const, root: 'C:\j', alwaysAllow: ['Bash:npm'], system: true };
+    expect(decideClaudeTool('mcp__habblaud__runs_merge', { id: 'r' }, j)).toEqual({ behavior: 'allow' });
+    expect(decideClaudeTool('Bash', { command: 'npm test' }, j).behavior).toBe('deny');
+    expect(decideClaudeTool('Bash', { command: 'npm test' }, { ...j, permission: 'auto' }).behavior).toBe('deny');
+  });
+});

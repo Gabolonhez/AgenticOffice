@@ -25,6 +25,23 @@ export interface RunItem {
   report?: string;
   /** Interrompido pelo reinício (lista automática): ao voltar, segue no mesmo agente (agentId), avisado disso. */
   resume?: boolean;
+  /** Lista automática: o resultado do portão na última passada (checagens + revisão). */
+  gate?: 'pass' | 'fail';
+}
+
+/** Uma linha de <dataDir>/chat/run-metrics.jsonl: um item de lista que terminou (briefing e usage_metrics do Jarvis). */
+export interface RunMetric {
+  at: number;
+  runId: string;
+  folder: string;
+  state: RunItemState;
+  gate: 'pass' | 'fail' | 'none';
+  retried: boolean;
+  ms: number;
+  usd: number;
+  tokens: number;
+  provider: Provider;
+  model?: string;
 }
 
 /** Lista aberta sozinha pelo VBoards (vboards.auto da pasta): o portão de qualidade do fim de cada item. */

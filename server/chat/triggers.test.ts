@@ -299,3 +299,37 @@ describe('gatilhos: cartão no escritório', () => {
     expect(registry.releaseAgent).toHaveBeenCalledWith('trigger:r1');
   });
 });
+
+describe('gatilhos: agendamentos do Jarvis', () => {
+  const sendJarvis = { kind: 'send', agentId: 'chat:ana', message: 'briefing {{hora}}' };
+  const jarvis = () => ({ id: () => 'chat:ana', say: vi.fn(() => ({ result: Promise.resolve() })) });
+
+  it('trusted só pelo servidor: disparo para o próprio Jarvis pula o cartão e entra como dado (say)', async () => {
+    const j = jarvis();
+    const t = setup({ jarvis: j });
+    const fromBody = rule(t.svc.create({ name: 'pelo corpo', when: { kind: 'interval', minutes: 15 }, do: sendJarvis, trusted: 'jarvis' }));
+    expect(fromBody.trusted).toBeUndefined();
+    const trusted = rule(t.svc.create({ name: 'manhã', when: { kind: 'interval', minutes: 15 }, do: sendJarvis }, { trusted: 'jarvis' }));
+    expect(t.svc.test(trusted.id)).toBe('ok');
+    expect(t.cards).toHaveLength(0);
+    expect(j.say).toHaveBeenCalledWith(expect.stringMatching(/^briefing \d\d:\d\d$/), 'schedule', trusted.id);
+    expect(t.chat.deliver).not.toHaveBeenCalled();
+    expect(t.svc.history()[0]).toMatchObject({ outcome: 'approved', agentId: 'chat:ana' });
+    // A regra comum para o Jarvis continua com cartão; aprovada, também entra como dado.
+    t.svc.test(fromBody.id);
+    expect(t.cards).toHaveLength(1);
+    t.cards[0].answer({ answer: 'allow' });
+    await flush();
+    expect(j.say).toHaveBeenCalledTimes(2);
+    expect(t.chat.deliver).not.toHaveBeenCalled();
+  });
+
+  it('trusted que manda para outro agente (mudado pela página) volta a pedir cartão', () => {
+    const t = setup({ jarvis: jarvis() });
+    const r = rule(t.svc.create({ name: 'x', when: { kind: 'interval', minutes: 15 }, do: sendJarvis }, { trusted: 'jarvis' }));
+    t.svc.update(r.id, { name: 'x', when: { kind: 'interval', minutes: 15 }, do: { kind: 'send', agentId: 'chat:bia', message: 'oi' } });
+    expect(t.svc.list()[0].trusted).toBe('jarvis');
+    t.svc.test(r.id);
+    expect(t.cards).toHaveLength(1);
+  });
+});

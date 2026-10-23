@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatState } from '../../../shared/chat';
-import { afterSeq, canSendChat, chatStatusText, mergeItems, pollDelayChat, toolLine, usageText } from './chat-model';
+import { afterSeq, canSendChat, chatStatusText, mergeItems, newReplies, pollDelayChat, toolLine, usageText } from './chat-model';
 
 const st = (o: Partial<ChatState> = {}): ChatState => ({ phase: 'idle', spentUsd: 0, spentTokens: 0, limits: {}, ...o });
 
@@ -54,5 +54,18 @@ describe('chat: modelo do painel', () => {
   it('busca mais rápido com a rodada em andamento', () => {
     expect(pollDelayChat(st({ phase: 'tool' }))).toBe(700);
     expect(pollDelayChat(st())).toBe(4000);
+  });
+});
+
+describe('chat: voz do Jarvis', () => {
+  it('só as respostas novas, sem vazias nem outros itens', () => {
+    const items = [
+      { seq: 1, at: 0, kind: 'assistant' as const, text: 'velha' },
+      { seq: 2, at: 0, kind: 'user' as const, text: 'oi' },
+      { seq: 3, at: 0, kind: 'assistant' as const, text: ' ' },
+      { seq: 4, at: 0, kind: 'assistant' as const, text: 'nova' },
+    ];
+    expect(newReplies(items, 1)).toEqual(['nova']);
+    expect(newReplies(items, 4)).toEqual([]);
   });
 });

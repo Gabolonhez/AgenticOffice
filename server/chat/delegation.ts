@@ -176,8 +176,9 @@ export class Delegation {
     }
   }
 
+  /** Cartão crítico (pede o PIN): o resumo numa linha e o texto inteiro no corpo (até DELEGATION_TEXT_MAX, sem corte). */
   private cardOf(tool: string, input: Record<string, unknown>, text: string) {
-    return { tool, input, text: truncate(maskSecrets(text), 2000) };
+    return { tool, input, text: truncate(maskSecrets(text), 400), body: maskSecrets(text), critical: true };
   }
 
   private refusal(a: HumanAnswer, nothing: string): string {

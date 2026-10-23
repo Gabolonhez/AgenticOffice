@@ -59,6 +59,8 @@ export class VBoardsPanel implements UiComponent {
   private readonly status: HTMLElement;
   private tasks: VBoardsTask[] = [];
   private refines: VBoardsRefine[] = [];
+  /** O token foi recusado na última busca (escopo que falta, expirado/inválido): a frase do servidor. */
+  private problem = '';
   private ignored = readIgnored();
   /** Pasta escolhida na página por tarefa (sobrevive às atualizações da lista). */
   private readonly picked = new Map<string, string>();
@@ -110,10 +112,12 @@ export class VBoardsPanel implements UiComponent {
 
   render(): void {
     const n = this.enabled ? this.visible().length + this.refines.length : 0;
-    setHidden(this.button, n === 0);
-    setText(this.value, String(n));
+    // Token recusado: o botão aparece (com "!") para a pessoa ver o motivo.
+    setHidden(this.button, n === 0 && !(this.enabled && this.problem));
+    this.button.classList.toggle('is-error', !!this.problem);
+    setText(this.value, this.problem && !n ? '!' : String(n));
     setAttr(this.button, 'aria-label', tr('{0} tarefa(s) do VBoards esperando', [n]));
-    if (!n && this.isOpen) this.hide();
+    if (!n && !this.problem && this.isOpen) this.hide();
   }
 
   private async load(): Promise<void> {
@@ -122,9 +126,10 @@ export class VBoardsPanel implements UiComponent {
       const res = await fetch('/api/vboards', { credentials: 'same-origin', cache: 'no-store' });
       if (res.status === 404) this.off = true;
       else if (res.ok) {
-        const body = (await res.json()) as { tasks?: VBoardsTask[]; refines?: VBoardsRefine[] };
+        const body = (await res.json()) as { tasks?: VBoardsTask[]; refines?: VBoardsRefine[]; problem?: string };
         this.tasks = Array.isArray(body.tasks) ? body.tasks : [];
         this.refines = Array.isArray(body.refines) ? body.refines : [];
+        this.problem = typeof body.problem === 'string' ? body.problem : '';
       }
     } catch {
       // fica a lista de antes
@@ -167,10 +172,11 @@ export class VBoardsPanel implements UiComponent {
   /** Redesenha só quando a lista mudou (a escolha da pasta e o foco não se perdem a cada atualização). */
   private renderList(force = false): void {
     const tasks = this.visible();
-    const sig = JSON.stringify([tasks, this.refines, this.busy]);
+    const sig = JSON.stringify([tasks, this.refines, this.busy, this.problem]);
     if (!force && sig === this.shown) return;
     this.shown = sig;
-    this.list.replaceChildren(...tasks.map((t) => this.item(t)), ...this.refines.map((r) => this.refineItem(r)));
+    const problem = this.problem ? [h('li', { class: 'ui-vboards__item' }, h('p', { class: 'ui-vboards__text is-error', text: this.problem }))] : [];
+    this.list.replaceChildren(...problem, ...tasks.map((t) => this.item(t)), ...this.refines.map((r) => this.refineItem(r)));
     this.syncListBtn();
   }
 

@@ -25,6 +25,8 @@ export interface UiPrefs {
   hiddenAccounts: string[];
   /** Habblaud World: aviso quando o primeiro visitante entra no seu prédio (a cada conexão). Ligado por padrão. */
   worldVisitNotify: boolean;
+  /** Jarvis: ler em voz alta (speechSynthesis, pt-BR) as respostas novas dele com a conversa aberta. Desligado por padrão. */
+  jarvisVoice: boolean;
 }
 
 export const DEFAULT_PREFS: UiPrefs = {
@@ -40,6 +42,7 @@ export const DEFAULT_PREFS: UiPrefs = {
   feedOpen: true,
   hiddenAccounts: [],
   worldVisitNotify: true,
+  jarvisVoice: false,
 };
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
@@ -66,6 +69,7 @@ export function sanitizePrefs(raw: unknown): UiPrefs {
     feedOpen: bool(o.feedOpen, d.feedOpen),
     hiddenAccounts: Array.isArray(o.hiddenAccounts) ? o.hiddenAccounts.filter((x): x is string => typeof x === 'string').slice(0, 20) : [],
     worldVisitNotify: bool(o.worldVisitNotify, d.worldVisitNotify),
+    jarvisVoice: bool(o.jarvisVoice, d.jarvisVoice),
   };
 }
 

@@ -140,8 +140,11 @@ function commandPreview(p: Pick<PermissionRequestInfo, 'input' | 'inputKind'> | 
   return !!p && p.inputKind === 'command' && !!p.input?.trim();
 }
 
-/** Prévia dos argumentos (comando, diff, JSON, texto), com as mesmas classes do terminal. */
-function previewBlock(p: Pick<PermissionRequestInfo, 'title' | 'input' | 'inputKind'>): HTMLElement | null {
+/**
+ * Prévia dos argumentos (comando, diff, JSON, texto), com as mesmas classes do terminal. Cartão crítico: o texto inteiro,
+ * sem recolher (a caixa rola), porque é ele que se aprova.
+ */
+function previewBlock(p: Pick<PermissionRequestInfo, 'title' | 'input' | 'inputKind' | 'critical'>): HTMLElement | null {
   if (!commandPreview(p) && !showToolInput(p)) return null;
   const kind = p.inputKind ?? 'text';
   const text = p.input!.replace(/\s+$/, '');
@@ -150,7 +153,7 @@ function previewBlock(p: Pick<PermissionRequestInfo, 'title' | 'input' | 'inputK
     if (kind !== 'diff') return void (target.textContent = value);
     for (const line of value.split('\n')) target.append(h('span', { class: `ui-term__dl is-${diffLineKind(line)}`, text: line || ' ' }));
   };
-  const pv = previewText(text, PREVIEW_LINES);
+  const pv = p.critical ? { head: text, text, collapsed: false, hiddenLines: 0 } : previewText(text, PREVIEW_LINES);
   const body = h('div', { class: 'ui-term__pre' });
   fill(body, pv.head);
   const box = h('div', { class: `ui-term__in ui-term__in--${kind}` }, body);
@@ -217,6 +220,11 @@ export class PermissionCard {
   private opts: PermissionOptions = { always: false, interrupt: true, reasonRequired: false, seconds: false, note: '' };
   private status: HTMLElement;
   private remote: HTMLElement;
+  /** PIN de aprovação (cartão crítico, ou "exigir em todos"): o campo e o aviso de "defina um PIN". */
+  private pinRow: HTMLElement;
+  private pinInput: HTMLInputElement;
+  private pinUnset: HTMLElement;
+  private pinMode: PermissionRequestInfo['pin'];
   /** Perguntas do AskUserQuestion, montadas uma vez por pedido (a seleção sobrevive aos snapshots). */
   private askForm: HTMLFormElement;
   private askId = '';
@@ -233,6 +241,15 @@ export class PermissionCard {
     this.note = h('p', { class: 'ui-perm__note', hidden: true });
     this.queue = h('p', { class: 'ui-perm__queue', hidden: true });
     this.remote = h('p', { class: 'ui-perm__note', hidden: true, text: tr('Para responder por aqui, abra o Habblaud por http://localhost (ou 127.0.0.1). Por enquanto, responda no terminal.') });
+    this.pinInput = h('input', { class: 'ui-perm__pin', type: 'password', attrs: { autocomplete: 'off', maxlength: 200, 'aria-label': tr('PIN de aprovação'), placeholder: tr('PIN de aprovação') } });
+    this.pinInput.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (isQuestionRequest(this.ctx.agent(this.agentId)?.permission)) this.sendAnswer();
+      else void this.send({ behavior: 'allow' });
+    });
+    this.pinRow = h('label', { class: 'ui-perm__pin-row', hidden: true }, h('span', { text: tr('Cartão crítico: aprovar pede o seu PIN de aprovação') }), this.pinInput);
+    this.pinUnset = h('p', { class: 'ui-perm__note is-error', hidden: true, text: tr('Este cartão só se aprova com o PIN de aprovação: defina um PIN de aprovação em Configurações. Recusar continua valendo.') });
 
     this.approveBtn = h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow', type: 'button', on: { click: () => this.send({ behavior: 'allow' }) } }, tr('✓ Aprovar'));
     this.answerBtn = h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow', type: 'button', hidden: true, on: { click: () => this.sendAnswer() } }, tr('✓ Responder'));
@@ -299,6 +316,8 @@ export class PermissionCard {
       this.note,
       this.queue,
       this.remote,
+      this.pinUnset,
+      this.pinRow,
       h('div', { class: 'ui-perm__actions' }, this.approveBtn, this.answerBtn, this.denyBtn, this.terminalBtn),
       this.always,
       this.denyForm,
@@ -374,9 +393,14 @@ export class PermissionCard {
 
     setHidden(this.remote, this.isLocal());
     const busy = this.isBusy();
+    this.pinMode = p.pin;
+    setHidden(this.pinRow, p.pin !== 'required');
+    setHidden(this.pinUnset, p.pin !== 'unset');
+    this.pinInput.disabled = busy;
     setHidden(this.approveBtn, ask);
     setHidden(this.answerBtn, !ask);
     for (const b of [this.approveBtn, this.denyBtn, this.terminalBtn]) b.disabled = busy;
+    if (p.pin === 'unset') this.approveBtn.disabled = true;
     for (const el of this.askForm.querySelectorAll('input')) el.disabled = busy;
     if (ask) this.syncAnswer();
     setTitle(this.denyBtn, ask ? tr('Não responder: o agente segue sem a resposta (com o motivo, se você escrever um)') : codex ? tr('Recusar com um motivo (o Codex pede um)') : '');
@@ -418,6 +442,7 @@ export class PermissionCard {
     this.phase = 'idle';
     this.detail = null;
     this.reason.value = '';
+    this.pinInput.value = '';
     this.interrupt.checked = false;
     setText(this.status, '');
     this.status.classList.remove('is-error');
@@ -457,6 +482,17 @@ export class PermissionCard {
   private async send(d: PermissionDecision): Promise<void> {
     const id = this.id;
     if (!id || this.phase === 'sending' || this.phase === 'sent') return;
+    // Aprovar/responder um cartão que pede o PIN: vai junto; sem PIN escrito, nem envia.
+    if ((d.behavior === 'allow' || d.behavior === 'answer') && this.pinMode) {
+      const pin = this.pinInput.value;
+      if (this.pinMode === 'unset' || !pin) {
+        this.status.classList.add('is-error');
+        setText(this.status, this.pinMode === 'unset' ? tr('Defina um PIN de aprovação em Configurações para aprovar este cartão.') : tr('Escreva o PIN de aprovação.'));
+        if (this.pinMode === 'required') this.pinInput.focus();
+        return;
+      }
+      d = { ...d, pin };
+    }
     this.phase = 'sending';
     this.status.classList.remove('is-error');
     setText(this.status, tr('Enviando a resposta…'));
@@ -470,6 +506,7 @@ export class PermissionCard {
     if (this.id !== id) return;
     if (error) {
       this.phase = 'idle';
+      this.pinInput.value = '';
       this.status.classList.add('is-error');
       setText(this.status, error);
     } else {

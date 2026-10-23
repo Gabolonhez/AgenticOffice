@@ -1,12 +1,16 @@
 // Aviso no celular pelo ntfy (https://ntfy.sh/<tópico> ou um servidor próprio), opcional e global: <dataDir>/notify.json.
 // Vai só o título do card e uma frase curta ("aguardando revisão", "plano pronto", "falhou"): nunca código, diff,
 // resumo, relatório nem segredo. Falhar ao avisar só vira log; nunca atrapalha o fluxo. Gravar só pelo próprio
-// computador (http/app.ts), como a configuração das pastas.
+// computador (http/app.ts), como a configuração das pastas. Os mesmos avisos podem ir pelo WhatsApp (whatsapp.ts),
+// conforme o canal escolhido (NotifySettings).
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { maskSecrets } from '../../shared/activity';
 import { tr } from '../../shared/i18n';
+import type { Provider } from '../../shared/types';
+import { JARVIS_DEFAULT, type JarvisSettings } from '../jarvis/service';
 import { errMsg, log } from '../log';
+import { isLocalHost, sendWhatsApp, validateWa, type WaSettings } from './whatsapp';
 
 /** 'quota': uma lista pausou pela cota da conta (chat/runs.ts); o título é o nome da pasta. */
 export type NotifyEvent = 'review' | 'ready' | 'failed' | 'quota';
@@ -14,15 +18,6 @@ export type NotifyEvent = 'review' | 'ready' | 'failed' | 'quota';
 const TITLE_MAX = 100;
 const URL_MAX = 300;
 
-/** localhost e IPs da rede local (10/8, 172.16/12, 192.168/16, 100.64/10 do Tailscale): os únicos com http. */
-function isLocalHost(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (host === 'localhost' || host === '::1') return true;
-  const m = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(host);
-  if (!m) return false;
-  const [a, b] = [Number(m[1]), Number(m[2])];
-  return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31) || (a === 100 && b >= 64 && b <= 127);
-}
 
 /** Endereço do tópico: https (http só para localhost/rede local), com tópico, sem login, query nem fragmento. Vazio = desligado. */
 export function validateNtfyUrl(raw: unknown): { url: string } | { error: string } {
@@ -64,43 +59,195 @@ export async function sendNtfy(url: string, title: string, text: string, fetchIm
   }
 }
 
-/** O endereço guardado em <dataDir>/notify.json (modo 600: quem tem o tópico lê os avisos). */
-export class NtfySettings {
-  private url = '';
+/** Por onde vão os avisos: ntfy, WhatsApp (WA-AKG) ou os dois. */
+export type NotifyChannel = 'ntfy' | 'whatsapp' | 'both';
+/** Briefing do Jarvis (server/jarvis/briefing.ts): HH:MM local nos dias (0 = domingo; vazio = todos). Sem hora = desligado. */
+export interface BriefingSettings { time: string; days: number[] }
+/** Texto livre (notify_send do Jarvis, manchete do briefing) no ntfy: mascarado e cortado. */
+export const NTFY_FREE_MAX = 200;
 
-  constructor(private readonly file: string) {
+interface Stored {
+  ntfyUrl: string;
+  channel: NotifyChannel;
+  wa?: WaSettings;
+  briefing: BriefingSettings;
+  jarvis: JarvisSettings;
+}
+
+const CHANNELS: readonly NotifyChannel[] = ['ntfy', 'whatsapp', 'both'];
+const JARVIS_PROVIDERS: readonly Provider[] = ['claude', 'codex'];
+
+function parseBriefing(raw: unknown): BriefingSettings | undefined {
+  const b = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const time = typeof b.time === 'string' ? b.time.trim() : '';
+  if (time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return undefined;
+  const days = Array.isArray(b.days) ? b.days : [];
+  if (!days.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)) return undefined;
+  return { time, days: [...new Set(days as number[])].sort() };
+}
+
+function parseJarvis(raw: unknown): JarvisSettings {
+  const b = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  if (!JARVIS_PROVIDERS.includes(b.provider as Provider)) return { ...JARVIS_DEFAULT };
+  const model = typeof b.model === 'string' && /^[\w.:/[\]-]{1,60}$/.test(b.model) ? b.model : undefined;
+  return { provider: b.provider as Provider, ...(model ? { model } : {}) };
+}
+
+const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+
+/**
+ * Avisos ao dono e a configuração deles, em <dataDir>/notify.json (modo 600: tem o tópico e a chave do WA-AKG): o
+ * tópico do ntfy, o WhatsApp (WA-AKG), o canal, o horário do briefing e o provedor do Jarvis. Gravar só pelo próprio
+ * computador (http/app.ts e server/jarvis/http.ts); a página remota vê só "ligado"; a chave nunca sai.
+ */
+export class NotifySettings {
+  private s: Stored = { ntfyUrl: '', channel: 'ntfy', briefing: { time: '', days: [] }, jarvis: { ...JARVIS_DEFAULT } };
+
+  constructor(
+    private readonly file: string,
+    private readonly fetchImpl: typeof fetch = (...a) => fetch(...a),
+  ) {
     try {
-      const raw = JSON.parse(readFileSync(file, 'utf8')) as { ntfyUrl?: unknown };
-      const v = validateNtfyUrl(raw?.ntfyUrl);
-      if ('url' in v) this.url = v.url;
+      const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+      const u = validateNtfyUrl(raw?.ntfyUrl);
+      const wa = validateWa(raw?.wa);
+      this.s = {
+        ntfyUrl: 'url' in u ? u.url : '',
+        channel: CHANNELS.includes(raw?.channel as NotifyChannel) ? (raw.channel as NotifyChannel) : 'ntfy',
+        ...('wa' in wa && wa.wa ? { wa: wa.wa } : {}),
+        briefing: parseBriefing(raw?.briefing) ?? { time: '', days: [] },
+        jarvis: parseJarvis(raw?.jarvis),
+      };
     } catch {
-      // sem arquivo: desligado
+      // sem arquivo: tudo desligado, Jarvis no padrão
     }
   }
 
+  /** O tópico do ntfy ('' = desligado). */
   get(): string {
-    return this.url;
+    return this.s.ntfyUrl;
   }
 
-  /** Valida e grava; devolve o erro, se houver. */
+  wa(): WaSettings | undefined {
+    return this.s.wa;
+  }
+
+  channel(): NotifyChannel {
+    return this.s.channel;
+  }
+
+  briefing(): BriefingSettings {
+    return this.s.briefing;
+  }
+
+  jarvis(): JarvisSettings {
+    return this.s.jarvis;
+  }
+
+  /** Só o tópico do ntfy (compatível com a tela antiga). */
   set(raw: unknown): string | undefined {
-    const v = validateNtfyUrl(raw);
-    if ('error' in v) return v.error;
+    return this.update({ url: raw });
+  }
+
+  setJarvis(j: JarvisSettings): string | undefined {
+    return this.write({ ...this.s, jarvis: parseJarvis(j) });
+  }
+
+  /** O que a tela manda (só as chaves presentes): url, channel, wa {url, apiKey, sessionId, ownerJid}, briefing {time, days}. */
+  update(raw: unknown): string | undefined {
+    const b = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const next: Stored = { ...this.s };
+    if (b.url !== undefined) {
+      const u = validateNtfyUrl(b.url);
+      if ('error' in u) return u.error;
+      next.ntfyUrl = u.url;
+    }
+    if (b.channel !== undefined) {
+      if (!CHANNELS.includes(b.channel as NotifyChannel)) return tr('Canal de aviso inválido.');
+      next.channel = b.channel as NotifyChannel;
+    }
+    if (b.wa !== undefined) {
+      const w = validateWa(b.wa, this.s.wa);
+      if ('error' in w) return w.error;
+      if (w.wa) next.wa = w.wa;
+      else delete next.wa;
+    }
+    if (b.briefing !== undefined) {
+      const br = parseBriefing(b.briefing);
+      if (!br) return tr('Horário do briefing inválido (use HH:MM e dias de 0 a 6).');
+      next.briefing = br;
+    }
+    return this.write(next);
+  }
+
+  /** Para a página: a remota (editable=false) vê só se está ligado; a chave do WA-AKG nunca sai. */
+  view(editable: boolean): Record<string, unknown> {
+    const { ntfyUrl, wa } = this.s;
+    return {
+      configured: !!ntfyUrl,
+      waConfigured: !!wa,
+      channel: this.s.channel,
+      briefing: this.s.briefing,
+      ...(editable ? { url: ntfyUrl, wa: wa ? { url: wa.url, sessionId: wa.sessionId, ownerJid: wa.ownerJid, apiKeySet: true } : null } : {}),
+      editable,
+    };
+  }
+
+  private wantsNtfy(): boolean {
+    return !!this.s.ntfyUrl && this.s.channel !== 'whatsapp';
+  }
+
+  private wantsWa(): boolean {
+    return !!this.s.wa && this.s.channel !== 'ntfy';
+  }
+
+  /** Aviso de um card (review, plano pronto, falha, cota) pelo canal escolhido, sem esperar. */
+  notify(cardTitle: string, event: NotifyEvent, fetchImpl: typeof fetch = this.fetchImpl): void {
+    const m = ntfyMessage(cardTitle, event);
+    if (this.wantsNtfy()) void sendNtfy(this.s.ntfyUrl, m.title, m.text, fetchImpl);
+    const wa = this.s.wa;
+    if (wa && this.wantsWa()) void sendWhatsApp(wa, `${m.title}: ${m.text}`, fetchImpl).then((err) => err && log.warnOnce(`wa:${err}`, tr('Aviso pelo WhatsApp falhou ({0}).', [err])));
+  }
+
+  /**
+   * Texto livre para o dono (notify_send do Jarvis, briefing): no ntfy só `headline` (ou o texto) mascarado até
+   * NTFY_FREE_MAX; no WhatsApp o texto inteiro (até WA_TEXT_MAX). `channel` restringe; o destino é sempre o do dono.
+   */
+  async sendText(text: string, o: { title?: string; headline?: string; channel?: NotifyChannel } = {}, fetchImpl: typeof fetch = this.fetchImpl): Promise<{ ntfy?: boolean; whatsapp?: boolean; error?: string }> {
+    const want = o.channel ?? 'both';
+    const out: { ntfy?: boolean; whatsapp?: boolean; error?: string } = {};
+    if (want !== 'whatsapp' && this.wantsNtfy()) {
+      const body = cut(maskSecrets(o.headline ?? text).replace(/\s+/g, ' ').trim(), NTFY_FREE_MAX);
+      await sendNtfy(this.s.ntfyUrl, o.title ?? 'Jarvis', body, fetchImpl);
+      out.ntfy = true;
+    }
+    const wa = this.s.wa;
+    if (want !== 'ntfy' && wa && this.wantsWa()) {
+      const err = await sendWhatsApp(wa, text, fetchImpl);
+      out.whatsapp = !err;
+      if (err) out.error = err;
+    }
+    return out;
+  }
+
+  private write(next: Stored): string | undefined {
     try {
       mkdirSync(dirname(this.file), { recursive: true });
-      writeFileSync(`${this.file}.tmp`, JSON.stringify({ ntfyUrl: v.url }), { mode: 0o600 });
+      const { ntfyUrl, channel, wa, briefing, jarvis } = next;
+      // Só o que difere do padrão: um notify.json antigo (só o tópico) continua igual.
+      const out = {
+        ntfyUrl,
+        ...(channel !== 'ntfy' ? { channel } : {}),
+        ...(wa ? { wa } : {}),
+        ...(briefing.time || briefing.days.length ? { briefing } : {}),
+        ...(jarvis.provider !== JARVIS_DEFAULT.provider || jarvis.model !== JARVIS_DEFAULT.model ? { jarvis } : {}),
+      };
+      writeFileSync(`${this.file}.tmp`, JSON.stringify(out), { mode: 0o600 });
       renameSync(`${this.file}.tmp`, this.file);
     } catch (err) {
       return errMsg(err);
     }
-    this.url = v.url;
+    this.s = next;
     return undefined;
-  }
-
-  /** Avisa, se ligado (sem esperar). */
-  notify(cardTitle: string, event: NotifyEvent, fetchImpl?: typeof fetch): void {
-    if (!this.url) return;
-    const m = ntfyMessage(cardTitle, event);
-    void sendNtfy(this.url, m.title, m.text, fetchImpl);
   }
 }

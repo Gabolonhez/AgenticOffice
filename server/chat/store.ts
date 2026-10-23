@@ -30,6 +30,10 @@ export interface ChatRecord {
   createdAt: number;
   running?: boolean;
   alwaysAllow: string[];
+  /** Agente do próprio Habblaud (o Jarvis): gravado só pelo servidor, nunca vem do ChatOpenRequest. */
+  system?: 'jarvis';
+  /** Quem abriu (o `from` do servidor: outro agente, gatilho, o Jarvis); ausente = a pessoa pela página. */
+  openedBy?: string;
 }
 
 export const ITEMS_KEEP = 500;

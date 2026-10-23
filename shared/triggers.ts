@@ -32,6 +32,11 @@ export interface TriggerRule {
   /** Quanto o cartão espera a resposta antes de o disparo ser pulado. */
   windowMinutes: number;
   createdAt: number;
+  /**
+   * Agendamento do Jarvis criado com um cartão aprovado (schedule_create): os disparos que mandam para o próprio Jarvis
+   * pulam o cartão. Só o servidor grava; o corpo do pedido nunca traz.
+   */
+  trusted?: 'jarvis';
 }
 
 /** fired = cartão esperando; o resto é o fim do disparo. */

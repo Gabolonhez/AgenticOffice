@@ -29,9 +29,13 @@ export interface TurnSpec {
   permission: ChatPermission;
   budgetUsd?: number;
   mcp?: { url: string; token: string };
+  /** O --mcp-config do Claude já gravado num arquivo 600 (o token fora do argv). */
+  mcpConfigFile?: string;
   accountDir?: string;
   /** Sem `git push` (listas automáticas do VBoards): cada driver usa o que a CLI dele tem; o env do git vale para todos. */
   denyPush?: boolean;
+  /** Ferramentas internas da CLI ('' = nenhuma: o Jarvis só tem as do MCP do escritório, onde fica o portão). */
+  tools?: string;
 }
 
 export interface CliInvocation { args: string[]; stdin?: string; env: Record<string, string | undefined> }

@@ -51,6 +51,11 @@ export interface ApiDeps {
    */
   permissions?: (req: IncomingMessage, res: ServerResponse, path: string) => void;
   /**
+   * PIN de aprovação dos cartões críticos (server/permissions/pin.ts): GET /api/approval-pin {set, all, lockedUntil?}
+   * (local, ou o celular com "permissions"); POST {pin?, current?, all?} só pelo próprio computador.
+   */
+  approvalPin?: { view(): unknown; update(b: { pin?: unknown; current?: unknown; all?: unknown }): Promise<string | undefined> };
+  /**
    * Rotas das mensagens pelo escritório (/api/messages, a caixa de entrada do plugin em /api/mod/inbox e a do auxiliar
    * do Codex em /api/codex/bridge/*, server/messages/http.ts). Só existem com ServerConfig.messages (a trava do
    * terminal e HABBLAUD_MENSAGENS); a trava do Host local é conferida aqui antes de chamá-las.
@@ -106,12 +111,13 @@ export interface ApiDeps {
    * vboards/vboards.ts) e a configuração por pasta (GET /api/vboards/config[?folder=], POST /api/vboards/config
    * {folder, config}). Ausente = desligado.
    */
-  vboards?: Pick<VBoardsService, 'list' | 'refineList' | 'begin' | 'attach' | 'configFolders' | 'folderSettings' | 'saveFolderSettings'>;
+  vboards?: Pick<VBoardsService, 'list' | 'refineList' | 'begin' | 'attach' | 'configFolders' | 'folderSettings' | 'saveFolderSettings'> & Partial<Pick<VBoardsService, 'problem'>>;
   /**
-   * Aviso no celular pelo ntfy (vboards/ntfy.ts), GET/POST /api/vboards/notify {url}. Pela porta remota só se sabe se
-   * está ligado (o endereço do tópico não sai); gravar, só pelo próprio computador.
+   * Avisos ao dono (vboards/ntfy.ts NotifySettings), GET/POST /api/vboards/notify {url?, channel?, wa?, briefing?}: o
+   * tópico do ntfy, o WhatsApp (WA-AKG), o canal e o horário do briefing do Jarvis. Pela porta remota só se sabe se está
+   * ligado (o tópico e a chave não saem); gravar, só pelo próprio computador.
    */
-  ntfy?: { get(): string; set(raw: unknown): string | undefined };
+  ntfy?: { view(editable: boolean): Record<string, unknown>; update(raw: unknown): string | undefined };
 }
 
 /** GET /api/agents/:id/terminal (ids nunca contêm '/'). */
@@ -459,6 +465,29 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       });
       return true;
     }
+    if (path === '/api/approval-pin') {
+      if (!deps.approvalPin) {
+        req.resume();
+        sendJson(res, 404, { error: tr('rota desconhecida') });
+      } else if (method === 'GET') {
+        if (!trusted(req, 'permissions')) sendJson(res, 403, { error: denied(req, '') });
+        else sendJson(res, 200, { ...(deps.approvalPin.view() as object), editable: !isRemote(req) && isLoopbackHost(req.headers.host) });
+      } else if (method !== 'POST') {
+        methodNotAllowed(res, 'GET, POST');
+      } else if (isRemote(req) || !isLoopbackHost(req.headers.host)) {
+        req.resume();
+        sendJson(res, 403, { error: tr('O PIN de aprovação só muda pelo próprio computador.') });
+      } else {
+        const pin = deps.approvalPin;
+        readJson(req)
+          .then(async (body) => {
+            const err = await pin.update((body && typeof body === 'object' ? body : {}) as Record<string, unknown>);
+            sendJson(res, err ? 400 : 200, err ? { error: err } : { ...(pin.view() as object), editable: true });
+          })
+          .catch((err) => fail(res, err));
+      }
+      return true;
+    }
     if (path === '/api/permissions' || path.startsWith('/api/permissions/')) {
       // Responder pelo escritório age sobre as sessões: a mesma trava do terminal (bind local + Host local).
       if (!deps.permissions) {
@@ -576,7 +605,11 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       else if (problem) sendJson(res, 403, { error: problem });
       else if (path === '/api/vboards') {
         if (!isRead) methodNotAllowed(res, 'GET');
-        else vb.list().then((tasks) => sendJson(res, 200, { tasks, refines: vb.refineList() }), (err) => fail(res, err));
+        else {
+          // `problem`: o token foi recusado (escopo que falta, expirado): o painel mostra a frase.
+          const problem = vb.problem?.();
+          vb.list().then((tasks) => sendJson(res, 200, { tasks, refines: vb.refineList(), ...(problem ? { problem } : {}) }), (err) => fail(res, err));
+        }
       } else if (path === '/api/vboards/start') {
         if (method !== 'POST') methodNotAllowed(res, 'POST');
         else
@@ -601,7 +634,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       } else if (path === '/api/vboards/notify') {
         const ntfy = deps.ntfy;
         const editable = !isRemote(req);
-        const view = () => ({ configured: !!ntfy?.get(), ...(editable ? { url: ntfy?.get() ?? '' } : {}), editable });
+        const view = () => ntfy?.view(editable) ?? {};
         if (!ntfy) {
           req.resume();
           sendJson(res, 404, { error: tr('rota desconhecida') });
@@ -609,7 +642,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
         else if (method === 'POST') {
           readJson(req)
             .then((body) => {
-              const err = ntfy.set((body as { url?: unknown } | null)?.url);
+              const err = ntfy.update(body);
               sendJson(res, err ? 400 : 200, err ? { error: err } : view());
             })
             .catch((err) => fail(res, err));

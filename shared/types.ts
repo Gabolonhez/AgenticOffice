@@ -655,6 +655,13 @@ export interface PermissionRequestInfo {
   questions?: AskQuestion[];
   /** Outros pedidos do mesmo agente esperando depois deste. */
   queued?: number;
+  /**
+   * Cartão crítico (os GATED do Jarvis, as office_* entre agentes): o texto inteiro vai em `input` e aprovar pede o PIN
+   * de aprovação (server/permissions/pin.ts).
+   */
+  critical?: boolean;
+  /** Aprovar pede o PIN (`required`), mas sem PIN definido (`unset`) não dá para aprovar. */
+  pin?: 'required' | 'unset';
   createdAt: number;
   /** Quando o hook desiste de esperar e o pedido passa a valer só no terminal. */
   expiresAt: number;
@@ -688,6 +695,8 @@ export interface PermissionDecision {
   suggestion?: number;
   /** Resposta (`answer`): uma por pergunta do pedido. */
   answers?: PermissionAnswer[];
+  /** PIN de aprovação (cartão crítico, ou "exigir PIN em todos os cartões"). */
+  pin?: string;
 }
 
 // ------------------------------------------------------------------ mensagens pelo escritório

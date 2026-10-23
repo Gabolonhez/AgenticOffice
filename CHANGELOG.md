@@ -58,6 +58,49 @@ do meio (0.**3**.0).
 - **Chat pelo celular:** desligado por padrão; com `chat` no `HABBLAUD_REMOTE_ALLOW` (login + HTTPS) o chat, Rodar
   lista, Gatilhos e o Quadro funcionam pela porta do celular, com alvos de toque maiores e janelas em tela cheia. O MCP
   dos agentes nunca responde por lá, e os cartões continuam pedindo aprovação.
+- **Jarvis, o orquestrador:** um agente do próprio Habblaud (botão **Jarvis** na barra, ou clique no personagem dele)
+  que conversa em português e age só pelas ferramentas do escritório: agentes, listas, configuração das pastas, uso e
+  métricas, VBoards, avisos e agendamentos. Roda sem ferramentas próprias (sem shell, sem editar arquivos, sem push).
+  O que muda algo de verdade (juntar ou descartar cópias, mudar a configuração de uma pasta, aprovar ou marcar
+  "deployed" no VBoards, criar/mudar/remover agendamentos, fechar agentes, abrir agente fora da cópia isolada) mostra
+  um cartão com os fatos reais e só roda se você aprovar; recusa ou prazo = nada roda. Sem cartão, dentro de limites
+  do servidor: abrir agente em cópia isolada sem push com o orçamento da pasta (até 3 por hora), mandar mensagem aos
+  agentes que ele abriu, listas automáticas em pastas com `vboards.auto` e avisos ao dono (até 20 por hora). Ele não
+  fecha; **Conversa nova** recomeça e mantém a memória (`~/.habblaud/jarvis/MEMORY.md`).
+- **PIN de aprovação:** em Configurações › PIN de aprovação (só pelo próprio computador), uma frase de no mínimo 6
+  caracteres. Os cartões críticos (todos os do Jarvis e os pedidos entre agentes `office_*`) só se aprovam com ela, no
+  computador e no celular; sem PIN, não se aprovam. Cinco PINs errados bloqueiam por 15 minutos, mesmo reiniciando.
+  Opcional: exigir o PIN em todos os cartões. Guardado como scrypt num arquivo 600.
+- **Jarvis — turno contaminado:** pedido que não veio de você pela página (WhatsApp, VBoards, agendamento, outro
+  agente) ou turno em que uma ferramenta trouxe dado de fora deixa o turno contaminado: abrir agente, criar lista,
+  mandar mensagem a agente, mandar subtarefas para a fila e gravar a memória passam a pedir cartão. Listas automáticas
+  sem cartão: até 5 por hora; os limites por hora sobrevivem a reinícios.
+- **Jarvis — cartões inteiros:** fatos primeiro (ação, alvo, origem, contaminação), depois o texto livre inteiro numa
+  caixa que rola; o que não cabe (mais de 20 mil caracteres) é recusado, nunca cortado.
+- **Jarvis — mais travas:** fora da cópia isolada só abre agente Claude (que pede aprovação); mensagem para agente fora
+  da cópia isolada sempre pede cartão; mensagens de outros agentes e a memória entram como dado não confiável; tudo que
+  vai para o VBoards sai mascarado; o embrulho de dados normaliza o texto (NFKC, sem caracteres invisíveis); o WhatsApp
+  só aceita a conversa do dono consigo mesmo e ignora o eco das próprias respostas; trocar o endereço do WA-AKG sem a
+  chave apaga a guardada.
+- **Token do MCP fora da linha de comando:** o `--mcp-config` dos agentes Claude vai num arquivo 600 em
+  `~/.habblaud/chat/mcp/`; o resumo e o briefing rodam com `--strict-mcp-config` (sem MCP nenhum).
+- **Jarvis — provedor configurável:** Claude (padrão, sonnet), com o modelo, em Configurações › Jarvis. O Antigravity e
+  o Codex ficam de fora, com o motivo na tela (o MCP do Antigravity só entra pela configuração global e não há modo sem
+  shell; os modelos do Codex só usam ferramentas pelo "modo de código", que roda JavaScript escrito pelo modelo).
+- **Jarvis — voz e ditado:** o botão de ditado agora também aparece no chat de qualquer agente, e "Ler respostas em voz
+  alta" lê as respostas novas do Jarvis (pt-BR, pelo navegador).
+- **Jarvis pelo WhatsApp:** com um WA-AKG seu configurado (Configurações › VBoards por pasta › avisos) e um token
+  `vb_` do VBoards, as mensagens "Jarvis ..." que você manda viram pedidos e a resposta volta pelo WhatsApp. Só o número
+  do dono vale; o que chega de fora entra como dado, nunca como instrução, e nunca aprova cartão.
+- **Avisos pelo WhatsApp:** os avisos do ntfy (revisão, falha, plano pronto, cota) podem ir pelo ntfy, pelo WhatsApp ou
+  pelos dois; a chave do WA-AKG fica só no computador.
+- **Briefing:** num horário escolhido (desligado por padrão) ou pelo botão **Briefing agora**, um resumo do que
+  terminou, do que espera sua revisão, das falhas e da cota, na conversa do Jarvis, no ntfy (a manchete) e no WhatsApp.
+- **Métricas das listas:** cada item que termina vira uma linha em `~/.habblaud/chat/run-metrics.jsonl` (estado,
+  portão, volta de correção, tempo, custo, tokens), cortado para 90 dias quando passa de 2 MB.
+- **VBoards — token `vb_`:** o `vboards.token` aceita um token `vb_...` da API v1 (o e-mail vem do token); o segredo
+  antigo continua funcionando. Token sem o escopo ou expirado aparece no painel do VBoards ("o token precisa do escopo
+  X", "token expirado ou inválido") em vez de ficar tentando.
 
 ### Habblaud World (em desenvolvimento, desligado por padrão)
 

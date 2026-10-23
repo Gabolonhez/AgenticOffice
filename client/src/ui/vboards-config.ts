@@ -1,10 +1,22 @@
 // Configurações › VBoards por pasta (GET/POST /api/vboards/config): lê e grava o `git config --local vboards.*` da
 // pasta escolhida, a única fonte (o servidor usa a mesma). Só pastas conhecidas. Pela porta do celular é só leitura:
 // vboards.check é um comando de shell e vboards.auto abre agentes sozinho. Some com o VBoards desligado (404) ou sem
-// acesso (403). Junto, o aviso no celular pelo ntfy (GET/POST /api/vboards/notify), global e com a mesma regra.
+// acesso (403). Junto, os avisos ao dono (GET/POST /api/vboards/notify): ntfy, WhatsApp (WA-AKG), o canal e o horário
+// do briefing do Jarvis, globais e com a mesma regra (a chave do WA-AKG nunca volta à página). JarvisConfigGroup: o
+// provedor e o modelo do Jarvis (GET/POST /api/chat/jarvis/settings), só para quem pode ser o Jarvis.
 import { tr } from '../../../shared/i18n';
 import { h, setHidden, setText } from './dom';
 import { shortPath } from './spawn';
+
+interface NotifyView {
+  configured?: boolean;
+  waConfigured?: boolean;
+  channel?: string;
+  url?: string;
+  wa?: { url: string; sessionId: string; ownerJid: string; apiKeySet?: boolean } | null;
+  briefing?: { time: string; days: number[] };
+  editable?: boolean;
+}
 
 interface FolderConfig { card?: string; auto: boolean; provider: string; budget: number; check?: string; reviewer: string; reviewerModel?: string; copy?: string }
 
@@ -22,7 +34,14 @@ export class VBoardsConfigGroup {
   private readonly reviewerModel = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 60 } });
   private readonly copy = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 500, placeholder: '.env, apps/web/.env.local' } });
   private readonly ntfy = h('input', { class: 'ui-rename__input', type: 'url', attrs: { maxlength: 300, placeholder: 'https://ntfy.sh/<tópico>' } });
-  private readonly ntfySave = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar aviso'), on: { click: () => void this.storeNtfy() } });
+  private readonly channel = h('select', { class: 'ui-rename__input' }, h('option', { attrs: { value: 'ntfy' }, text: 'ntfy' }), h('option', { attrs: { value: 'whatsapp' }, text: 'WhatsApp' }), h('option', { attrs: { value: 'both' }, text: tr('os dois') }));
+  private readonly waUrl = h('input', { class: 'ui-rename__input', type: 'url', attrs: { maxlength: 300, placeholder: 'https://wa.exemplo.com' } });
+  private readonly waSession = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 80, placeholder: 'pessoal' } });
+  private readonly waOwner = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 60, placeholder: '5511999999999@s.whatsapp.net' } });
+  private readonly waKey = h('input', { class: 'ui-rename__input', type: 'password', attrs: { maxlength: 200, autocomplete: 'off' } });
+  private readonly briefTime = h('input', { class: 'ui-rename__input', type: 'time' });
+  private readonly briefDays = [tr('dom'), tr('seg'), tr('ter'), tr('qua'), tr('qui'), tr('sex'), tr('sáb')].map((label) => ({ label, box: h('input', { type: 'checkbox' }) as HTMLInputElement }));
+  private readonly ntfySave = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar avisos'), on: { click: () => void this.storeNtfy() } });
   private readonly ntfyStatus = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
   private readonly ntfyGroup = h(
     'div',
@@ -30,6 +49,15 @@ export class VBoardsConfigGroup {
     h('h3', { text: tr('Aviso no celular (ntfy)') }),
     h('p', { class: 'ui-set__hint', text: tr('Opcional: o endereço de um tópico do ntfy (https://ntfy.sh/<tópico> ou um servidor seu). Vai só o título do card e "aguardando revisão", "plano pronto" ou "falhou"; nunca código, diff nem resumo. Quem souber o tópico lê os avisos: use um nome difícil.') }),
     row(tr('Tópico do ntfy'), this.ntfy),
+    h('p', { class: 'ui-set__hint', text: tr('WhatsApp (opcional), por um WA-AKG seu: os mesmos avisos, as respostas do Jarvis e o briefing vão só para o número do dono; as mensagens "Jarvis ..." que você manda chegam pelo VBoards (token vb_). A chave fica só neste computador.') }),
+    row(tr('Endereço do WA-AKG'), this.waUrl),
+    row(tr('Sessão do WA-AKG'), this.waSession),
+    row(tr('Número do dono (JID)'), this.waOwner),
+    row(tr('Chave do WA-AKG (x-api-key)'), this.waKey),
+    row(tr('Avisos por'), this.channel),
+    h('p', { class: 'ui-set__hint', text: tr('Briefing do Jarvis: um resumo no horário escolhido (vazio = desligado), na conversa dele, no ntfy (a manchete) e no WhatsApp (inteiro).') }),
+    row(tr('Horário do briefing'), this.briefTime),
+    h('div', { class: 'ui-chat__row' }, ...this.briefDays.map((d) => h('label', { class: 'ui-spawn__check' }, d.box, h('span', { text: d.label })))),
     this.ntfySave,
     this.ntfyStatus,
   );
@@ -65,7 +93,7 @@ export class VBoardsConfigGroup {
     try {
       const res = await fetch('/api/vboards/notify', { credentials: 'same-origin', cache: 'no-store' });
       if (!res.ok) return;
-      const body = (await res.json()) as { configured?: boolean; url?: string; editable?: boolean };
+      const body = (await res.json()) as NotifyView;
       this.showNtfy(body);
       setHidden(this.el, false);
       setHidden(this.ntfyGroup, false);
@@ -74,21 +102,34 @@ export class VBoardsConfigGroup {
     }
   }
 
-  private showNtfy(b: { configured?: boolean; url?: string; editable?: boolean }): void {
+  private showNtfy(b: NotifyView): void {
     const editable = b.editable === true;
     this.ntfy.value = editable ? (b.url ?? '') : '';
-    this.ntfy.disabled = !editable;
+    this.waUrl.value = b.wa?.url ?? '';
+    this.waSession.value = b.wa?.sessionId ?? '';
+    this.waOwner.value = b.wa?.ownerJid ?? '';
+    this.waKey.value = '';
+    this.waKey.placeholder = b.wa?.apiKeySet ? tr('guardada (deixe vazio para manter)') : '';
+    this.channel.value = b.channel ?? 'ntfy';
+    this.briefTime.value = b.briefing?.time ?? '';
+    this.briefDays.forEach((d, i) => (d.box.checked = !!b.briefing?.days.includes(i)));
+    for (const f of [this.ntfy, this.waUrl, this.waSession, this.waOwner, this.waKey, this.channel, this.briefTime, ...this.briefDays.map((d) => d.box)]) f.disabled = !editable;
     setHidden(this.ntfySave, !editable);
-    if (!editable) setText(this.ntfyStatus, b.configured ? tr('Ligado. Só muda pelo próprio computador.') : tr('Desligado. Só muda pelo próprio computador.'));
+    if (!editable) {
+      const on = [b.configured ? 'ntfy' : '', b.waConfigured ? 'WhatsApp' : ''].filter(Boolean).join(', ');
+      setText(this.ntfyStatus, on ? tr('Ligado ({0}). Só muda pelo próprio computador.', [on]) : tr('Desligado. Só muda pelo próprio computador.'));
+    }
   }
 
   private async storeNtfy(): Promise<void> {
     try {
-      const res = await fetch('/api/vboards/notify', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: this.ntfy.value }) });
-      const body = (await res.json().catch(() => ({}))) as { configured?: boolean; url?: string; editable?: boolean; error?: string };
+      const wa = this.waUrl.value.trim() ? { url: this.waUrl.value, sessionId: this.waSession.value, ownerJid: this.waOwner.value, ...(this.waKey.value ? { apiKey: this.waKey.value } : {}) } : { url: '' };
+      const briefing = { time: this.briefTime.value, days: this.briefDays.flatMap((d, i) => (d.box.checked ? [i] : [])) };
+      const res = await fetch('/api/vboards/notify', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: this.ntfy.value, channel: this.channel.value, wa, briefing }) });
+      const body = (await res.json().catch(() => ({}))) as NotifyView & { error?: string };
       if (!res.ok) throw new Error(body.error ?? tr('erro {0}', [res.status]));
       this.showNtfy(body);
-      setText(this.ntfyStatus, body.configured ? tr('Gravado: os avisos vão para este tópico.') : tr('Aviso no celular desligado.'));
+      setText(this.ntfyStatus, body.configured || body.waConfigured ? tr('Gravado: os avisos vão pelo canal escolhido.') : tr('Aviso no celular desligado.'));
       this.ntfyStatus.classList.remove('is-error');
     } catch (err) {
       setText(this.ntfyStatus, tr('Não gravou: {0}', [(err as Error).message]));
@@ -155,10 +196,166 @@ export class VBoardsConfigGroup {
   }
 }
 
+interface JarvisSettingsView { provider: string; model?: string; editable?: boolean; providers: Array<{ id: string; available: boolean; reason?: string }>; note?: string; error?: string }
+
+/** Provedor e modelo do Jarvis: só os que rodam sem ferramentas internas e com o MCP do escritório (o resto, com o motivo). */
+export class JarvisConfigGroup {
+  readonly el: HTMLElement;
+  private readonly provider = h('select', { class: 'ui-rename__input', attrs: { 'aria-label': tr('Provedor do Jarvis') } });
+  private readonly model = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 60, placeholder: 'sonnet' } });
+  private readonly reasons = h('ul', { class: 'ui-set__hint' });
+  private readonly save = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar o Jarvis'), on: { click: () => void this.store() } });
+  private readonly status = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
+
+  constructor() {
+    this.el = h(
+      'div',
+      { class: 'ui-set-group', hidden: true },
+      h('h3', { text: 'Jarvis' }),
+      h('p', { class: 'ui-set__hint', text: tr('O orquestrador do escritório. Trocar o provedor começa uma conversa nova (a memória fica). Ele roda sem ferramentas próprias: só as do escritório, e as que mudam algo pedem a sua aprovação.') }),
+      row(tr('Provedor'), this.provider),
+      row(tr('Modelo (vazio = o padrão da CLI)'), this.model),
+      this.reasons,
+      this.save,
+      this.status,
+    );
+    void this.load();
+  }
+
+  private async load(): Promise<void> {
+    try {
+      const res = await fetch('/api/chat/jarvis/settings', { credentials: 'same-origin', cache: 'no-store' });
+      if (!res.ok) return;
+      this.show((await res.json()) as JarvisSettingsView);
+      setHidden(this.el, false);
+    } catch {
+      // chat desligado: fica escondido
+    }
+  }
+
+  private show(v: JarvisSettingsView): void {
+    this.provider.replaceChildren(...v.providers.map((p) => h('option', { attrs: { value: p.id, ...(p.available ? {} : { disabled: 'true' }) }, text: p.id === 'antigravity' ? 'agy' : p.id })));
+    this.provider.value = v.provider;
+    this.model.value = v.model ?? '';
+    this.reasons.replaceChildren(...v.providers.filter((p) => !p.available && p.reason).map((p) => h('li', { text: `${p.id === 'antigravity' ? 'agy' : p.id}: ${p.reason}` })));
+    const editable = v.editable !== false;
+    this.provider.disabled = !editable;
+    this.model.disabled = !editable;
+    setHidden(this.save, !editable);
+    setText(this.status, v.note ?? (editable ? '' : tr('Só muda pelo próprio computador.')));
+  }
+
+  private async store(): Promise<void> {
+    try {
+      const res = await fetch('/api/chat/jarvis/settings', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: this.provider.value, model: this.model.value }) });
+      const body = (await res.json().catch(() => ({}))) as JarvisSettingsView;
+      if (!res.ok) throw new Error(body.error ?? tr('erro {0}', [res.status]));
+      this.show({ ...body, editable: true });
+      if (!body.note) setText(this.status, tr('Gravado.'));
+      this.status.classList.remove('is-error');
+    } catch (err) {
+      setText(this.status, tr('Não gravou: {0}', [(err as Error).message]));
+      this.status.classList.add('is-error');
+    }
+  }
+}
+
 function select(values: string[]): HTMLSelectElement {
   return h('select', { class: 'ui-rename__input' }, ...values.map((v) => h('option', { attrs: { value: v }, text: v })));
 }
 
 function row(label: string, field: HTMLElement): HTMLElement {
   return h('label', { class: 'ui-set' }, h('span', { class: 'ui-set__label', text: label }), field);
+}
+
+interface PinView { set: boolean; all: boolean; lockedUntil?: number; editable?: boolean; error?: string }
+
+/**
+ * Configurações › PIN de aprovação (GET/POST /api/approval-pin): os cartões críticos (os do Jarvis que mudam algo, e os
+ * de agentes conversando entre si) só se aprovam com ele. Só muda pelo próprio computador; trocar, apagar ou ligar
+ * "todos os cartões" pede o PIN atual. Os agentes rodam com o seu usuário e conseguem ler o hash: use uma frase.
+ */
+export class ApprovalPinGroup {
+  readonly el: HTMLElement;
+  private readonly state = h('p', { class: 'ui-set__hint' });
+  private readonly pin = h('input', { class: 'ui-rename__input', type: 'password', attrs: { autocomplete: 'new-password', maxlength: 200, placeholder: tr('uma frase de 4 ou mais palavras') } });
+  private readonly again = h('input', { class: 'ui-rename__input', type: 'password', attrs: { autocomplete: 'new-password', maxlength: 200 } });
+  private readonly current = h('input', { class: 'ui-rename__input', type: 'password', attrs: { autocomplete: 'current-password', maxlength: 200 } });
+  private readonly currentRow = row(tr('PIN atual'), this.current);
+  private readonly all = h('input', { type: 'checkbox' });
+  private readonly save = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar o PIN'), on: { click: () => void this.store(false) } });
+  private readonly clear = h('button', { class: 'ui-btn', type: 'button', text: tr('Apagar o PIN'), on: { click: () => void this.store(true) } });
+  private readonly status = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
+
+  constructor() {
+    this.el = h(
+      'div',
+      { class: 'ui-set-group', hidden: true },
+      h('h3', { text: tr('PIN de aprovação') }),
+      h('p', {
+        class: 'ui-set__hint',
+        text: tr('Os cartões críticos (o que o Jarvis quer mudar e os pedidos entre agentes) só se aprovam com este PIN: assim um agente que roda no seu computador não aprova os próprios pedidos. Os agentes conseguem ler o arquivo do PIN (guardado com hash), então use uma frase longa, não um número.'),
+      }),
+      this.state,
+      row(tr('PIN novo (mínimo 6 caracteres)'), this.pin),
+      row(tr('Repita o PIN novo'), this.again),
+      this.currentRow,
+      h('label', { class: 'ui-set' }, this.all, h('span', { class: 'ui-set__label', text: tr('Exigir o PIN em todos os cartões') })),
+      this.save,
+      this.clear,
+      this.status,
+    );
+    void this.load();
+  }
+
+  private async load(): Promise<void> {
+    try {
+      const res = await fetch('/api/approval-pin', { credentials: 'same-origin', cache: 'no-store' });
+      if (!res.ok) return;
+      this.show((await res.json()) as PinView);
+      setHidden(this.el, false);
+    } catch {
+      // sem a rota (responder pelo escritório desligado): fica escondido
+    }
+  }
+
+  private show(v: PinView): void {
+    const editable = v.editable !== false;
+    setText(
+      this.state,
+      v.lockedUntil
+        ? tr('PIN definido. Bloqueado por PINs errados até {0}.', [new Date(v.lockedUntil).toLocaleTimeString()])
+        : v.set
+          ? tr('PIN definido{0}.', [v.all ? tr(' (pedido em todos os cartões)') : ''])
+          : tr('Sem PIN: os cartões críticos não podem ser aprovados (o Jarvis continua com as ferramentas SAFE).'),
+    );
+    this.all.checked = v.all;
+    setHidden(this.currentRow, !v.set);
+    setHidden(this.clear, !v.set || !editable);
+    for (const el of [this.pin, this.again, this.current, this.all]) el.disabled = !editable;
+    setHidden(this.save, !editable);
+    if (!editable) setText(this.status, tr('Só muda pelo próprio computador.'));
+  }
+
+  private async store(erase: boolean): Promise<void> {
+    const pin = this.pin.value;
+    if (!erase && pin && pin !== this.again.value) {
+      setText(this.status, tr('Os dois PINs novos não são iguais.'));
+      this.status.classList.add('is-error');
+      return;
+    }
+    const body = { ...(erase ? { pin: '' } : pin ? { pin } : {}), all: this.all.checked, ...(this.current.value ? { current: this.current.value } : {}) };
+    try {
+      const res = await fetch('/api/approval-pin', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const v = (await res.json().catch(() => ({}))) as PinView;
+      if (!res.ok) throw new Error(v.error ?? tr('erro {0}', [res.status]));
+      for (const el of [this.pin, this.again, this.current]) el.value = '';
+      this.show(v);
+      setText(this.status, erase ? tr('PIN apagado.') : tr('Gravado.'));
+      this.status.classList.remove('is-error');
+    } catch (err) {
+      setText(this.status, tr('Não gravou: {0}', [(err as Error).message]));
+      this.status.classList.add('is-error');
+    }
+  }
 }

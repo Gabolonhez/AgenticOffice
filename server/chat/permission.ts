@@ -31,11 +31,17 @@ export function alwaysKey(tool: string, input: Record<string, unknown>): string 
   return `${tool}:${cmd.split(/\s+/)[0]}`;
 }
 
-/** Ferramentas de delegação do escritório (delegation.ts): pedem a aprovação elas mesmas, nos dois modos. */
-export const OFFICE_TOOL_PREFIX = 'mcp__habblaud__office_';
+/**
+ * Ferramentas do MCP do escritório (office_* de delegation.ts, as do Jarvis em server/jarvis/tools.ts): as que têm
+ * efeito pedem a aprovação elas mesmas, no servidor (o portão fica no run() delas), nos dois modos.
+ */
+export const OFFICE_TOOL_PREFIX = 'mcp__habblaud__';
 
-export function decideClaudeTool(tool: string, input: Record<string, unknown>, o: { permission: ChatPermission; root: string; alwaysAllow: readonly string[] }): ToolDecision {
-  if (o.permission === 'auto' || tool.startsWith(OFFICE_TOOL_PREFIX)) return { behavior: 'allow' };
+/** `system` (o Jarvis): só as do escritório; nada de "não perguntar de novo" (ele roda sem ferramentas internas). */
+export function decideClaudeTool(tool: string, input: Record<string, unknown>, o: { permission: ChatPermission; root: string; alwaysAllow: readonly string[]; system?: boolean }): ToolDecision {
+  if (tool.startsWith(OFFICE_TOOL_PREFIX)) return { behavior: 'allow' };
+  if (o.system) return { behavior: 'deny', message: tr('O Jarvis só usa as ferramentas do escritório.') };
+  if (o.permission === 'auto') return { behavior: 'allow' };
   const key = alwaysKey(tool, input);
   return key && o.alwaysAllow.includes(key) ? { behavior: 'allow' } : { behavior: 'ask' };
 }
@@ -54,9 +60,10 @@ export type HumanAnswer = { answer: 'allow'; suggestion?: number } | { answer: '
 
 /**
  * Mostra o cartão (escritório e chat do agente) e espera a resposta. `text` = cartão de delegação (resumo pronto, sem
- * "sempre permitir").
+ * "sempre permitir"); `body` = o cartão inteiro, sem corte (fatos primeiro, depois o texto livre); `critical` = aprovar
+ * pede o PIN de aprovação (server/permissions/pin.ts).
  */
-export async function askHuman(deps: ApprovalDeps, agentId: string, req: { tool: string; input: Record<string, unknown>; text?: string; timeoutMs?: number }): Promise<HumanAnswer> {
+export async function askHuman(deps: ApprovalDeps, agentId: string, req: { tool: string; input: Record<string, unknown>; text?: string; body?: string; critical?: boolean; timeoutMs?: number }): Promise<HumanAnswer> {
   const rec = deps.chat.record(agentId);
   const r = deps.registry.registerChat({
     agentId,
@@ -65,6 +72,8 @@ export async function askHuman(deps: ApprovalDeps, agentId: string, req: { tool:
     input: req.input,
     timeoutMs: req.timeoutMs ?? APPROVAL_TIMEOUT_MS,
     ...(req.text ? { text: req.text } : {}),
+    ...(req.body !== undefined ? { body: req.body } : {}),
+    ...(req.critical ? { critical: true } : {}),
   });
   if ('skip' in r) return { answer: 'too-many' };
   deps.chat.addApproval(agentId, { kind: 'approval', permissionId: r.id, tool: req.tool, text: req.text ?? `${req.tool}: ${toolInputText(req.input)}` });
@@ -85,7 +94,7 @@ export function makeApprovalCall(deps: ApprovalDeps, agentId: string): ApprovalC
   return async ({ tool_name: tool, input }) => {
     const rec = deps.chat.record(agentId);
     if (!rec) return { behavior: 'deny', message: tr('Agente não encontrado.') };
-    const d = decideClaudeTool(tool, input, { permission: rec.permission, root: rec.cwd, alwaysAllow: rec.alwaysAllow });
+    const d = decideClaudeTool(tool, input, { permission: rec.permission, root: rec.cwd, alwaysAllow: rec.alwaysAllow, system: !!rec.system });
     if (d.behavior === 'allow') return { behavior: 'allow', updatedInput: input };
     if (d.behavior === 'deny') return d;
     const a = await askHuman(deps, agentId, { tool, input });
@@ -100,7 +109,7 @@ export function makeApprovalCall(deps: ApprovalDeps, agentId: string): ApprovalC
   };
 }
 
-/** Ferramenta MCP extra (as office_* de delegation.ts). */
+/** Ferramenta MCP extra (as office_* de delegation.ts e as do Jarvis, server/jarvis/tools.ts). */
 export interface McpTool {
   name: string;
   description: string;

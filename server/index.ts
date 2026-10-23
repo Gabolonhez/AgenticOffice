@@ -28,6 +28,7 @@ import { openMainAgent, SessionHistory } from './sources/history';
 import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
 import { PermissionRegistry } from './permissions/registry';
+import { ApprovalPin } from './permissions/pin';
 import { codexAccountOf } from './codex/http';
 import { createCodexQueueRunner, findCodexBin } from './messages/codex';
 import { createMessageRoutes } from './messages/http';
@@ -59,16 +60,21 @@ import { OwnerSocial } from './world/social';
 import { BuildingTokens } from './world/tokens';
 import { BuildingUplink } from './world/uplink';
 import { WorldViewer } from './world/viewer';
-import { AUTO_TURN_MINUTES, lastReply, loadVBoardsConfig, VBoardsService } from './vboards/vboards';
+import { AUTO_TURN_MINUTES, lastReply, loadVBoardsConfig, readFolderConfig, VBoardsService, writeFolderConfig } from './vboards/vboards';
+import { VBoardsApi } from './vboards/api';
+import { JarvisInbox, JarvisService, JARVIS_ID } from './jarvis/service';
+import { JarvisTools } from './jarvis/tools';
+import { createJarvisRoutes } from './jarvis/http';
+import { Briefing } from './jarvis/briefing';
 import { Delegation } from './chat/delegation';
 import { createChatRoutes } from './chat/http';
 import { claudeRunner, DaySummaryService, gitSubjectsToday, summaryCwd } from './summary/service';
 import { ChatService, chatOffReason } from './chat/service';
 import { createWorktreeOps } from './chat/worktree';
 import { quotaBlock } from './chat/quota';
-import { RunService } from './chat/runs';
+import { readMetrics, RunService } from './chat/runs';
 import { refinerFor, reviewDiff, runChecks } from './chat/gate';
-import { NtfySettings } from './vboards/ntfy';
+import { NotifySettings } from './vboards/ntfy';
 import { officeApprover, TriggerService } from './chat/triggers';
 
 const config = loadConfig();
@@ -91,7 +97,7 @@ const roomAliases = new RoomAliases(join(config.dataDir, 'rooms.json'));
 roomAliases.load();
 
 // Office, contas e fontes de agentes se referenciam (avisos de mudança / fontes): ligação tardia.
-const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; ptys?: PtyManager; ptyOff?: string; chat?: ChatService; runs?: RunService } = {};
+const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; ptys?: PtyManager; ptyOff?: string; chat?: ChatService; runs?: RunService; jarvis?: JarvisService; briefing?: Briefing; triggers?: TriggerService } = {};
 // Versão nova: consulta a release mais recente no GitHub a cada 6 h (HABBLAUD_UPDATE_CHECK=0 desliga).
 const updates = new UpdateChecker({
   current: config.version,
@@ -245,10 +251,14 @@ const deliveryFiles = deliveries
 const timelineDir = join(config.dataDir, TIMELINE_DIR);
 const timeline = config.timeline ? new TimelineRecorder({ dir: timelineDir }) : undefined;
 if (timeline) hub.onSnapshot((snap) => timeline.ingest(snap));
+// PIN de aprovação dos cartões críticos (permissions/pin.ts): scrypt num arquivo 600 em <dataDir>.
+const approvalPin = new ApprovalPin(join(config.dataDir, 'approval-pin.json'));
 // Responder pelo escritório (hook PermissionRequest): age sobre as sessões, então segue a mesma trava.
 const permissions = config.terminal
   ? new PermissionRegistry({
       office,
+      // Cartões críticos (Jarvis, office_*) pedem o PIN de aprovação; sem PIN definido, não se aprovam.
+      pin: () => ({ set: approvalPin.isSet(), all: approvalPin.all() }),
       viewers: () => hub.localSize,
       answerLater: () => !!config.remote?.allow.has('permissions'),
       // Só o Claude Code: a busca da resposta dada no terminal lê o formato do transcript dele.
@@ -346,8 +356,10 @@ const chatOff = chatOffReason({ inDocker: config.inDocker, ptyOptIn, terminal: c
 // Ponte com o VBoards (vboards/vboards.ts): git config --global vboards.url/vboards.token/user.email ou
 // HABBLAUD_VBOARDS_URL/_TOKEN/_EMAIL; HABBLAUD_VBOARDS=0 desliga. A fila só é buscada com o Novo agente ligado.
 const vboardsConfig = await loadVBoardsConfig(process.env);
-// Aviso no celular (opcional, vboards/ntfy.ts): só o título do card e o que aconteceu.
-const ntfy = new NtfySettings(join(config.dataDir, 'notify.json'));
+// Avisos ao dono (opcional, vboards/ntfy.ts): ntfy e/ou WhatsApp (WA-AKG), o horário do briefing e o provedor do Jarvis.
+const ntfy = new NotifySettings(join(config.dataDir, 'notify.json'));
+// API v1 do VBoards (vboards/api.ts): só com um token vb_ (ferramentas vboards_* do Jarvis e a caixa do WhatsApp).
+const vboardsApi = 'off' in vboardsConfig ? undefined : new VBoardsApi(vboardsConfig);
 const vboards =
   'off' in vboardsConfig
     ? undefined
@@ -443,8 +455,18 @@ const chat = chatOff
       knownFolders: () => chatFolders.map((f) => f.path),
       accounts,
       worktrees: createWorktreeOps(config.dataDir),
+      systemPrompt: (rec) => late.jarvis?.systemPrompt(rec),
     });
 late.chat = chat;
+/** "Conta x (claude): 5 h 40%, semana 70%" de cada conta com números recentes. */
+const quotaLines = (): string[] =>
+  accounts.allEntries().flatMap((a) => {
+    const v = accounts.usageView(a.id);
+    const u = v.usage;
+    if (v.status !== 'ok' || !u) return [];
+    const pct = (w?: { utilization: number }) => (w ? `${Math.round(w.utilization)}%` : '—');
+    return [tr('Conta {0} ({1}): 5 h {2}, semana {3}', [accounts.find(a.id)?.detected.name || a.id, a.provider, pct(u.fiveHour), pct(u.sevenDay)])];
+  });
 // Agentes conversando entre si (chat/delegation.ts): só com o registro de permissões, que mostra os cartões de aprovação.
 const delegation = chat && permissions ? new Delegation({ chat, registry: permissions, folders: () => chatFolders }) : undefined;
 // Listas (chat/runs.ts): um agente do chat por item, em sequência; só começam com o "Rodar lista" da página.
@@ -456,6 +478,7 @@ const runs = chat
       // Portão das listas automáticas do VBoards: checagens na cópia e revisão só do diff, numa pasta neutra.
       gate: { checks: (cmd, cwd) => runChecks(cmd, cwd), review: (auto, diff) => reviewDiff(auto, diff, join(config.dataDir, 'review')) },
       file: join(config.dataDir, 'chat', 'runs.json'),
+      metricsFile: join(config.dataDir, 'chat', 'run-metrics.jsonl'),
       maxParallel: config.maxParallelRuns,
       // Cota da conta (chat/quota.ts): a da lista ou a padrão do provedor (a pasta que a CLI usa sem conta escolhida).
       quota: (provider, account) => {
@@ -470,8 +493,95 @@ late.runs = runs;
 // Gatilhos (chat/triggers.ts): todo disparo vira um cartão de aprovação; sem o registro de permissões, não existem.
 const triggers =
   chat && permissions
-    ? new TriggerService({ chat, approve: officeApprover({ office, registry: permissions }), roleName: (id) => chat.roles.get(id)?.name, folders: () => chatFolders, file: join(config.dataDir, 'chat', 'triggers.json') })
+    ? new TriggerService({
+        chat,
+        approve: officeApprover({ office, registry: permissions }),
+        roleName: (id) => chat.roles.get(id)?.name,
+        folders: () => chatFolders,
+        file: join(config.dataDir, 'chat', 'triggers.json'),
+        jarvis: { id: () => late.jarvis?.id(), say: (text, origin, ref) => late.jarvis?.say(text, origin, ref) ?? { result: Promise.resolve() } },
+      })
     : undefined;
+late.triggers = triggers;
+// Jarvis (server/jarvis): o orquestrador. Agente do sistema do chat, sem ferramentas internas; as dele ficam no MCP do
+// escritório (tools.ts), e as que têm efeito pedem cartão. Sem o registro de permissões (que mostra os cartões), não existe.
+const jarvis =
+  chat && permissions
+    ? new JarvisService({
+        chat,
+        dataDir: config.dataDir,
+        settings: () => ntfy.jarvis(),
+        snapshot: () => {
+          const others = chat.agentsList().filter((a) => a.id !== JARVIS_ID);
+          const working = others.filter((a) => a.status === 'working' || a.status === 'waiting');
+          const review = (runs?.list() ?? []).flatMap((r) => r.items.filter((i) => i.state === 'review').map(() => r));
+          const last = late.briefing?.lastAt();
+          return [
+            tr('Agora: {0}', [new Date().toLocaleString('pt-BR')]),
+            tr('Agentes do chat: {0} abertos, {1} trabalhando{2}', [others.length, working.length, working.length ? `: ${working.slice(0, 8).map((a) => `${a.name} (${a.folder})`).join(', ')}` : '']),
+            tr('Listas: {0} rodando, {1} itens esperando revisão', [(runs?.list() ?? []).filter((r) => r.state === 'running').length, review.length]),
+            tr('Cartões de aprovação esperando: {0}', [permissions.snapshot().size]),
+            ...quotaLines().slice(0, 4),
+            tr('Último briefing: {0}', [last ? new Date(last).toLocaleString('pt-BR') : tr('nunca')]),
+          ];
+        },
+      })
+    : undefined;
+late.jarvis = jarvis;
+const jarvisTools =
+  chat && permissions && jarvis
+    ? new JarvisTools({
+        jarvisId: () => jarvis.id(),
+        turn: () => jarvis.turn(),
+        limitsFile: join(config.dataDir, 'jarvis', 'limits.json'),
+        chat,
+        registry: permissions,
+        runs,
+        worktrees: createWorktreeOps(config.dataDir),
+        folders: () => chatFolders,
+        folderConfig: (f) => readFolderConfig(f),
+        writeFolderConfig: (f, v) => writeFolderConfig(f, v),
+        accounts: () =>
+          accounts.allEntries().map((a) => {
+            const v = accounts.usageView(a.id);
+            return { id: a.id, provider: a.provider, name: accounts.find(a.id)?.detected.name, status: v.status, fiveHourPct: v.usage?.fiveHour?.utilization, weekPct: v.usage?.sevenDay?.utilization, resetsAt: v.usage?.fiveHour?.resetsAt };
+          }),
+        metrics: (since) => readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since),
+        notify: (text, channel) => ntfy.sendText(text, { channel }),
+        triggers,
+        vboards: vboardsApi,
+        memory: { read: () => jarvis.memoryRead(), write: (mode, text) => jarvis.memoryWrite(mode, text) },
+      })
+    : undefined;
+// Caixa do WhatsApp do Jarvis: com o WA-AKG configurado e um token vb_ do VBoards.
+const jarvisInbox = jarvis && vboardsApi ? new JarvisInbox({ api: vboardsApi, wa: () => ntfy.wa(), say: (text, origin, ref) => jarvis.say(text, origin, ref) }) : undefined;
+// Briefing do Jarvis: no horário de notify.json (desligado sem hora) ou pelo botão.
+const briefing = jarvis
+  ? new Briefing({
+      settings: () => ntfy.briefing(),
+      runner: claudeRunner(summaryCwd(config.dataDir)),
+      gather: async (since) => {
+        let summary: Record<string, unknown> | undefined;
+        let summaryError: string | undefined;
+        if (vboardsApi?.enabled) {
+          try {
+            summary = await vboardsApi.summary();
+          } catch (err) {
+            summaryError = errMsg(err);
+          }
+        }
+        const failures = [
+          ...(runs?.list() ?? []).flatMap((r) => r.items.filter((i) => (i.state === 'failed' || i.state === 'interrupted') && (i.endedAt ?? 0) >= since).map((i) => tr('lista em {0}: {1} ({2})', [r.options.folder, i.text.slice(0, 80), i.state]))),
+          ...(triggers?.history() ?? []).filter((f) => f.outcome === 'failed' && f.at >= since).map((f) => tr('gatilho "{0}": {1}', [f.ruleName, f.note ?? ''])),
+        ];
+        return { since, summary, summaryError, metrics: readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since), quota: quotaLines(), failures };
+      },
+      post: (text) => void chat!.post(jarvis.ensure(), text),
+      notify: (text, headline) => ntfy.sendText(text, { title: tr('Briefing'), headline }),
+      file: join(config.dataDir, 'jarvis', 'briefing.json'),
+    })
+  : undefined;
+late.briefing = briefing;
 // Resumo do dia (server/summary): atividade de hoje no escritório, conversas do chat e commits das pastas conhecidas.
 const daySummary = chat
   ? new DaySummaryService({
@@ -499,6 +609,8 @@ const chatRoutes = chat
       runs,
       triggers,
       summary: daySummary,
+      extraTools: (id) => (jarvisTools && chat.record(id)?.system === 'jarvis' ? jarvisTools.tools() : []),
+      jarvis: jarvis ? createJarvisRoutes({ jarvis, settings: () => ntfy.jarvis(), saveSettings: (s) => ntfy.setJarvis(s), briefing }) : undefined,
     })
   : undefined;
 if (chat) {
@@ -507,6 +619,8 @@ if (chat) {
   runs?.start();
   triggers?.load();
   triggers?.start();
+  jarvisInbox?.start();
+  briefing?.start();
   refreshChatFolders();
   setInterval(refreshChatFolders, 30_000).unref();
 }
@@ -529,7 +643,8 @@ const api = createApiHandler({
   terminals,
   sessions: history,
   timeline: createTimelineHandler({ dir: timelineDir, recording: !!timeline }),
-  permissions: permissions ? createPermissionRoutes(permissions) : undefined,
+  permissions: permissions ? createPermissionRoutes(permissions, approvalPin) : undefined,
+  approvalPin: permissions ? approvalPin : undefined,
   messages: messages ? createMessageRoutes(messages) : undefined,
   pty: ptys ? createPtyRoutes(ptys) : undefined,
   spawn,
@@ -729,6 +844,8 @@ function shutdown(signal: string): void {
   terminals?.stop();
   runs?.freeze();
   triggers?.stop();
+  jarvisInbox?.stop();
+  briefing?.stop();
   chat?.stopAll();
   timeline?.stop();
   permissions?.stop();

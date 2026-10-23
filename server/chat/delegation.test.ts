@@ -96,6 +96,8 @@ describe('chat: delegação entre agentes (sempre com aprovação do usuário)',
       const pending = tool(a, 'office_ask_agent').run({ agentId: b, message: 'revise o diff' });
       await flush();
       expect(card(a)?.text).toBe('Ana (Orquestrador) quer mandar para Bia (Dev): revise o diff');
+      expect(card(a)).toMatchObject({ critical: true, pin: 'unset' });
+      expect(registry!.detail(card(a)!.id)?.input).toBe('Ana (Orquestrador) quer mandar para Bia (Dev): revise o diff');
       expect(card(a)?.suggestions).toBeUndefined();
       expect(chat.view(a)!.items.at(-1)).toMatchObject({ kind: 'approval' });
       expect(procs.length).toBe(spawnedBefore); // nada antes da aprovação

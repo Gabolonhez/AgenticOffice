@@ -1,12 +1,26 @@
 // Chat com um agente aberto pelo escritório (server/chat): a conversa, o status ao vivo, Parar, Juntar/Descartar a cópia
 // isolada e o limite. Busca a conversa por GET /api/chat/agents/:id?after= só enquanto o painel está aberto nele.
+// Ditado (o mesmo botão da caixa de mensagem) em qualquer agente. No Jarvis (view.system): a mensagem vai por
+// POST /api/chat/jarvis, não fecha, tem "Conversa nova", "Briefing agora" e a leitura em voz alta das respostas novas.
 import type { ChatItem, ChatState, ChatView } from '../../../shared/chat';
 import { tr } from '../../../shared/i18n';
 import type { AgentInfo } from '../../../shared/types';
-import { afterSeq, canSendChat, chatStatusText, mergeItems, pollDelayChat, toolLine, usageText } from './chat-model';
+import { afterSeq, canSendChat, chatStatusText, mergeItems, newReplies, pollDelayChat, toolLine, usageText } from './chat-model';
 import { enterSends } from './composer-model';
 import type { UiContext } from './context';
+import { DictationButton, dictationAvailable, insertDictation } from './dictation';
 import { h, KeyedList, setHidden, setText } from './dom';
+
+/** Lê em voz alta (pt-BR) pelo navegador; sem speechSynthesis, nada. */
+function speak(text: string): void {
+  try {
+    const u = new SpeechSynthesisUtterance(text.replace(/[*_#`>]+/g, ' ').slice(0, 1500));
+    u.lang = 'pt-BR';
+    speechSynthesis.speak(u);
+  } catch {
+    // navegador sem voz
+  }
+}
 
 const IDLE: ChatState = { phase: 'idle', spentUsd: 0, spentTokens: 0, limits: {} };
 
@@ -76,6 +90,13 @@ export class ChatPanel {
   private readonly limitRow: HTMLElement;
   private readonly limitInput: HTMLInputElement;
   private readonly error: HTMLElement;
+  private readonly dictate: DictationButton;
+  private readonly jarvisRow: HTMLElement;
+  private readonly voice: HTMLInputElement;
+  /** Agente do sistema (o Jarvis): vem do GET da conversa. */
+  private system?: 'jarvis';
+  /** Até onde as respostas já foram lidas em voz alta (-1 = ainda não carregou: o histórico não é lido). */
+  private spokenSeq = -1;
 
   constructor(private readonly ctx: UiContext) {
     const listEl = h('div', { class: 'ui-chat__list', role: 'log', attrs: { 'aria-live': 'polite' } });
@@ -97,15 +118,38 @@ export class ChatPanel {
     this.limitInput = h('input', { class: 'ui-chat__limit', attrs: { type: 'number', min: '0', step: 'any', 'aria-label': tr('Novo limite') } }) as HTMLInputElement;
     this.limitRow = h('div', { class: 'ui-chat__row' }, this.limitInput, h('button', { class: 'ui-btn', type: 'button', text: tr('Aumentar limite'), on: { click: () => void this.raiseLimit() } }));
     this.error = h('p', { class: 'ui-chat__error', role: 'alert' });
+    this.dictate = new DictationButton(
+      (t) => {
+        const r = insertDictation(this.box.value, this.box.selectionStart ?? this.box.value.length, this.box.selectionEnd ?? this.box.value.length, t.text);
+        this.box.value = r.value;
+        this.box.focus();
+        this.box.setSelectionRange(r.caret, r.caret);
+      },
+      (text, error) => {
+        setText(this.error, error ? text : '');
+      },
+      { compact: true },
+    );
+    setHidden(this.dictate.el, true);
+    void dictationAvailable().then((ok) => setHidden(this.dictate.el, !ok));
+    this.voice = h('input', { type: 'checkbox', on: { change: () => this.ctx.updatePrefs({ jarvisVoice: this.voice.checked }) } }) as HTMLInputElement;
+    this.jarvisRow = h(
+      'div',
+      { class: 'ui-chat__row', hidden: true },
+      h('button', { class: 'ui-btn', type: 'button', text: tr('Conversa nova'), attrs: { title: tr('Começa outra conversa na CLI; a memória do Jarvis fica') }, on: { click: () => void this.jarvisAction('reset') } }),
+      h('button', { class: 'ui-btn', type: 'button', text: tr('Briefing agora'), on: { click: () => void this.jarvisAction('briefing') } }),
+      h('label', { class: 'ui-spawn__check' }, this.voice, h('span', { text: tr('Ler respostas em voz alta') })),
+    );
     this.el = h(
       'div',
       { class: 'ui-chat' },
       listEl,
       this.status,
       h('div', { class: 'ui-chat__row' }, this.stopBtn, this.mergeBtn, this.discardBtn, this.closeBtn),
+      this.jarvisRow,
       this.limitRow,
       // No celular a caixa fica presa no rodapé da gaveta, como a das mensagens (styles.css, .ui-chat__compose).
-      h('div', { class: 'ui-chat__row ui-chat__compose' }, this.box, this.sendBtn),
+      h('div', { class: 'ui-chat__row ui-chat__compose' }, this.box, this.dictate.el, this.sendBtn),
       this.error,
     );
     this.paint();
@@ -117,6 +161,8 @@ export class ChatPanel {
     this.agentId = agentId;
     this.items = [];
     this.state = IDLE;
+    this.system = undefined;
+    this.spokenSeq = -1;
     this.list.sync([]);
     setText(this.error, '');
     this.paint();
@@ -124,6 +170,7 @@ export class ChatPanel {
   }
 
   close(): void {
+    this.dictate.cancel();
     this.gen++;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
@@ -147,6 +194,8 @@ export class ChatPanel {
         const v = data as unknown as ChatView;
         this.items = mergeItems(this.items, v.items);
         this.state = v.state;
+        this.system = v.system;
+        this.readAloud(v.lastSeq);
         this.paint();
       }
     } catch {
@@ -169,24 +218,45 @@ export class ChatPanel {
     const openCopy = !!iso && !iso.merged && !iso.discarded && !busy;
     setHidden(this.mergeBtn, !openCopy);
     setHidden(this.discardBtn, !openCopy);
-    // Fecha só parado; com cópia isolada aberta, primeiro Juntar ou Descartar.
-    setHidden(this.closeBtn, busy || (!!iso && !iso.merged && !iso.discarded));
+    // Fecha só parado; com cópia isolada aberta, primeiro Juntar ou Descartar. O Jarvis não fecha.
+    setHidden(this.closeBtn, busy || !!this.system || (!!iso && !iso.merged && !iso.discarded));
+    setHidden(this.jarvisRow, this.system !== 'jarvis');
+    this.voice.checked = this.ctx.prefs.jarvisVoice;
     setHidden(this.limitRow, !this.state.blocked);
-    this.sendBtn.disabled = busy || !!this.state.blocked;
+    this.sendBtn.disabled = (busy && this.system !== 'jarvis') || !!this.state.blocked;
   }
 
   private async send(): Promise<void> {
     const text = this.box.value;
-    const ok = canSendChat(text, this.state);
+    // O Jarvis tem fila: manda mesmo com a rodada em andamento.
+    const ok = canSendChat(text, this.system === 'jarvis' ? { ...this.state, phase: 'idle' } : this.state);
     if (!ok.ok) return setText(this.error, ok.why);
     setText(this.error, '');
-    const { status, data } = await call(this.url('/messages'), 'POST', { text: text.trim() });
+    // O Jarvis recebe pela rota dele (fila, origem "página"): ocupado não recusa a mensagem.
+    const { status, data } = this.system === 'jarvis' ? await call('/api/chat/jarvis', 'POST', { text: text.trim() }) : await call(this.url('/messages'), 'POST', { text: text.trim() });
     if (status === 202) {
       this.box.value = '';
       this.state = { ...this.state, phase: 'thinking' };
       this.paint();
       this.restartPoll();
     } else setText(this.error, String(data.error ?? tr('erro {0}', [status])));
+  }
+
+  /** Lê as respostas novas do Jarvis (com o toggle ligado); na primeira busca só marca até onde já existia. */
+  private readAloud(lastSeq: number): void {
+    if (this.spokenSeq < 0) {
+      this.spokenSeq = lastSeq;
+      return;
+    }
+    const fresh = newReplies(this.items, this.spokenSeq);
+    this.spokenSeq = Math.max(this.spokenSeq, lastSeq);
+    if (this.system === 'jarvis' && this.ctx.prefs.jarvisVoice) for (const t of fresh) speak(t);
+  }
+
+  private async jarvisAction(kind: 'reset' | 'briefing'): Promise<void> {
+    const { status, data } = await call(`/api/chat/jarvis/${kind}`, 'POST', {});
+    setText(this.error, status >= 400 ? String(data.error ?? tr('erro {0}', [status])) : kind === 'briefing' ? tr('Briefing pedido: chega aqui em instantes.') : '');
+    this.restartPoll();
   }
 
   private async action(kind: 'stop' | 'merge' | 'discard'): Promise<void> {

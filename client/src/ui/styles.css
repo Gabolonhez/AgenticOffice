@@ -6376,6 +6376,36 @@ html.is-replay #world {
   border-color: rgba(255, 181, 71, 0.7);
 }
 
+.ui-perm__pin-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: rgba(255, 226, 181, 0.82);
+}
+
+.ui-perm__pin {
+  width: 100%;
+  max-width: 280px;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--ui-line-strong);
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--ui-text);
+  font: 13px/1 var(--font-ui);
+}
+
+.ui-perm__pin:focus {
+  outline: none;
+  border-color: rgba(255, 181, 71, 0.7);
+}
+
+.ui-perm__note.is-error {
+  color: #ff9a8a;
+}
+
 .ui-perm__check-row {
   display: flex;
   align-items: center;

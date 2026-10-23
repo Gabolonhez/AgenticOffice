@@ -12,6 +12,7 @@ import { Hub } from '../http/sse';
 import { NameStore } from '../model/names';
 import { Office } from '../model/office';
 import { createPermissionRoutes } from '../permissions/http';
+import type { ApprovalPin } from '../permissions/pin';
 import { PermissionRegistry, type RegistryOptions } from '../permissions/registry';
 import type { CodexLive } from '../sources/codex/live';
 import { tempDir } from './fixtures';
@@ -33,7 +34,7 @@ export interface PermissionServer {
 }
 
 export async function servePermissions(
-  opts: { enabled?: boolean; viewers?: number; demo?: boolean; registry?: Partial<RegistryOptions>; codex?: boolean; codexLive?: CodexLive } = {},
+  opts: { enabled?: boolean; viewers?: number; demo?: boolean; registry?: Partial<RegistryOptions>; codex?: boolean; codexLive?: CodexLive; pin?: ApprovalPin } = {},
 ): Promise<PermissionServer> {
   const tmp = tempDir();
   const enabled = opts.enabled ?? true;
@@ -57,6 +58,7 @@ export async function servePermissions(
         demoDecide: (id, d) => office.decideDemoPermission(id, d),
         demoDetail: (id) => office.demoPermission(id),
         tickMs: 50,
+        ...(opts.pin ? { pin: () => ({ set: opts.pin!.isSet(), all: opts.pin!.all() }) } : {}),
         ...opts.registry,
       })
     : undefined;
@@ -71,7 +73,8 @@ export async function servePermissions(
     version: 't',
     inDocker: false,
     terminal: enabled,
-    permissions: registry ? createPermissionRoutes(registry) : undefined,
+    permissions: registry ? createPermissionRoutes(registry, opts.pin) : undefined,
+    ...(opts.pin ? { approvalPin: opts.pin } : {}),
     codexLive: opts.codexLive,
   });
   const guard = createRequestGuard({ allowedHosts: new Set(['habblaud.lan']) });

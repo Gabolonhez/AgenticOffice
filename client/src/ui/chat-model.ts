@@ -66,3 +66,8 @@ export function afterSeq(items: ChatItem[], s: ChatState): number {
 export function pollDelayChat(s: ChatState): number {
   return s.phase === 'idle' ? 4000 : 700;
 }
+
+/** Respostas do agente depois de `after` (o Jarvis lê em voz alta só as novas, nunca o histórico ao abrir). */
+export function newReplies(items: readonly ChatItem[], after: number): string[] {
+  return items.flatMap((i) => (i.kind === 'assistant' && i.seq > after && i.text.trim() ? [i.text] : []));
+}

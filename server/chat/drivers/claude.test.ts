@@ -72,3 +72,12 @@ describe('chat: Claude sem push', () => {
     expect(claudeArgs(base)).not.toContain('--disallowedTools');
   });
 });
+
+describe('chat: Claude sem ferramentas internas (Jarvis)', () => {
+  it("tools '' vira --tools '' (as do MCP continuam) e o pedir aprovação põe --strict-mcp-config", () => {
+    const args = claudeArgs({ folder: 'C:\j', prompt: 'oi', first: true, sessionId: 's', permission: 'ask', tools: '', mcp: { url: 'http://x', token: 't' } });
+    expect(args[args.indexOf('--tools') + 1]).toBe('');
+    expect(args).toContain('--strict-mcp-config');
+    expect(claudeArgs({ folder: 'C:\j', prompt: 'oi', first: true, sessionId: 's', permission: 'ask' })).not.toContain('--tools');
+  });
+});

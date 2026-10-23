@@ -553,4 +553,19 @@ describe('pedidos do chat do escritório', () => {
     expect(await w.result).toEqual({ status: 'released', reason: 'gone' });
     expect(registry.snapshot().get('chat:1')).toBeUndefined();
   });
+
+  it('cartão crítico: o texto inteiro (sem corte, várias linhas) no detalhe, fora do snapshot; pede PIN', () => {
+    const { office, registry } = setup({ viewers: 0 });
+    office.addMain({ id: 'chat:1', account: '', sessionId: 'S', cwd: '/p/loja', role: '', startedAt: 0, status: 'working', chat: true });
+    const body = `Jarvis quer: agents_send\nOrigem do pedido: WhatsApp\n\n--- texto completo ---\n${'x'.repeat(5000)}FIM`;
+    const r = registry.registerChat({ agentId: 'chat:1', sessionId: 'S', tool: 'Jarvis · agents_send', input: {}, timeoutMs: 300_000, text: 'Jarvis quer: agents_send', body, critical: true });
+    const id = 'id' in r ? r.id : '';
+    expect(registry.detail(id)).toMatchObject({ critical: true, input: body, inputKind: 'text' });
+    expect(registry.detail(id)?.suggestions).toBeUndefined();
+    expect(registry.snapshot().get('chat:1')?.input).toBeUndefined();
+    expect(registry.snapshot().get('chat:1')?.critical).toBe(true);
+    expect(registry.needsPin(id)).toBe(true);
+    const plain = registry.registerChat({ agentId: 'chat:1', sessionId: 'S', tool: 'Bash', input: { command: 'ls' }, timeoutMs: 300_000 });
+    expect(registry.needsPin('id' in plain ? plain.id : '')).toBe(false);
+  });
 });

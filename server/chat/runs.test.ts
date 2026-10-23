@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatRun } from '../../shared/runs';
-import { feedbackMessage, parseComments, RunService, type RunDeps } from './runs';
+import { feedbackMessage, METRICS_KEEP_MS, METRICS_TRIM_BYTES, parseComments, readMetrics, RunService, trimMetrics, type RunDeps } from './runs';
 
 const PROJ = 'C:\\proj';
 const options = { folder: PROJ, provider: 'claude', permission: 'auto', limits: {} };
@@ -523,5 +523,43 @@ describe('chat: comentários por linha no diff (revisão)', () => {
     const s = await reviewed();
     expect(await s.svc.diff('r1')).toEqual({ diff: DIFF });
     expect(await s.svc.diff('nada')).toMatchObject({ status: 404 });
+  });
+});
+
+describe('chat: métricas das listas (run-metrics.jsonl)', () => {
+  const wt = () => ({ create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(), discard: vi.fn(), summary: vi.fn(), diff: vi.fn(async () => 'diff --git a/x b/x') });
+
+  it('uma linha por item que termina: estado, portão, volta, tempo, gasto do agente, provedor e modelo', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hb-metrics-'));
+    const metricsFile = join(dir, 'run-metrics.jsonl');
+    let now = 100;
+    const gate = { checks: vi.fn(async () => ({ ok: true, tail: '' })), review: vi.fn(async () => ({ ok: true, findings: 'OK', by: 'claude' })) };
+    const t = setup({ metricsFile, worktrees: wt(), gate, exists: () => true, now: () => now });
+    (t.chat as unknown as { record: (id: string) => unknown }).record = (id: string) => ({ spend: { usd: id === 'chat:1' ? 0.75 : 0, tokens: 1234 } });
+    t.svc.create({ items: items('a', 'b'), options: { ...options, model: 'sonnet' }, isolated: true }, { check: 'npm test', reviewer: 'claude' });
+    await flush();
+    now = 5_100;
+    t.end('chat:1', 'done', 'Feito.');
+    await flush();
+    now = 6_000;
+    t.svc.stop('r1');
+    const lines = readMetrics(metricsFile);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toEqual({ at: 5_100, runId: 'r1', folder: PROJ, state: 'review', gate: 'pass', retried: false, ms: 5_000, usd: 0.75, tokens: 1234, provider: 'claude', model: 'sonnet' });
+    expect(lines[1]).toMatchObject({ state: 'interrupted', gate: 'none' });
+    expect(readMetrics(metricsFile, 5_101)).toHaveLength(1);
+  });
+
+  it('corte no load: acima de 2 MB ficam só os últimos 90 dias; abaixo, nada muda', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'hb-metrics-')), 'm.jsonl');
+    const now = 200 * 24 * 60 * 60_000;
+    const old = { at: now - METRICS_KEEP_MS - 1, runId: 'velho', folder: PROJ, state: 'done', gate: 'none', retried: false, ms: 1, usd: 0, tokens: 0, provider: 'claude', pad: 'x'.repeat(2000) };
+    writeFileSync(file, `${JSON.stringify(old)}\n`.repeat(Math.ceil(METRICS_TRIM_BYTES / 2000) + 10) + `${JSON.stringify({ ...old, at: now - 1000, runId: 'novo' })}\nlixo\n`);
+    trimMetrics(file, now);
+    expect(readMetrics(file).map((m) => m.runId)).toEqual(['novo']);
+    const small = join(mkdtempSync(join(tmpdir(), 'hb-metrics-')), 'm.jsonl');
+    writeFileSync(small, `${JSON.stringify(old)}\n`);
+    trimMetrics(small, now);
+    expect(readMetrics(small)).toHaveLength(1);
   });
 });
