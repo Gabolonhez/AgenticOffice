@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -128,6 +128,61 @@ describe('diff da cópia para o revisor', () => {
     const diff = await ops.diff(w);
     expect(diff).toContain('novo.txt');
     expect(diff).toContain('+dois');
+  });
+});
+
+describe('vboards.copy: arquivos copiados para a cópia', () => {
+  async function withCopy() {
+    const { r, ops } = setup();
+    mkdirSync(join(r, 'apps', 'web'), { recursive: true });
+    writeFileSync(join(r, '.env'), 'SEGREDO=1\n');
+    writeFileSync(join(r, 'apps', 'web', '.env.local'), 'X=2\n');
+    writeFileSync(join(r, 'a.txt'), 'local sem commit\n');
+    git(r, 'config', 'vboards.copy', '.env, apps/web/.env.local, falta.env, a.txt, ../fora');
+    const w = await made(ops, r);
+    git(r, 'checkout', '-q', '--', 'a.txt');
+    // O Juntar exige o projeto sem mudanças: num projeto de verdade o .env é ignorado; aqui, sai da pasta.
+    const clean = () => {
+      rmSync(join(r, '.env'));
+      rmSync(join(r, 'apps'), { recursive: true });
+    };
+    return { r, ops, w, clean };
+  }
+
+  it('copia os que existem, lista os que faltam e não troca o que veio do checkout', async () => {
+    const { w } = await withCopy();
+    expect(w.copied).toEqual(['.env', 'apps/web/.env.local']);
+    expect(w.missing).toEqual(['falta.env']);
+    expect(readFileSync(join(w.path, '.env'), 'utf8')).toBe('SEGREDO=1\n');
+    expect(readFileSync(join(w.path, 'a.txt'), 'utf8')).toBe('um\n');
+  });
+
+  it('fora do diff do revisor e do commit do Juntar; o resto junta normal', async () => {
+    const { r, ops, w, clean } = await withCopy();
+    writeFileSync(join(w.path, 'c.txt'), 'c\n');
+    const diff = await ops.diff(w);
+    expect(diff).toContain('c.txt');
+    expect(diff).not.toContain('SEGREDO');
+    clean();
+    expect(await ops.merge(r, w, 'trabalho')).toEqual({ ok: true });
+    expect(git(r, 'show', '--name-only', '--format=', 'HEAD^2')).toBe('c.txt');
+    expect(git(r, 'ls-files')).not.toContain('.env');
+  });
+
+  it('só os copiados, sem outra mudança: junta sem commit vazio', async () => {
+    const { r, ops, w, clean } = await withCopy();
+    clean();
+    expect(await ops.merge(r, w, 'nada')).toEqual({ ok: true });
+  });
+
+  it('o agente commitou o .env copiado: não junta', async () => {
+    const { r, ops, w, clean } = await withCopy();
+    clean();
+    git(w.path, 'add', '-f', '.env');
+    git(w.path, 'commit', '-q', '-m', 'ops');
+    const head = git(r, 'rev-parse', 'HEAD');
+    expect(await ops.merge(r, w, 'm')).toEqual({ ok: false, reason: expect.stringContaining('.env') });
+    expect(git(r, 'rev-parse', 'HEAD')).toBe(head);
   });
 });
 

@@ -669,6 +669,7 @@ por pasta**, só leitura pelo celular):
 | `vboards.check` | nenhum | Comando de shell rodado na cópia isolada depois de cada item. A cópia não tem `node_modules` nem `.env`, então o comando instala o que precisar (ex.: `npm ci && npm test`). |
 | `vboards.reviewer` | `claude` | Quem revisa o diff: `claude`, `codex` ou `agy`. |
 | `vboards.reviewerModel` | `sonnet` (Claude) | Modelo do revisor; Codex e agy usam o padrão da CLI. |
+| `vboards.copy` | nenhum | Arquivos (caminhos relativos, separados por vírgula, ex.: `.env`) copiados da pasta para cada cópia isolada. Ficam fora do diff do revisor e do commit do Juntar. |
 
 Com `vboards.auto` ligado (e o chat com agentes ligado), cada subtarefa cujo card combina **só** com esta pasta vira uma
 lista (uma por pasta, uma de cada vez): um agente novo por item, numa cópia isolada (git worktree num branch próprio),
@@ -677,6 +678,15 @@ qualquer push). No fim de cada item o Habblaud roda o `vboards.check` e pede ao 
 ferramentas. Na primeira falha o erro volta uma vez ao mesmo agente; depois a subtarefa vai ao VBoards como **review**,
 com um relatório (branch, checagens, revisão e o resumo do agente). O Habblaud nunca junta nem dá push sozinho:
 **Juntar** continua sendo um clique seu.
+
+**Refinar:** o "Refinar" clicado num card do VBoards chega na mesma busca da fila e roda sozinho quando uma única pasta
+combina com o card: uma rodada **só de leitura** na própria pasta, pelo `vboards.provider` (Claude só com Read/Grep/Glob e
+o `vboards.budget`; Codex com `--sandbox read-only`; agy com `--mode plan`, ou o Claude se o agy não estiver instalado),
+que devolve ao card o plano, as perguntas e as subtarefas sugeridas.
+
+**Aviso no celular:** em Configurações › VBoards por pasta dá para pôr um tópico do [ntfy](https://ntfy.sh)
+(`https://ntfy.sh/<tópico>` ou um servidor seu; http só na rede local). Ele recebe só o título do card e "aguardando
+revisão", "plano pronto" ou "falhou", nunca código nem resumo. Fica em `~/.habblaud/notify.json`.
 
 ### Modo demonstração
 

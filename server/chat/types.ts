@@ -38,11 +38,13 @@ export interface CliInvocation { args: string[]; stdin?: string; env: Record<str
 
 /** Cópia isolada do agente num git worktree (implementação em worktree.ts). */
 export interface WorktreeOps {
-  create(repo: string, agentId: string, label: string): Promise<{ path: string; branch: string; base: string } | { error: string }>;
+  /** `copied`/`missing`: os arquivos do vboards.copy que foram copiados e os que não existem na pasta. */
+  create(repo: string, agentId: string, label: string): Promise<{ path: string; branch: string; base: string; copied?: string[]; missing?: string[] } | { error: string }>;
   summary(w: { path: string; base: string }): Promise<{ files: number; added: number; removed: number; commits: number; stat: string }>;
   /** Diff da cópia contra a base, com os arquivos novos (git add -A -N antes): o que o revisor do portão lê. */
-  diff(w: { path: string; base: string }): Promise<string>;
-  merge(repo: string, w: { path: string; branch: string }, message: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+  diff(w: { path: string; base: string; copied?: string[] }): Promise<string>;
+  /** Os `copied` ficam fora do commit; um trabalho que os commitou (desde `base`) não junta. */
+  merge(repo: string, w: { path: string; branch: string; base?: string; copied?: string[] }, message: string): Promise<{ ok: true } | { ok: false; reason: string }>;
   discard(repo: string, w: { path: string; branch: string }): Promise<{ ok: true } | { ok: false; reason: string }>;
 }
 

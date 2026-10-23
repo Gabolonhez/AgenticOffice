@@ -22,7 +22,7 @@ export interface ChatRecord {
   limits: ChatLimits;
   spend: Spend;
   items: ChatItem[];
-  isolated?: { branch: string; path: string; base: string; merged?: boolean; discarded?: boolean };
+  isolated?: { branch: string; path: string; base: string; copied?: string[]; merged?: boolean; discarded?: boolean };
   vboardsTaskId?: string;
   denyPush?: true;
   name?: string;

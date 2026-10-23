@@ -221,7 +221,7 @@ export class ChatService {
           return;
         }
         rec.cwd = w.path;
-        rec.isolated = { branch: w.branch, path: w.path, base: w.base };
+        rec.isolated = { branch: w.branch, path: w.path, base: w.base, ...(w.copied ? { copied: w.copied } : {}) };
         this.runTurn(rt, prompt, from);
       });
     } else {

@@ -31,6 +31,14 @@ do meio (0.**3**.0).
   (`vboards.reviewer`/`vboards.reviewerModel`: claude, codex ou agy) lê só o diff; na primeira falha o erro volta uma vez
   ao agente, depois a subtarefa vai como **review** com o relatório. Juntar continua sendo um clique.
 - **Configurações › VBoards por pasta:** lê e grava o `git config --local` da pasta; pela porta do celular, só leitura.
+- **VBoards — Refinar:** o "Refinar" clicado num card roda sozinho, se uma única pasta combina com ele: UMA rodada só de
+  leitura na própria pasta (`vboards.provider`; Claude só com Read/Grep/Glob e o `vboards.budget`, Codex no sandbox
+  read-only, agy no modo plan) devolve ao card o plano, as perguntas e as subtarefas sugeridas. Nenhuma ou várias pastas:
+  o card recebe a falha com o motivo. O painel do VBoards mostra o que está sendo refinado.
+- **VBoards — `vboards.copy`:** arquivos da pasta (ex.: `.env`) copiados para cada cópia isolada; ficam fora do diff do
+  revisor e do commit do Juntar, e o Juntar recusa um trabalho que os tenha commitado. Os que faltam vão no relatório.
+- **Aviso no celular (ntfy):** opcional, em Configurações › VBoards por pasta: um tópico do ntfy recebe só o título do
+  card e "aguardando revisão", "plano pronto" ou "falhou". Gravar só pelo próprio computador.
 - **Docker:** o chat fica indisponível, com aviso; o resto segue igual.
 - **Chat pelo celular:** desligado por padrão; com `chat` no `HABBLAUD_REMOTE_ALLOW` (login + HTTPS) o chat, Rodar
   lista, Gatilhos e o Quadro funcionam pela porta do celular, com alvos de toque maiores e janelas em tela cheia. O MCP

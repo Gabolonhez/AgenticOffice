@@ -15,6 +15,7 @@ import { INHERITED_SESSION_VARS } from '../pty/manager';
 import { AI_TIMEOUT_MS, claudeRunner, type AiRunner } from '../summary/service';
 import { resolveCliBin, type CliBin } from './bins';
 import { agyDriver } from './drivers/agy';
+import { claudeDriver } from './drivers/claude';
 import { codexDriver } from './drivers/codex';
 import { defaultKill } from './service';
 import type { StreamParser } from './types';
@@ -153,6 +154,33 @@ export function reviewerFor(auto: Pick<RunAuto, 'reviewer' | 'reviewerModel'>, c
   return { run: claudeRunner(cwd, bins('claude'), timeoutMs, m), by: fallback ? `${label('claude', m)} ${tr('(no lugar de {0}, não encontrado)', [auto.reviewer === 'antigravity' ? 'agy' : auto.reviewer])}` : label('claude', m) };
 }
 
+/** Prazo do "Refinar" (lê o repositório inteiro, então bem mais que a revisão de um diff). */
+export const REFINE_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * Argumentos da rodada só de leitura do "Refinar" (VBoards), por provedor: claude só com Read/Grep/Glob (sem shell nem
+ * edição, sem os MCPs do usuário) e com o orçamento; codex no sandbox read-only, efêmero; agy no modo plan. O codex e o
+ * agy não têm limite de gasto por flag.
+ */
+export function refineArgs(provider: Provider, budgetUsd: number, prompt: string): string[] {
+  if (provider === 'codex') return ['exec', '--json', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '-'];
+  if (provider === 'antigravity') return ['--output-format', 'stream-json', '--mode', 'plan', `--print=${prompt}`];
+  return ['-p', '--output-format', 'stream-json', '--verbose', '--tools', 'Read,Grep,Glob', '--strict-mcp-config', '--no-session-persistence', '--max-budget-usd', String(budgetUsd)];
+}
+
+/**
+ * "Refinar" um card: UMA rodada só de leitura NA PASTA do projeto (sem cópia isolada: nada é escrito), pelo
+ * vboards.provider. Sem a CLI do codex/agy, cai no claude, como o reviewerFor.
+ */
+export function refinerFor(provider: Provider, cwd: string, budgetUsd: number, bins: (p: Provider) => CliBin | undefined = (p) => resolveCliBin(p), timeoutMs = REFINE_TIMEOUT_MS): { run: AiRunner; by: string } {
+  const p: Provider = provider !== 'claude' && bins(provider) ? provider : 'claude';
+  const bin = bins(p);
+  const by = p === provider ? (p === 'antigravity' ? 'agy' : p) : `claude ${tr('(no lugar de {0}, não encontrado)', [provider === 'antigravity' ? 'agy' : provider])}`;
+  if (!bin) return { run: () => Promise.reject(new Error(tr('Claude Code não encontrado'))), by };
+  const parser = p === 'codex' ? codexDriver.parser : p === 'antigravity' ? agyDriver.parser : claudeDriver.parser;
+  return { run: streamRunner(bin, (prompt) => refineArgs(p, budgetUsd, prompt), p !== 'antigravity', parser, cwd, timeoutMs), by };
+}
+
 /** Revisa o diff; erro da IA não derruba o portão (vira "revisão indisponível" no relatório). */
 export async function reviewDiff(auto: Pick<RunAuto, 'reviewer' | 'reviewerModel'>, diff: string, cwd: string): Promise<ReviewResult> {
   const r = reviewerFor(auto, cwd);
@@ -175,14 +203,15 @@ export function fixRequest(checks: CheckResult | undefined, review: ReviewResult
 }
 
 /** Relatório para o VBoards (até REPORT_MAX): branch, checagens, revisão e resumo do agente. */
-export function gateReport(r: { branch: string; checks?: CheckResult; review?: ReviewResult; summary?: string; retried?: boolean }): string {
+export function gateReport(r: { branch: string; checks?: CheckResult; review?: ReviewResult; summary?: string; retried?: boolean; missing?: string[] }): string {
   const checks = !r.checks ? tr('Checagens: sem vboards.check.') : r.checks.ok ? tr('Checagens: OK.') : `${tr('Checagens: FALHARAM.')}\n${cut(r.checks.tail, 500)}`;
   const review = !r.review
     ? tr('Revisão: sem mudanças no diff.')
     : 'error' in r.review
       ? tr('Revisão ({0}): indisponível ({1}).', [r.review.by, r.review.error])
       : `${tr('Revisão ({0}): {1}', [r.review.by, r.review.ok ? 'OK' : tr('PROBLEMAS')])}${r.review.ok ? '' : `\n${cut(r.review.findings, 600)}`}`;
-  const head = [tr('Branch: {0} (falta revisar e Juntar no Habblaud).', [r.branch]), checks, review, ...(r.retried ? [tr('O erro voltou uma vez ao agente para correção.')] : [])].join('\n');
+  const missing = r.missing?.length ? [tr('vboards.copy: não existem na pasta (não copiados): {0}.', [r.missing.join(', ')])] : [];
+  const head = [tr('Branch: {0} (falta revisar e Juntar no Habblaud).', [r.branch]), checks, review, ...missing, ...(r.retried ? [tr('O erro voltou uma vez ao agente para correção.')] : [])].join('\n');
   const summary = r.summary?.trim() ? `\n${tr('Resumo do agente:')}\n${r.summary.trim()}` : '';
   return cut(maskSecrets(`${head}${summary}`), REPORT_MAX);
 }

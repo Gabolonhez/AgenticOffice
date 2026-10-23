@@ -106,7 +106,12 @@ export interface ApiDeps {
    * vboards/vboards.ts) e a configuração por pasta (GET /api/vboards/config[?folder=], POST /api/vboards/config
    * {folder, config}). Ausente = desligado.
    */
-  vboards?: Pick<VBoardsService, 'list' | 'begin' | 'attach' | 'configFolders' | 'folderSettings' | 'saveFolderSettings'>;
+  vboards?: Pick<VBoardsService, 'list' | 'refineList' | 'begin' | 'attach' | 'configFolders' | 'folderSettings' | 'saveFolderSettings'>;
+  /**
+   * Aviso no celular pelo ntfy (vboards/ntfy.ts), GET/POST /api/vboards/notify {url}. Pela porta remota só se sabe se
+   * está ligado (o endereço do tópico não sai); gravar, só pelo próprio computador.
+   */
+  ntfy?: { get(): string; set(raw: unknown): string | undefined };
 }
 
 /** GET /api/agents/:id/terminal (ids nunca contêm '/'). */
@@ -559,11 +564,11 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       // A configuração das pastas pode ser LIDA pela porta remota (com login); gravar, nunca: vboards.check é um comando
       // de shell e vboards.auto abre agentes sozinho.
       const vb = deps.vboards;
-      const remoteConfigRead = path === '/api/vboards/config' && isRead && isRemote(req);
+      const remoteConfigRead = (path === '/api/vboards/config' || path === '/api/vboards/notify') && isRead && isRemote(req);
       const problem = remoteConfigRead
         ? undefined
         : isRemote(req)
-          ? path === '/api/vboards/config'
+          ? path === '/api/vboards/config' || path === '/api/vboards/notify'
             ? tr('a configuração do VBoards só muda pelo próprio computador: pela porta remota ela é só leitura')
             : tr('o VBoards só é usado pelo próprio computador (http://localhost)')
           : ptyRequestProblem(req);
@@ -571,7 +576,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       else if (problem) sendJson(res, 403, { error: problem });
       else if (path === '/api/vboards') {
         if (!isRead) methodNotAllowed(res, 'GET');
-        else vb.list().then((tasks) => sendJson(res, 200, { tasks }), (err) => fail(res, err));
+        else vb.list().then((tasks) => sendJson(res, 200, { tasks, refines: vb.refineList() }), (err) => fail(res, err));
       } else if (path === '/api/vboards/start') {
         if (method !== 'POST') methodNotAllowed(res, 'POST');
         else
@@ -591,6 +596,22 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
           readJson(req)
             .then((body) => vb.saveFolderSettings(body))
             .then(answer)
+            .catch((err) => fail(res, err));
+        } else methodNotAllowed(res, 'GET, POST');
+      } else if (path === '/api/vboards/notify') {
+        const ntfy = deps.ntfy;
+        const editable = !isRemote(req);
+        const view = () => ({ configured: !!ntfy?.get(), ...(editable ? { url: ntfy?.get() ?? '' } : {}), editable });
+        if (!ntfy) {
+          req.resume();
+          sendJson(res, 404, { error: tr('rota desconhecida') });
+        } else if (isRead) sendJson(res, 200, view());
+        else if (method === 'POST') {
+          readJson(req)
+            .then((body) => {
+              const err = ntfy.set((body as { url?: unknown } | null)?.url);
+              sendJson(res, err ? 400 : 200, err ? { error: err } : view());
+            })
             .catch((err) => fail(res, err));
         } else methodNotAllowed(res, 'GET, POST');
       } else if (path === '/api/vboards/attach') {

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentInfo } from '../../shared/types';
 import { setQuiet } from '../log';
-import { baseFromUrl, decideCompletion, matchFolders, parseFolderConfig, readFolderConfig, resolveConfig, validateFolderConfig, writeFolderConfig, REVIEW_SUMMARY_MAX, SUMMARY_MAX, TodoTracker, TODOS_QUIET_MS, VBoardsService, type FolderConfig } from './vboards';
+import { baseFromUrl, decideCompletion, matchFolders, parseFolderConfig, parseRefineOutput, parseRefines, refinePrompt, REFINE_LIMITS, readFolderConfig, resolveConfig, validateFolderConfig, writeFolderConfig, REVIEW_SUMMARY_MAX, SUMMARY_MAX, TodoTracker, TODOS_QUIET_MS, VBoardsService, type FolderConfig } from './vboards';
 
 setQuiet(true);
 const flush = () => new Promise((ok) => setTimeout(ok, 0));
@@ -377,10 +377,10 @@ describe('VBoards e o resultado do chat', () => {
 
 describe('configuração da pasta (git config --local vboards.*)', () => {
   it('padrões: desligado, claude, US$ 2, revisor claude com sonnet; agy é o Antigravity', () => {
-    expect(parseFolderConfig(undefined)).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'sonnet' });
-    const out = 'vboards.card PostsBuilder\nvboards.auto TRUE\nvboards.provider agy\nvboards.budget 0.75\nvboards.check npm ci && npm test\nvboards.reviewer codex';
-    expect(parseFolderConfig(out)).toEqual({ card: 'PostsBuilder', auto: true, provider: 'antigravity', budget: 0.75, check: 'npm ci && npm test', reviewer: 'codex' });
-    expect(parseFolderConfig('vboards.auto yes\nvboards.budget -1\nvboards.provider gpt\nvboards.reviewermodel opus')).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'opus' });
+    expect(parseFolderConfig(undefined)).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'sonnet', copy: [] });
+    const out = 'vboards.card PostsBuilder\nvboards.auto TRUE\nvboards.provider agy\nvboards.budget 0.75\nvboards.check npm ci && npm test\nvboards.reviewer codex\nvboards.copy .env, config/local.json, ../fora, /etc/passwd';
+    expect(parseFolderConfig(out)).toEqual({ card: 'PostsBuilder', auto: true, provider: 'antigravity', budget: 0.75, check: 'npm ci && npm test', reviewer: 'codex', copy: ['.env', 'config/local.json'] });
+    expect(parseFolderConfig('vboards.auto yes\nvboards.budget -1\nvboards.provider gpt\nvboards.reviewermodel opus')).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'opus', copy: [] });
   });
 });
 
@@ -391,7 +391,7 @@ describe('abertura automática (opt-in)', () => {
     { cardId: 'c2', subtaskId: 's1', text: 'X', cardTitle: 'outro' },
     { cardId: 'c3', subtaskId: 's1', text: 'Y', cardTitle: 'Agentic Office' },
   ];
-  const cfg = (auto: boolean): FolderConfig => ({ auto, provider: 'codex', budget: 1, reviewer: 'claude', reviewerModel: 'sonnet' });
+  const cfg = (auto: boolean): FolderConfig => ({ auto, provider: 'codex', budget: 1, reviewer: 'claude', reviewerModel: 'sonnet', copy: [] });
   function setup(withAuto = true) {
     const fetchMock = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify(String(url).includes('/api/agent-tasks?') ? { tasks } : { ok: true }), { status: 200 }));
     const auto = vi.fn();
@@ -443,7 +443,8 @@ describe('tela de configuração das pastas', () => {
       values: { card: 'Posts', auto: 'true', provider: 'agy', budget: '1.5', check: 'npm ci && npm test', reviewer: 'codex', reviewerModel: 'gpt-5.1' },
     });
     expect(validateFolderConfig({ check: '', reviewerModel: '' })).toEqual({ values: { check: '', reviewerModel: '' } });
-    for (const bad of [{ auto: 'sim' }, { provider: 'gemini' }, { reviewer: 'antigravity' }, { budget: 'dois' }, { budget: 0 }, { budget: '-1' }, { check: 'npm test\nrm -rf /' }, { reviewerModel: 'a b' }, { card: {} }]) {
+    expect(validateFolderConfig({ copy: '.env, apps/web/.env.local' })).toEqual({ values: { copy: '.env, apps/web/.env.local' } });
+    for (const bad of [{ auto: 'sim' }, { provider: 'gemini' }, { reviewer: 'antigravity' }, { budget: 'dois' }, { budget: 0 }, { budget: '-1' }, { check: 'npm test\nrm -rf /' }, { reviewerModel: 'a b' }, { card: {} }, { copy: '../.env' }, { copy: '.env, /etc/passwd' }, { copy: 'C:\\x\\.env' }, { copy: 'a/../../b' }]) {
       expect(validateFolderConfig(bad)).toHaveProperty('error');
     }
   });
@@ -481,3 +482,159 @@ describe('git config --local de verdade', () => {
   });
 });
 
+
+describe('Refinar (plano só de leitura)', () => {
+  const fence = (o: unknown) => `Li o repositório.\n\`\`\`json\n${JSON.stringify(o)}\n\`\`\``;
+  it('lê o último bloco json, valida as formas e corta nos limites', () => {
+    const good = { plan: 'Mexer em a.ts', questions: ['Qual tela?'], subtasks: ['Criar rota', 'Testar'] };
+    expect(parseRefineOutput(`${fence({ plan: 'velho', subtasks: [] })}\n${fence(good)}`)).toEqual(good);
+    expect(parseRefineOutput(fence({ plan: 'só plano' }))).toEqual({ plan: 'só plano', questions: [], subtasks: [] });
+    expect(parseRefineOutput(JSON.stringify(good))).toBeUndefined();
+    expect(parseRefineOutput('```json\n{quebrado\n```')).toBeUndefined();
+    expect(parseRefineOutput(fence({ plan: 1, subtasks: [] }))).toBeUndefined();
+    expect(parseRefineOutput(fence({ plan: 'x', subtasks: 'não é lista' }))).toBeUndefined();
+    expect(parseRefineOutput(fence({ plan: 'x', questions: {} }))).toBeUndefined();
+    expect(parseRefineOutput(fence({ plan: 'x', subtasks: ['a', 3, '', 'b'] }))?.subtasks).toEqual(['a', 'b']);
+    const big = parseRefineOutput(fence({ plan: 'p'.repeat(9000), questions: Array(15).fill('q'.repeat(600)), subtasks: Array(30).fill('s'.repeat(400)) }))!;
+    expect(big.plan.length).toBeLessThanOrEqual(REFINE_LIMITS.plan);
+    expect(big.questions).toHaveLength(REFINE_LIMITS.questions);
+    expect(big.questions[0].length).toBeLessThanOrEqual(REFINE_LIMITS.question);
+    expect(big.subtasks).toHaveLength(REFINE_LIMITS.subtasks);
+    expect(big.subtasks[0].length).toBeLessThanOrEqual(REFINE_LIMITS.subtask);
+  });
+
+  it('pedidos da fila: ausentes (VBoards antigo) ou estragados = nenhum; o prompt leva card, descrição e subtarefas', () => {
+    expect(parseRefines(undefined)).toEqual([]);
+    expect(parseRefines([{ cardTitle: 'sem id' }, null])).toEqual([]);
+    const [r] = parseRefines([{ cardId: 7, cardTitle: 'Posts Builder', description: 'Fazer X', subtasks: ['a', 1, null], updatedAt: '2026-10-23T10:00' }]);
+    expect(r).toEqual({ cardId: '7', cardTitle: 'Posts Builder', description: 'Fazer X', subtasks: ['a', '1'], key: '2026-10-23T10:00' });
+    const p = refinePrompt(r);
+    expect(p).toContain('Posts Builder');
+    expect(p).toContain('Fazer X');
+    expect(p).toContain('- a');
+    expect(p).toContain('```json');
+  });
+
+  const settle = async () => {
+    for (let i = 0; i < 20; i++) await flush();
+  };
+  function setup(o: { refines?: unknown[]; noRefines?: boolean; status?: (body: Record<string, unknown>) => number; output?: string; folders?: string[] } = {}) {
+    const posts: Array<Record<string, unknown>> = [];
+    let refines = o.refines ?? [{ cardId: 'c9', cardTitle: 'Posts Builder', description: 'Fazer X', subtasks: ['a'] }];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes('/api/agent-tasks?')) return new Response(JSON.stringify(o.noRefines ? { tasks: [] } : { tasks: [], refines }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      posts.push(body);
+      return new Response(JSON.stringify({ ok: true, subtaskIds: [] }), { status: o.status?.(body) ?? 200 });
+    });
+    let release: (t: string) => void = () => {};
+    const refine = vi.fn((_folder: string, _prompt: string, _cfg: FolderConfig) => new Promise<string>((ok) => (release = ok)));
+    const notify = vi.fn();
+    const svc = new VBoardsService({
+      config: { base: 'https://vb.dev', token: 't', email: 'eu@x' },
+      agents: () => [],
+      roomPath: () => undefined,
+      folders: async () => o.folders ?? ['/p/payposts-web', '/p/outro'],
+      cardOf: async (f) => (f.endsWith('payposts-web') ? 'PostsBuilder' : undefined),
+      chat: { open: () => ({ agentId: 'chat:1' }) },
+      folderConfig: async () => ({ auto: false, provider: 'codex', budget: 1, reviewer: 'claude', copy: [] }),
+      refine,
+      notify,
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    return { svc, posts, refine, notify, finish: (t = o.output ?? fence({ plan: 'P', questions: [], subtasks: ['s1'] })) => release(t), setRefines: (r: unknown[]) => (refines = r) };
+  }
+
+  it('uma pasta: running, a rodada na própria pasta e ready com o resultado; aviso "plano pronto"', async () => {
+    const s = setup();
+    await s.svc.poll();
+    s.svc.stop();
+    await settle();
+    expect(s.refine).toHaveBeenCalledWith('/p/payposts-web', expect.stringContaining('Fazer X'), expect.objectContaining({ provider: 'codex' }));
+    expect(s.posts).toEqual([{ email: 'eu@x', cardId: 'c9', status: 'running' }]);
+    expect(s.svc.refineList()).toMatchObject([{ cardId: 'c9', state: 'running' }]);
+    s.finish();
+    await settle();
+    expect(s.posts[1]).toEqual({ email: 'eu@x', cardId: 'c9', status: 'ready', plan: 'P', questions: [], subtasks: ['s1'] });
+    expect(s.notify).toHaveBeenCalledWith('Posts Builder', 'ready');
+    expect(s.svc.refineList()).toMatchObject([{ cardId: 'c9', state: 'ready' }]);
+  });
+
+  it('nenhuma ou várias pastas: failed com o motivo, sem rodar', async () => {
+    const none = setup({ refines: [{ cardId: 'c1', cardTitle: 'Inexistente', description: '', subtasks: [] }] });
+    await none.svc.poll();
+    none.svc.stop();
+    await settle();
+    expect(none.refine).not.toHaveBeenCalled();
+    expect(none.posts).toEqual([{ email: 'eu@x', cardId: 'c1', status: 'failed', error: expect.stringContaining('nenhuma pasta com vboards.card = Inexistente') }]);
+    expect(none.notify).toHaveBeenCalledWith('Inexistente', 'failed');
+    const many = setup({ refines: [{ cardId: 'c2', cardTitle: 'Agentic Office', description: '', subtasks: [] }], folders: ['/a/agentic-office', '/b/agentic_office'] });
+    await many.svc.poll();
+    many.svc.stop();
+    await settle();
+    expect(many.refine).not.toHaveBeenCalled();
+    expect(many.posts[0]).toMatchObject({ status: 'failed', error: expect.stringContaining('várias pastas') });
+  });
+
+  it('resposta sem o bloco json: failed com o fim da saída', async () => {
+    const s = setup({ output: 'não sei responder em json' });
+    await s.svc.poll();
+    s.svc.stop();
+    await settle();
+    s.finish();
+    await settle();
+    expect(s.posts[1]).toMatchObject({ status: 'failed', error: expect.stringContaining('não sei responder em json') });
+  });
+
+  it('nunca duas vezes o mesmo card ao mesmo tempo nem o mesmo pedido de novo; um clique novo (updatedAt) roda', async () => {
+    const s = setup({ refines: [{ cardId: 'c9', cardTitle: 'Posts Builder', description: '', subtasks: [], updatedAt: '1' }] });
+    await s.svc.poll();
+    await s.svc.poll();
+    s.svc.stop();
+    await settle();
+    expect(s.refine).toHaveBeenCalledTimes(1);
+    s.finish();
+    await settle();
+    await s.svc.poll();
+    s.svc.stop();
+    await settle();
+    expect(s.refine).toHaveBeenCalledTimes(1);
+    s.setRefines([{ cardId: 'c9', cardTitle: 'Posts Builder', description: '', subtasks: [], updatedAt: '2' }]);
+    await s.svc.poll();
+    s.svc.stop();
+    await settle();
+    expect(s.refine).toHaveBeenCalledTimes(2);
+  });
+
+  it('VBoards antigo: sem refines nada roda; 404 no running = não gasta a rodada nem tenta de novo', async () => {
+    const old = setup({ noRefines: true });
+    await old.svc.poll();
+    old.svc.stop();
+    await settle();
+    expect(old.refine).not.toHaveBeenCalled();
+    expect(old.posts).toEqual([]);
+    const s = setup({ status: () => 404 });
+    await s.svc.poll();
+    await s.svc.poll();
+    s.svc.stop();
+    await settle();
+    expect(s.refine).not.toHaveBeenCalled();
+    expect(s.posts).toEqual([{ email: 'eu@x', cardId: 'c9', status: 'running' }]);
+  });
+
+  it('resultado final que não chegou (5xx) vai de novo na próxima busca', async () => {
+    let fail = true;
+    const s = setup({ status: (b) => (b.status === 'ready' && fail ? 503 : 200) });
+    await s.svc.poll();
+    s.svc.stop();
+    await settle();
+    s.finish();
+    await settle();
+    fail = false;
+    await s.svc.poll();
+    s.svc.stop();
+    await settle();
+    expect(s.posts.map((p) => p.status)).toEqual(['running', 'ready', 'ready']);
+    expect(s.refine).toHaveBeenCalledTimes(1);
+  });
+});

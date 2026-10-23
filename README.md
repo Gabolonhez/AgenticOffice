@@ -671,6 +671,7 @@ which is read-only from the phone):
 | `vboards.check` | none | Shell command run on the isolated copy after each item. The copy has no `node_modules` or `.env`, so the command installs what it needs (e.g. `npm ci && npm test`). |
 | `vboards.reviewer` | `claude` | Who reviews the diff: `claude`, `codex` or `agy`. |
 | `vboards.reviewerModel` | `sonnet` (Claude) | Reviewer model; Codex and agy use the CLI default. |
+| `vboards.copy` | none | Files (comma-separated relative paths, e.g. `.env`) copied from the folder into each isolated copy. They stay out of the reviewer's diff and of the Merge commit. |
 
 With `vboards.auto` on (and the agent chat on), each subtask whose card matches **only** this folder becomes a list
 (one per folder, one at a time): a fresh agent per item, in an isolated git worktree on its own branch, with `git push`
@@ -679,6 +680,15 @@ end of each item Habblaud runs `vboards.check` and asks the reviewer to read onl
 failure the error goes back to the same agent once; then the subtask goes to VBoards as **review**, with a report
 (branch, checks, review and the agent's summary). Habblaud never merges or pushes on its own: **Merge** is still your
 click.
+
+**Refine:** clicking "Refine" on a VBoards card arrives with the same queue fetch and runs on its own when exactly one
+folder matches the card: one **read-only** turn in the folder itself, with `vboards.provider` (Claude with only
+Read/Grep/Glob and `vboards.budget`; Codex with `--sandbox read-only`; agy with `--mode plan`, or Claude if agy is not
+installed), which sends the plan, questions and suggested subtasks back to the card.
+
+**Phone notification:** Settings › VBoards per folder takes an optional [ntfy](https://ntfy.sh) topic
+(`https://ntfy.sh/<topic>` or your own server; http only on the local network). It only gets the card title and
+"waiting for review", "plan ready" or "failed", never code or summaries. Stored in `~/.habblaud/notify.json`.
 
 ### Demo mode
 

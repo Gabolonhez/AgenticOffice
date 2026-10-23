@@ -1,11 +1,15 @@
 // Cópia isolada do agente: um git worktree num branch próprio, fora do projeto (<dataDir>/chat/worktrees/). O agente
 // trabalha lá; ao fim o usuário junta (merge no projeto) ou descarta. Juntar nunca mexe num projeto com mudanças sem
 // commit, e um conflito volta tudo como estava.
+// vboards.copy (git config da pasta): os arquivos listados (ex.: .env) são copiados da pasta para a cópia nova, se
+// existirem e não vierem do checkout. Nunca entram no diff do revisor nem no commit do Juntar (pathspec exclude), e o
+// Juntar recusa um trabalho que os tenha commitado.
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tr } from '../../shared/i18n';
+import { parseCopyList } from '../vboards/vboards';
 import type { WorktreeOps } from './types';
 
 type Git = (args: string[], cwd: string) => Promise<{ code: number; out: string }>;
@@ -27,6 +31,29 @@ const realGit: Git = (args, cwd) =>
       ok({ code, out: `${stdout}${err ? stderr : ''}`.trim() });
     });
   });
+
+/** Pathspecs que deixam de fora os arquivos copiados (literal: o nome não é padrão). */
+const literal = (p: string): string => `:(literal)${p.replace(/\\/g, '/')}`;
+const keepOut = (copied: readonly string[] | undefined): string[] => (copied ?? []).map((p) => `:(exclude,literal)${p.replace(/\\/g, '/')}`);
+
+/** Copia os arquivos do vboards.copy da pasta para a cópia: os que já vieram do checkout ficam; os que faltam, listados. */
+function copyListed(repo: string, path: string, list: readonly string[]): { copied: string[]; missing: string[] } {
+  const copied: string[] = [];
+  const missing: string[] = [];
+  for (const rel of list) {
+    const dst = join(path, rel);
+    try {
+      if (!statSync(join(repo, rel)).isFile()) throw new Error('not a file');
+      if (existsSync(dst)) continue;
+      mkdirSync(dirname(dst), { recursive: true });
+      copyFileSync(join(repo, rel), dst);
+      copied.push(rel);
+    } catch {
+      missing.push(rel);
+    }
+  }
+  return { copied, missing };
+}
 
 function slug(label: string): string {
   const s = label
@@ -52,7 +79,9 @@ export function createWorktreeOps(dataDir: string, git: Git = realGit): Worktree
       const path = join(root, `${agentId.replace(/[^a-zA-Z0-9_-]/g, '_')}-${tag}`);
       const add = await git(['worktree', 'add', '-b', branch, path, 'HEAD'], repo);
       if (add.code !== 0) return { error: tr('Não deu para criar a cópia isolada: {0}', [add.out]) };
-      return { path, branch, base: head.out };
+      const listed = await git(['config', '--get', 'vboards.copy'], repo);
+      const { copied, missing } = copyListed(repo, path, parseCopyList(listed.code === 0 ? listed.out : ''));
+      return { path, branch, base: head.out, ...(copied.length ? { copied } : {}), ...(missing.length ? { missing } : {}) };
     },
 
     async summary(w) {
@@ -73,7 +102,7 @@ export function createWorktreeOps(dataDir: string, git: Git = realGit): Worktree
 
     async diff(w) {
       // intent-to-add: os arquivos novos entram no diff sem ir para o índice de verdade.
-      await git(['add', '-A', '-N'], w.path);
+      await git(['add', '-A', '-N', '--', '.', ...keepOut(w.copied)], w.path);
       return (await git(['diff', w.base], w.path)).out;
     },
 
@@ -81,8 +110,14 @@ export function createWorktreeOps(dataDir: string, git: Git = realGit): Worktree
       if ((await git(['status', '--porcelain'], repo)).out) {
         return { ok: false, reason: tr('A pasta do projeto tem mudanças sem commit; faça commit ou guarde antes de juntar.') };
       }
-      await git(['add', '-A'], w.path);
-      if ((await git(['status', '--porcelain'], w.path)).out) {
+      // O agente commitou um arquivo copiado (ex.: o .env): não leva para o projeto.
+      if (w.copied?.length && w.base) {
+        const leaked = (await git(['diff', '--name-only', w.base, 'HEAD', '--', ...w.copied.map(literal)], w.path)).out;
+        if (leaked) return { ok: false, reason: tr('O trabalho commitou arquivos copiados para a cópia ({0}); tire-os do commit antes de juntar.', [leaked.split(/\r?\n/).join(', ')]) };
+      }
+      await git(['add', '-A', '--', '.', ...keepOut(w.copied)], w.path);
+      // Só o que foi para o índice: os copiados continuam soltos na cópia.
+      if ((await git(['diff', '--cached', '--quiet'], w.path)).code !== 0) {
         const c = await git(['commit', '-q', '-m', message], w.path);
         if (c.code !== 0) return { ok: false, reason: tr('Não deu para commitar o trabalho da cópia: {0}', [c.out]) };
       }

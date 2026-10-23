@@ -171,6 +171,8 @@ interface Harness {
   ptyCalls: string[];
   worldCalls: string[];
   vboardsSaves: unknown[];
+  runActions: string[];
+  ntfyUrl: () => string;
   spawn: SpawnService;
   close: () => Promise<void>;
 }
@@ -195,6 +197,8 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
     accountName: () => undefined,
   });
   const allowSet = new Set(allow);
+  const runActions: string[] = [];
+  let ntfyUrl = 'https://ntfy.sh/segredo-do-topico';
   // Mesma regra do server/index.ts.
   const hub = new Hub(office, {
     throttleMs: 10,
@@ -205,7 +209,7 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
   const ptyCalls: string[] = [];
   const worldCalls: string[] = [];
   const vboardsSaves: unknown[] = [];
-  const settings = { folder: '/p/app', config: { auto: true, provider: 'claude', budget: 2, check: `npm test --token=sk-ant-api03-${'a'.repeat(40)}`, reviewer: 'claude', reviewerModel: 'sonnet' } };
+  const settings = { folder: '/p/app', config: { auto: true, provider: 'claude', budget: 2, check: `npm test --token=sk-ant-api03-${'a'.repeat(40)}`, reviewer: 'claude', reviewerModel: 'sonnet', copy: '' } };
   const spawn = new SpawnService();
   const api = createApiHandler({
     office,
@@ -236,11 +240,15 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
       chat: { providers: () => [], open: () => ({ error: 'invalid', reason: 'falso' }), tokenOwner: () => undefined } as unknown as ChatRouteDeps['chat'],
       folders: () => [],
       accounts: () => [],
+      // Listas falsas: só a trava do Juntar/Descartar pela porta remota é testada aqui.
+      runs: { merge: async () => (runActions.push('merge'), { ok: true }), discard: async () => (runActions.push('discard'), { ok: true }) } as unknown as ChatRouteDeps['runs'],
     }),
     remote: { is: isRemoteRequest, allows: (f) => allowSet.has(f) },
     // VBoards falso: só a trava de quem lê e quem grava a configuração das pastas (http/app.ts) é testada aqui.
+    ntfy: { get: () => ntfyUrl, set: (raw: unknown) => ((ntfyUrl = String(raw)), undefined) },
     vboards: {
       list: async () => [],
+      refineList: () => [],
       begin: async () => ({ status: 400, error: 'falso' }),
       attach: async () => ({ status: 400, error: 'falso' }),
       configFolders: async () => [{ path: '/p/app', name: 'app' }],
@@ -287,6 +295,8 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
     ptyCalls,
     worldCalls,
     vboardsSaves,
+    runActions,
+    ntfyUrl: () => ntfyUrl,
     spawn,
     close,
   };
@@ -345,6 +355,30 @@ describe('porta remota', () => {
     expect(local.status).toBe(200);
     expect(JSON.parse(local.body).editable).toBe(true);
     expect(s.vboardsSaves).toEqual([body]);
+  });
+
+  it('aviso no celular (ntfy): pela porta remota só "está ligado", sem o tópico; gravar só local', async () => {
+    const s = await start(['permissions', 'spawn', 'chat']);
+    const cookie = await login(s.remoteBase);
+    const read = await request(s.remoteBase, '/api/vboards/notify', { headers: { Cookie: cookie } });
+    expect(read.status).toBe(200);
+    expect(JSON.parse(read.body)).toEqual({ configured: true, editable: false });
+    expect((await request(s.remoteBase, '/api/vboards/notify', { method: 'POST', body: { url: 'https://evil.dev/x' }, headers: { Cookie: cookie, Host: 'localhost' } })).status).toBe(403);
+    expect(s.ntfyUrl()).toBe('https://ntfy.sh/segredo-do-topico');
+    const local = await request(s.localBase, '/api/vboards/notify', { method: 'POST', body: { url: 'https://ntfy.sh/outro' }, headers: { Host: 'localhost' } });
+    expect(JSON.parse(local.body)).toEqual({ configured: true, url: 'https://ntfy.sh/outro', editable: true });
+  });
+
+  it('Juntar/Descartar uma lista pelo celular: a mesma trava do chat (liberado com "chat", que já abre e comanda agentes)', async () => {
+    const off = await start(['permissions', 'spawn']);
+    const c1 = await login(off.remoteBase);
+    for (const action of ['merge', 'discard']) expect((await request(off.remoteBase, `/api/chat/runs/r1/${action}`, { method: 'POST', body: {}, headers: { Cookie: c1 } })).status).toBe(403);
+    expect(off.runActions).toEqual([]);
+    const on = await start(['permissions', 'chat']);
+    const c2 = await login(on.remoteBase);
+    expect((await request(on.remoteBase, '/api/chat/runs/r1/merge', { method: 'POST', body: {} })).status).toBe(401);
+    for (const action of ['merge', 'discard']) expect((await request(on.remoteBase, `/api/chat/runs/r1/${action}`, { method: 'POST', body: {}, headers: { Cookie: c2 } })).status).toBe(200);
+    expect(on.runActions).toEqual(['merge', 'discard']);
   });
 
   it('logado: terminal interativo, rotas do hook e do plugin e o auxiliar nunca passam, nem com Host local', async () => {

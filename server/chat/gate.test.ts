@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gatePassed, gateReport, parseReview, REPORT_MAX, reviewerFor, runChecks } from './gate';
+import { gatePassed, gateReport, parseReview, refineArgs, refinerFor, REPORT_MAX, reviewerFor, runChecks } from './gate';
 
 const cwd = process.cwd();
 
@@ -29,7 +29,8 @@ describe('portão: revisão e relatório', () => {
   });
 
   it('relatório: branch, checagens, revisão e resumo, cortado em REPORT_MAX', () => {
-    const r = gateReport({ branch: 'agentic/lista-1', checks: { ok: false, tail: 'x'.repeat(5000) }, review: { ok: false, findings: 'PROBLEMAS\n- a.ts', by: 'claude/sonnet' }, summary: 'y'.repeat(5000), retried: true });
+    const r = gateReport({ branch: 'agentic/lista-1', checks: { ok: false, tail: 'x'.repeat(5000) }, review: { ok: false, findings: 'PROBLEMAS\n- a.ts', by: 'claude/sonnet' }, summary: 'y'.repeat(5000), retried: true, missing: ['falta.env'] });
+    expect(r).toContain('falta.env');
     expect(r.length).toBeLessThanOrEqual(REPORT_MAX);
     expect(r).toContain('agentic/lista-1');
     expect(r).toContain('FALHARAM');
@@ -43,5 +44,24 @@ describe('portão: revisão e relatório', () => {
     expect(reviewerFor({ reviewer: 'antigravity' }, cwd, () => bin).by).toBe('agy');
     expect(reviewerFor({ reviewer: 'claude', reviewerModel: 'opus' }, cwd, () => bin).by).toBe('claude/opus');
     expect(reviewerFor({ reviewer: 'codex' }, cwd, (p) => (p === 'claude' ? bin : undefined)).by).toMatch(/^claude\/sonnet .*codex/);
+  });
+});
+
+describe('Refinar: rodada só de leitura por provedor', () => {
+  it('claude só com Read/Grep/Glob e o orçamento; codex read-only; agy em plan; sem a CLI cai no claude', () => {
+    const claude = refineArgs('claude', 1.5, 'pedido');
+    expect(claude).toEqual(expect.arrayContaining(['--tools', 'Read,Grep,Glob', '--strict-mcp-config', '--max-budget-usd', '1.5']));
+    expect(claude.join(' ')).not.toMatch(/bypassPermissions|pedido/);
+    expect(refineArgs('codex', 1, 'pedido')).toEqual(expect.arrayContaining(['exec', '--sandbox', 'read-only', '-']));
+    expect(refineArgs('antigravity', 1, 'pedido')).toEqual(expect.arrayContaining(['--mode', 'plan', '--print=pedido']));
+    expect(refineArgs('antigravity', 1, 'x').join(' ')).not.toContain('dangerously');
+    const bin = { file: 'x', prefix: [] };
+    expect(refinerFor('codex', cwd, 1, () => bin).by).toBe('codex');
+    expect(refinerFor('antigravity', cwd, 1, () => bin).by).toBe('agy');
+    expect(refinerFor('antigravity', cwd, 1, (p) => (p === 'claude' ? bin : undefined)).by).toMatch(/^claude .*agy/);
+  });
+
+  it('sem nenhuma CLI: falha com motivo (vira failed no VBoards)', async () => {
+    await expect(refinerFor('claude', cwd, 1, () => undefined).run('x')).rejects.toThrow(/Claude Code/);
   });
 });

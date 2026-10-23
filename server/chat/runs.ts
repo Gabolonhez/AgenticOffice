@@ -207,7 +207,7 @@ export class RunService {
       (w) => {
         if (run.state !== 'running') return;
         if ('error' in w) return this.halt(run, w.error);
-        run.isolated = { branch: w.branch, path: w.path, base: w.base };
+        run.isolated = { branch: w.branch, path: w.path, base: w.base, ...(w.copied ? { copied: w.copied } : {}), ...(w.missing ? { missing: w.missing } : {}) };
         this.advance(run);
       },
       (err) => run.state === 'running' && this.halt(run, errMsg(err)),
@@ -316,7 +316,7 @@ export class RunService {
       // Uma volta só: o próximo fim de rodada (turnEnded → finish) passa de novo pelo portão e termina em 'review'.
       if (this.deps.chat.send(agentId, { text: fixRequest(checks, review) }) === 'ok') return;
     }
-    item.report = gateReport({ branch: w.branch, checks, review, summary: this.deps.chat.lastReply(agentId), retried: item.retried });
+    item.report = gateReport({ branch: w.branch, checks, review, summary: this.deps.chat.lastReply(agentId), retried: item.retried, missing: w.missing });
     item.state = 'review';
     item.endedAt = this.now();
     item.summary = truncate(item.report.replace(/\s+/g, ' ').trim(), SUMMARY_MAX);

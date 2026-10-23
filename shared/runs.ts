@@ -42,7 +42,8 @@ export interface ChatRun {
   options: RunAgentOptions;
   context?: string;
   stopOnFail: boolean;
-  isolated?: { branch: string; path: string; base: string; merged?: boolean; discarded?: boolean };
+  /** `copied`/`missing`: vboards.copy (copiados para a cópia; os que não existem vão no relatório do portão). */
+  isolated?: { branch: string; path: string; base: string; copied?: string[]; missing?: string[]; merged?: boolean; discarded?: boolean };
   /** Pediu cópia isolada (o worktree nasce ao começar). */
   wantIsolated: boolean;
   items: RunItem[];

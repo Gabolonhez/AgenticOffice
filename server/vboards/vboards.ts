@@ -1,4 +1,4 @@
-// Ponte com o VBoards (o quadro de Planning do time). Quatro partes:
+// Ponte com o VBoards (o quadro de Planning do time). Cinco partes:
 // - fila: a cada ~10 s (com espera maior depois de erro) busca as subtarefas que você marcou "mandar para o agente"
 //   (GET /api/agent-tasks) e guarda na memória; a página as lista (GET /api/vboards) e só começa uma com o seu clique
 //   em "Iniciar" (POST /api/vboards/start), salvo a abertura automática opt-in de uma pasta (última parte);
@@ -13,6 +13,9 @@
 // - abertura automática (opt-in, desligada por padrão): numa pasta com `git config --local vboards.auto true`, a
 //   subtarefa da fila que só combina com ela vira uma lista do chat sozinha (server/chat/runs.ts, cópia isolada, sem
 //   push, com o portão de qualidade de server/chat/gate.ts). Juntar continua sendo um clique.
+// - refinar: o "Refinar" clicado no card chega na mesma busca (`refines`, ausente num VBoards antigo); com uma única
+//   pasta que combina, UMA rodada só de leitura do vboards.provider na própria pasta (gate.ts refinerFor) devolve plano,
+//   perguntas e subtarefas (POST /api/agent-tasks/refine: running, depois ready ou failed). Uma vez por pedido.
 // O token só vai no cabeçalho Authorization: nunca em log, snapshot ou página. Git sem shell (execFile).
 import { execFile } from 'node:child_process';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -23,6 +26,7 @@ import { errMsg, log } from '../log';
 import { FileTail } from '../sources/tail';
 import type { TerminalParser } from '../sources/terminal';
 import { sessionName, type SpawnInfo, type SpawnSubmit } from '../spawn/spawn';
+import type { NotifyEvent } from './ntfy';
 
 export const POLL_MS = 10_000;
 export const POLL_MAX_MS = 5 * 60_000;
@@ -75,6 +79,8 @@ export interface TaskLink {
   id: string;
   cardId: string;
   subtaskId: string;
+  /** Para o aviso no celular (ligações antigas não têm). */
+  cardTitle?: string;
   folder: string;
   /** Nome da sessão em segundo plano (spawn/spawn.ts sessionName): desempata agentes na mesma pasta. */
   session: string;
@@ -91,6 +97,44 @@ export interface TaskLink {
   reported?: TaskStatus;
   retryAt?: number;
 }
+
+/** Pedido de "Refinar" um card (GET /api/agent-tasks → `refines`). */
+export interface RefineRequest {
+  cardId: string;
+  cardTitle: string;
+  date?: string;
+  description: string;
+  subtasks: string[];
+  /** updatedAt/attempt do VBoards, se vier: um novo clique no mesmo card é outro pedido. */
+  key: string;
+}
+
+/** O que o agente devolve (o bloco ```json da resposta), já validado e cortado nos limites do VBoards. */
+export interface RefineResult {
+  plan: string;
+  questions: string[];
+  subtasks: string[];
+}
+
+export type RefineStatus = 'running' | 'ready' | 'failed';
+/** Atividade do "Refinar" para a página (só título, estado e o motivo da falha). */
+export interface RefineView {
+  cardId: string;
+  cardTitle: string;
+  state: RefineStatus;
+  at: number;
+  error?: string;
+}
+
+/** Limites do POST /api/agent-tasks/refine (o VBoards também corta). */
+export const REFINE_LIMITS = { plan: 8_000, questions: 10, question: 500, subtasks: 20, subtask: 300, error: 2_000 } as const;
+/** Rodadas do "Refinar" ao mesmo tempo (cada uma é uma CLI lendo o repositório). */
+export const REFINE_PARALLEL = 2;
+/** Tentativas de mandar o resultado final do "Refinar" (uma por busca da fila). */
+const REFINE_POST_TRIES = 30;
+/** Quanto do card entra no pedido (o agy recebe o pedido no argv). */
+const REFINE_DESCRIPTION_MAX = 4_000;
+const REFINE_VIEW_MS = 60 * 60_000;
 
 export interface Folder {
   path: string;
@@ -147,9 +191,11 @@ export interface FolderConfig {
   check?: string;
   reviewer: Provider;
   reviewerModel?: string;
+  /** vboards.copy: arquivos (caminhos relativos, separados por vírgula) copiados da pasta para cada cópia isolada (ex.: .env). */
+  copy: string[];
 }
 
-export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'reviewer', 'reviewerModel'] as const;
+export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'reviewer', 'reviewerModel', 'copy'] as const;
 export type FolderKey = (typeof FOLDER_KEYS)[number];
 export const DEFAULT_BUDGET_USD = 2;
 /** Prazo de cada rodada de um item da lista automática. */
@@ -177,17 +223,24 @@ export function parseFolderConfig(out: string | undefined): FolderConfig {
     ...(raw.get('check') ? { check: raw.get('check') } : {}),
     reviewer,
     ...((raw.get('reviewermodel') || DEFAULT_REVIEWER_MODEL[reviewer]) ? { reviewerModel: raw.get('reviewermodel') || DEFAULT_REVIEWER_MODEL[reviewer] } : {}),
+    copy: parseCopyList(raw.get('copy')),
   };
 }
+
+/** Caminho do vboards.copy: relativo, sem `..`, sem unidade nem barra no começo, sem quebra de linha. */
+export const validCopyPath = (p: string): boolean => !!p && p.length <= 200 && !/[\r\n\0]/.test(p) && !/^([\\/]|[A-Za-z]:)/.test(p) && !p.split(/[\\/]/).includes('..');
+
+/** vboards.copy (vírgulas) vira a lista; o que não passa no validCopyPath fica de fora. */
+export const parseCopyList = (raw: string | undefined): string[] => (raw ?? '').split(',').map((s) => s.trim()).filter(validCopyPath);
 
 export function readFolderConfig(folder: string): Promise<FolderConfig> {
   return gitConfig(['--local', '--get-regexp', '^vboards\\.'], folder).then(parseFolderConfig);
 }
 
 /** A configuração como a tela mostra e grava: o Antigravity volta a ser `agy`, como no git config. */
-export type FolderConfigView = Omit<FolderConfig, 'provider' | 'reviewer'> & { provider: string; reviewer: string };
+export type FolderConfigView = Omit<FolderConfig, 'provider' | 'reviewer' | 'copy'> & { provider: string; reviewer: string; copy: string };
 const providerName = (p: Provider): string => (p === 'antigravity' ? 'agy' : p);
-export const folderConfigView = (c: FolderConfig): FolderConfigView => ({ ...c, provider: providerName(c.provider), reviewer: providerName(c.reviewer) });
+export const folderConfigView = (c: FolderConfig): FolderConfigView => ({ ...c, provider: providerName(c.provider), reviewer: providerName(c.reviewer), copy: c.copy.join(', ') });
 
 /**
  * Valida o que a tela manda gravar (só as chaves presentes). Texto vazio = tirar a chave (volta ao padrão). Nada de
@@ -211,6 +264,7 @@ export function validateFolderConfig(raw: unknown): { values: Partial<Record<Fol
       : key === 'budget' ? /^\d+(\.\d+)?$/.test(s) && Number(s) > 0 && Number(s) <= 1000
       : key === 'reviewerModel' ? /^[\w.:/[\]-]{1,60}$/.test(s)
       : key === 'card' ? s.length <= 100
+      : key === 'copy' ? s.length <= 500 && s.split(',').every((x) => validCopyPath(x.trim()))
       : s.length <= 500; // check
     if (!ok) return { error: tr('Valor inválido em vboards.{0}.', [key]) };
     values[key] = s;
@@ -234,6 +288,61 @@ export async function writeFolderConfig(folder: string, values: Partial<Record<F
 
 /** O pedido do agente para uma subtarefa. */
 export const taskPrompt = (t: Pick<AgentTask, 'cardTitle' | 'text'>): string => `${tr('Tarefa do VBoards (card {0}):', [t.cardTitle])} ${t.text}`;
+
+const cutText = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
+const str = (v: unknown): string => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
+
+/** `refines` da fila; ausente ou estragado (VBoards antigo) = nenhum. */
+export function parseRefines(raw: unknown): RefineRequest[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((x) => {
+    const r = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
+    if (!str(r.cardId)) return [];
+    return [{
+      cardId: str(r.cardId),
+      cardTitle: str(r.cardTitle),
+      ...(str(r.date) ? { date: str(r.date) } : {}),
+      description: str(r.description),
+      subtasks: Array.isArray(r.subtasks) ? r.subtasks.map(str).filter(Boolean) : [],
+      key: str(r.updatedAt) || str(r.attempt),
+    }];
+  });
+}
+
+/** O pedido do "Refinar": o card e as subtarefas que já existem; a resposta é UM bloco ```json. */
+export function refinePrompt(r: Pick<RefineRequest, 'cardTitle' | 'description' | 'subtasks'>): string {
+  const subtasks = r.subtasks.slice(0, 50).map((t) => `- ${cutText(t, REFINE_LIMITS.subtask)}`);
+  return [
+    'Você planeja um card do quadro do time, em português do Brasil. Só leia: não edite arquivos, não rode comandos que mudem nada, não faça commit.',
+    'Leia o repositório desta pasta o quanto precisar para entender o pedido e responda com UM único bloco ```json, sem mais nada depois dele:',
+    '{"plan": "escopo, arquivos afetados e critérios de aceite", "questions": ["o que falta decidir"], "subtasks": ["itens pequenos, de um propósito só, implementáveis"]}',
+    `Limites: plan até ${REFINE_LIMITS.plan} caracteres; até ${REFINE_LIMITS.questions} perguntas; até ${REFINE_LIMITS.subtasks} subtarefas, sem repetir as que já existem.`,
+    '',
+    `Card: ${cutText(r.cardTitle, 200)}`,
+    `Descrição:\n${cutText(r.description.trim(), REFINE_DESCRIPTION_MAX) || '(sem descrição)'}`,
+    `Subtarefas que já existem:\n${subtasks.join('\n') || '(nenhuma)'}`,
+  ].join('\n');
+}
+
+/** O último bloco ```json da resposta, validado (plan texto; questions/subtasks listas de texto) e cortado; senão undefined. */
+export function parseRefineOutput(text: string): RefineResult | undefined {
+  const fences = [...text.matchAll(/```json[^\n]*\n([\s\S]*?)```/gi)];
+  if (!fences.length) return undefined;
+  let j: unknown;
+  try {
+    j = JSON.parse(fences[fences.length - 1][1]);
+  } catch {
+    return undefined;
+  }
+  const o = (j && typeof j === 'object' && !Array.isArray(j) ? j : {}) as Record<string, unknown>;
+  const list = (v: unknown, max: number, each: number): string[] | undefined =>
+    v === undefined ? [] : Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x.trim()).slice(0, max).map((x) => cutText(maskSecrets(x.trim()), each)) : undefined;
+  const plan = typeof o.plan === 'string' ? maskSecrets(o.plan.trim()) : '';
+  const questions = list(o.questions, REFINE_LIMITS.questions, REFINE_LIMITS.question);
+  const subtasks = list(o.subtasks, REFINE_LIMITS.subtasks, REFINE_LIMITS.subtask);
+  if (!plan || !questions || !subtasks) return undefined;
+  return { plan: cutText(plan, REFINE_LIMITS.plan), questions, subtasks };
+}
 
 /** Nome do card para uma pasta: o vboards.card dela ou o nome da pasta. */
 export const cardName = (f: Folder): string => f.card?.trim() || baseName(f.path);
@@ -372,6 +481,13 @@ export interface VBoardsServiceOptions {
    * única pasta que combina com o card). Ausente (chat desligado) = nada abre sozinho.
    */
   auto?: (folder: string, tasks: Array<{ id: string; prompt: string }>, config: FolderConfig) => void;
+  /**
+   * "Refinar": uma rodada só de leitura na pasta (gate.ts refinerFor) que devolve o texto da resposta. Ausente (chat
+   * desligado) = os pedidos de refinar ficam para outro Habblaud.
+   */
+  refine?: (folder: string, prompt: string, config: FolderConfig) => Promise<string>;
+  /** Aviso no celular (vboards/ntfy.ts): só o título do card e o que aconteceu. */
+  notify?: (cardTitle: string, event: NotifyEvent) => void;
   file?: string;
   fetch?: typeof fetch;
   now?: () => number;
@@ -379,6 +495,14 @@ export interface VBoardsServiceOptions {
 
 export class VBoardsService {
   private tasks: AgentTask[] = [];
+  private refines: RefineRequest[] = [];
+  /** Cards sendo refinados agora (nunca dois ao mesmo tempo no mesmo card). */
+  private readonly refining = new Set<string>();
+  /** Pedido já tratado por card (a `key` dele): não roda de novo enquanto o VBoards o mostrar. */
+  private readonly refined = new Map<string, string>();
+  /** Resultado final que o VBoards não recebeu (rede/5xx): vai de novo a cada busca. */
+  private readonly refinePosts = new Map<string, { payload: Record<string, unknown>; tries: number }>();
+  private readonly refineViews = new Map<string, RefineView>();
   private links: TaskLink[] = [];
   private readonly todos = new TodoTracker();
   /** Agentes de conversa (sem subtarefa) que já trabalharam. */
@@ -427,7 +551,9 @@ export class VBoardsService {
   /** Busca a fila; a próxima busca vem em POLL_MS, ou mais tarde depois de erro (dobra até POLL_MAX_MS). */
   async poll(): Promise<void> {
     try {
-      const r = (await this.call(`/api/agent-tasks?email=${encodeURIComponent(this.opts.config.email)}`)) as { tasks?: unknown };
+      const r = (await this.call(`/api/agent-tasks?email=${encodeURIComponent(this.opts.config.email)}`)) as { tasks?: unknown; refines?: unknown };
+      this.refines = parseRefines(r?.refines);
+      void this.startRefines();
       const list = Array.isArray(r?.tasks) ? r.tasks : [];
       this.tasks = list.flatMap((x) => {
         const t = x as Record<string, unknown>;
@@ -464,6 +590,77 @@ export class VBoardsService {
       const config = await (this.opts.folderConfig ?? readFolderConfig)(folder);
       if (config.auto) this.opts.auto(folder, tasks.map((t) => ({ id: taskId(t), prompt: taskPrompt(t) })), config);
     }
+  }
+
+  /** Refinar: cada pedido novo (card + key) roda uma vez; no máximo REFINE_PARALLEL ao mesmo tempo. */
+  private async startRefines(): Promise<void> {
+    await this.retryRefinePosts();
+    const run = this.opts.refine;
+    if (!run) return;
+    const live = new Set(this.refines.map((r) => r.cardId));
+    // Saiu da fila: um clique novo no mesmo card volta a rodar (mesmo sem updatedAt/attempt).
+    for (const id of [...this.refined.keys()]) if (!live.has(id) && !this.refining.has(id)) this.refined.delete(id);
+    for (const r of this.refines) {
+      if (this.refining.size >= REFINE_PARALLEL) break;
+      if (this.refining.has(r.cardId) || this.refined.get(r.cardId) === r.key) continue;
+      this.refined.set(r.cardId, r.key);
+      this.refining.add(r.cardId);
+      void this.refine(r, run)
+        .catch((err) => this.postRefine(r, { status: 'failed', error: errMsg(err) }))
+        .finally(() => this.refining.delete(r.cardId));
+    }
+  }
+
+  private async refine(r: RefineRequest, run: NonNullable<VBoardsServiceOptions['refine']>): Promise<void> {
+    const matches = matchFolders(r.cardTitle, await this.knownFolders());
+    if (matches.length !== 1) {
+      const error = matches.length
+        ? tr('várias pastas combinam com o card {0} ({1}): deixe vboards.card em só uma', [r.cardTitle, matches.map(baseName).join(', ')])
+        : tr('nenhuma pasta com vboards.card = {0} (nem com esse nome) neste computador', [r.cardTitle]);
+      return void (await this.postRefine(r, { status: 'failed', error }));
+    }
+    // VBoards que recusa o "running" (antigo, 404/400): nem gasta a rodada.
+    if ((await this.postRefine(r, { status: 'running' })) === 'rejected') return;
+    const folder = matches[0];
+    const text = await run(folder, refinePrompt(r), await (this.opts.folderConfig ?? readFolderConfig)(folder));
+    const out = parseRefineOutput(text);
+    await this.postRefine(r, out ? { status: 'ready', ...out } : { status: 'failed', error: `${tr('A resposta não trouxe um bloco ```json válido (plan, questions, subtasks). Fim da saída:')}\n${maskSecrets(text).trim().slice(-1_500)}` });
+  }
+
+  /** Manda o estado do "Refinar"; o final também vira aviso no celular. */
+  private postRefine(r: RefineRequest, body: { status: RefineStatus; error?: string } & Partial<RefineResult>): Promise<'ok' | 'rejected' | 'later'> {
+    const error = body.error === undefined ? undefined : cutText(maskSecrets(body.error), REFINE_LIMITS.error);
+    this.refineViews.set(r.cardId, { cardId: r.cardId, cardTitle: r.cardTitle, state: body.status, at: this.now(), ...(error ? { error } : {}) });
+    if (body.status !== 'running') this.opts.notify?.(r.cardTitle, body.status);
+    return this.sendRefine({ email: this.opts.config.email, cardId: r.cardId, ...body, ...(error === undefined ? {} : { error }) }, 0);
+  }
+
+  private async sendRefine(payload: Record<string, unknown>, tries: number): Promise<'ok' | 'rejected' | 'later'> {
+    const cardId = String(payload.cardId);
+    try {
+      await this.call('/api/agent-tasks/refine', payload);
+      this.refinePosts.delete(cardId);
+      return 'ok';
+    } catch (err) {
+      const msg = errMsg(err);
+      log.warnOnce(`vboards:refine:${msg}`, tr('VBoards: falha ao mandar o resultado do Refinar ({0}).', [msg]));
+      // 4xx (VBoards antigo ou pedido recusado): não insiste. Rede/5xx: o resultado final vai de novo nas próximas buscas.
+      const rejected = /^HTTP 4\d\d$/.test(msg);
+      if (rejected || payload.status === 'running' || tries >= REFINE_POST_TRIES) this.refinePosts.delete(cardId);
+      else this.refinePosts.set(cardId, { payload, tries: tries + 1 });
+      return rejected ? 'rejected' : 'later';
+    }
+  }
+
+  private async retryRefinePosts(): Promise<void> {
+    for (const p of [...this.refinePosts.values()]) await this.sendRefine(p.payload, p.tries);
+  }
+
+  /** Atividade do "Refinar" para o painel: as rodando e as que acabaram há pouco. */
+  refineList(): RefineView[] {
+    const now = this.now();
+    for (const [id, v] of this.refineViews) if (v.state !== 'running' && now - v.at > REFINE_VIEW_MS) this.refineViews.delete(id);
+    return [...this.refineViews.values()];
   }
 
   /** Fila para a página (sem as já iniciadas daqui). */
@@ -510,7 +707,7 @@ export class VBoardsService {
     if (!hit) return { status: 400, error: tr('conversa não encontrada na pasta do projeto: atualize a lista') };
     // Duas requisições durante a espera acima: só a primeira liga.
     if (this.links.some((l) => l.id === body.id)) return { status: 409, error: tr('esta tarefa já foi iniciada') };
-    this.links.push({ id: taskId(task), cardId: task.cardId, subtaskId: task.subtaskId, folder: hit.folder, session: '', spawnId: '', agentId: hit.agent.id, manual: true, startedAt: this.now(), state: 'running' });
+    this.links.push({ id: taskId(task), cardId: task.cardId, subtaskId: task.subtaskId, cardTitle: task.cardTitle, folder: hit.folder, session: '', spawnId: '', agentId: hit.agent.id, manual: true, startedAt: this.now(), state: 'running' });
     this.save();
     void this.report();
     return { ok: true };
@@ -539,14 +736,14 @@ export class VBoardsService {
       const asked = typeof extra.prompt === 'string' && extra.prompt.trim() ? extra.prompt : prompt;
       const r = chat.open({ ...extra, folder: picked, prompt: asked, vboardsTaskId: taskId(task) });
       if (!('agentId' in r)) return { status: r.error === 'invalid' ? 400 : r.error === 'too-many' ? 429 : 409, error: r.reason };
-      this.links.push({ id: taskId(task), cardId: task.cardId, subtaskId: task.subtaskId, folder: picked, session: '', spawnId: '', agentId: r.agentId, startedAt: this.now(), state: 'running' });
+      this.links.push({ id: taskId(task), cardId: task.cardId, subtaskId: task.subtaskId, cardTitle: task.cardTitle, folder: picked, session: '', spawnId: '', agentId: r.agentId, startedAt: this.now(), state: 'running' });
       this.save();
       void this.report();
       return { agentId: r.agentId };
     }
     const r = spawn!.submit({ folder: picked, prompt });
     if (!('spawn' in r)) return { status: r.error === 'invalid' ? 400 : r.error === 'too-many' ? 429 : 409, error: r.reason };
-    this.links.push({ id: taskId(task), cardId: task.cardId, subtaskId: task.subtaskId, folder: picked, session: sessionName(prompt), spawnId: r.spawn.id, startedAt: this.now(), state: 'running' });
+    this.links.push({ id: taskId(task), cardId: task.cardId, subtaskId: task.subtaskId, cardTitle: task.cardTitle, folder: picked, session: sessionName(prompt), spawnId: r.spawn.id, startedAt: this.now(), state: 'running' });
     this.save();
     void this.report();
     return { spawn: r.spawn };
@@ -615,6 +812,7 @@ export class VBoardsService {
           const failed = this.opts.spawn?.get(l.spawnId)?.status === 'failed';
           if (failed || now - l.startedAt > LINK_TIMEOUT_MS) {
             l.state = 'failed';
+            this.notifyLink(l);
             changed = true;
           }
           continue;
@@ -636,9 +834,15 @@ export class VBoardsService {
       if (!end) continue;
       l.state = end;
       l.summary = end === 'failed' ? undefined : summaryText(this.opts.reply?.(l.agentId!), end === 'review' ? REVIEW_SUMMARY_MAX : SUMMARY_MAX);
+      this.notifyLink(l);
       changed = true;
     }
     if (changed) this.save();
+  }
+
+  /** Item que espera revisão ou falhou: aviso no celular (nunca o resumo nem o relatório). */
+  private notifyLink(l: TaskLink): void {
+    if (l.state === 'review' || l.state === 'failed') this.opts.notify?.(l.cardTitle || tr('(card sem título)'), l.state);
   }
 
   /** Manda ao VBoards o status que ainda não foi aceito (com nova tentativa a cada minuto). */

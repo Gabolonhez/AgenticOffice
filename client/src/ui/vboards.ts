@@ -3,6 +3,7 @@
 // projeto. Só começa com o seu clique em "Iniciar" (POST /api/vboards/start, só pelo próprio computador), ou fica com
 // uma conversa já aberta na pasta, de qualquer provedor ("Ligar a uma conversa aberta", POST /api/vboards/attach);
 // "Ignorar" esconde nesta página. Some sem o Novo agente ou com o recurso desligado no servidor (404).
+// Embaixo, o "Refinar" pedido no VBoards: o card sendo planejado aqui, pronto ou que falhou (só leitura).
 import { tr } from '../../../shared/i18n';
 import { access } from '../net/access';
 import type { UiComponent, UiContext } from './context';
@@ -22,6 +23,14 @@ export interface VBoardsTask {
   folder?: string;
   candidates: Array<{ path: string; name: string }>;
   agents?: Array<{ id: string; name: string; title?: string; provider: string; folder: string }>;
+}
+
+/** "Refinar" de um card (server/vboards/vboards.ts RefineView). */
+export interface VBoardsRefine {
+  cardId: string;
+  cardTitle: string;
+  state: 'running' | 'ready' | 'failed';
+  error?: string;
 }
 
 function readIgnored(): string[] {
@@ -49,6 +58,7 @@ export class VBoardsPanel implements UiComponent {
   private readonly list: HTMLElement;
   private readonly status: HTMLElement;
   private tasks: VBoardsTask[] = [];
+  private refines: VBoardsRefine[] = [];
   private ignored = readIgnored();
   /** Pasta escolhida na página por tarefa (sobrevive às atualizações da lista). */
   private readonly picked = new Map<string, string>();
@@ -99,7 +109,7 @@ export class VBoardsPanel implements UiComponent {
   }
 
   render(): void {
-    const n = this.enabled ? this.visible().length : 0;
+    const n = this.enabled ? this.visible().length + this.refines.length : 0;
     setHidden(this.button, n === 0);
     setText(this.value, String(n));
     setAttr(this.button, 'aria-label', tr('{0} tarefa(s) do VBoards esperando', [n]));
@@ -112,8 +122,9 @@ export class VBoardsPanel implements UiComponent {
       const res = await fetch('/api/vboards', { credentials: 'same-origin', cache: 'no-store' });
       if (res.status === 404) this.off = true;
       else if (res.ok) {
-        const body = (await res.json()) as { tasks?: VBoardsTask[] };
+        const body = (await res.json()) as { tasks?: VBoardsTask[]; refines?: VBoardsRefine[] };
         this.tasks = Array.isArray(body.tasks) ? body.tasks : [];
+        this.refines = Array.isArray(body.refines) ? body.refines : [];
       }
     } catch {
       // fica a lista de antes
@@ -156,10 +167,10 @@ export class VBoardsPanel implements UiComponent {
   /** Redesenha só quando a lista mudou (a escolha da pasta e o foco não se perdem a cada atualização). */
   private renderList(force = false): void {
     const tasks = this.visible();
-    const sig = JSON.stringify([tasks, this.busy]);
+    const sig = JSON.stringify([tasks, this.refines, this.busy]);
     if (!force && sig === this.shown) return;
     this.shown = sig;
-    this.list.replaceChildren(...tasks.map((t) => this.item(t)));
+    this.list.replaceChildren(...tasks.map((t) => this.item(t)), ...this.refines.map((r) => this.refineItem(r)));
     this.syncListBtn();
   }
 
@@ -217,6 +228,16 @@ export class VBoardsPanel implements UiComponent {
       h('div', { class: 'ui-vboards__actions' }, go, skip),
       open.length ? convo : null,
       open.length ? h('div', { class: 'ui-vboards__actions' }, link) : null,
+    );
+  }
+
+  private refineItem(r: VBoardsRefine): HTMLElement {
+    const state = r.state === 'running' ? tr('Refinando: lendo o projeto, só leitura…') : r.state === 'ready' ? tr('Plano pronto: veja no card do VBoards.') : tr('Refinar falhou: {0}', [r.error ?? '']);
+    return h(
+      'li',
+      { class: `ui-vboards__item is-${r.state}` },
+      h('span', { class: 'ui-spawn__folder-name', text: r.cardTitle || tr('(card sem título)') }),
+      h('p', { class: `ui-vboards__text${r.state === 'failed' ? ' is-error' : ''}`, text: state }),
     );
   }
 

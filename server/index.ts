@@ -66,7 +66,8 @@ import { claudeRunner, DaySummaryService, gitSubjectsToday, summaryCwd } from '.
 import { ChatService, chatOffReason } from './chat/service';
 import { createWorktreeOps } from './chat/worktree';
 import { RunService } from './chat/runs';
-import { reviewDiff, runChecks } from './chat/gate';
+import { refinerFor, reviewDiff, runChecks } from './chat/gate';
+import { NtfySettings } from './vboards/ntfy';
 import { officeApprover, TriggerService } from './chat/triggers';
 
 const config = loadConfig();
@@ -344,6 +345,8 @@ const chatOff = chatOffReason({ inDocker: config.inDocker, ptyOptIn, terminal: c
 // Ponte com o VBoards (vboards/vboards.ts): git config --global vboards.url/vboards.token/user.email ou
 // HABBLAUD_VBOARDS_URL/_TOKEN/_EMAIL; HABBLAUD_VBOARDS=0 desliga. A fila só é buscada com o Novo agente ligado.
 const vboardsConfig = await loadVBoardsConfig(process.env);
+// Aviso no celular (opcional, vboards/ntfy.ts): só o título do card e o que aconteceu.
+const ntfy = new NtfySettings(join(config.dataDir, 'notify.json'));
 const vboards =
   'off' in vboardsConfig
     ? undefined
@@ -391,6 +394,9 @@ const vboards =
               );
               if ('error' in r && r.status !== 409) log.warnOnce(`vboards:auto:${r.error}`, tr('VBoards: não abriu a lista automática de {0} ({1}).', [folder, r.error]));
             },
+        // "Refinar" (o clique já foi no VBoards): uma rodada só de leitura na pasta, pelo vboards.provider.
+        refine: chatOff ? undefined : (folder, prompt, cfg) => refinerFor(cfg.provider, folder, cfg.budget).run(prompt).then((r) => r.text),
+        notify: (title, event) => ntfy.notify(title, event),
         file: join(config.dataDir, 'vboards-links.json'),
       });
 vboards?.load();
@@ -522,6 +528,7 @@ const api = createApiHandler({
   files: deliveryFiles,
   spawnFolders: () => knownFolders(),
   vboards,
+  ntfy,
   chat: chatRoutes,
   chatOff,
   codexLive,
