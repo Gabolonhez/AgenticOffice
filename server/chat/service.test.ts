@@ -65,6 +65,16 @@ const idOf = (r: ReturnType<ChatService['open']>) => ('agentId' in r ? r.agentId
 afterEach(() => vi.useRealTimers());
 
 describe('chat: ChatService', () => {
+  it('denyPush: vai para o driver (sem git push) e para o env do git de qualquer provedor', () => {
+    const { chat, spawned } = setup();
+    chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi', denyPush: true });
+    chat.open({ folder: 'C:\\proj', provider: 'antigravity', prompt: 'oi', denyPush: true });
+    chat.open({ folder: 'C:\\proj', provider: 'codex', prompt: 'oi' });
+    expect(spawned[0].args).toContain('--disallowedTools');
+    for (const s of spawned.slice(0, 2)) expect(Object.values(s.env)).toContain('url.habblaud-no-push://.pushInsteadOf');
+    expect(Object.values(spawned[2].env)).not.toContain('url.habblaud-no-push://.pushInsteadOf');
+  });
+
   it('abre na pasta conhecida, entra no Office trabalhando e fixa o id da conversa', () => {
     const { chat, office, spawned } = setup();
     const r = chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' });
@@ -227,7 +237,7 @@ describe('chat: correções da revisão', () => {
   });
 
   it('descartar a cópia volta o agente para a pasta do projeto', async () => {
-    const { chat, spawned } = setup({ worktrees: { create: async () => ({ path: 'C:\\wt\\a', branch: 'agentic/a', base: 'b' }), summary: async () => ({ files: 0, added: 0, removed: 0, commits: 0, stat: '' }), merge: async () => ({ ok: true as const }), discard: async () => ({ ok: true as const }) } });
+    const { chat, spawned } = setup({ worktrees: { create: async () => ({ path: 'C:\\wt\\a', branch: 'agentic/a', base: 'b' }), summary: async () => ({ files: 0, added: 0, removed: 0, commits: 0, stat: '' }), merge: async () => ({ ok: true as const }), discard: async () => ({ ok: true as const }), diff: async () => '' } });
     const id = idOf(chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi', isolated: true }));
     await flush();
     expect(spawned[0].cwd).toBe('C:\\wt\\a');

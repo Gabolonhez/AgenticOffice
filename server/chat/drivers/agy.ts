@@ -1,6 +1,8 @@
 // Antigravity sem tela: `agy --print=<pedido> --output-format stream-json`, retomado com `--conversation <id>`.
 // O pedido vai grudado no `--print=` (o `-p` consome o argv seguinte e `-- texto` falha), então um texto que começa com
 // "-" nunca vira opção. Sem aprovação por ação no modo print: no chat ele roda com acesso total (decisão do usuário).
+// Sem push (denyPush): o agy não tem lista de comandos proibidos por flag (o --sandbox é aprovado sozinho com
+// --dangerously-skip-permissions), então só vale a trava do git no env (worktree.ts noPushEnv).
 import { tr } from '../../../shared/i18n';
 import type { ChatDriver, StreamParser, TurnSpec } from '../types';
 

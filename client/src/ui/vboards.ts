@@ -1,7 +1,8 @@
 // Fila do VBoards (server/vboards/vboards.ts): as subtarefas que você marcou "mandar para o agente" no quadro do time.
 // Um contador na barra do topo (como o "precisa de você") abre a lista; cada uma mostra o card, o texto e a pasta do
-// projeto. Só começa com o seu clique em "Iniciar" (POST /api/vboards/start, só pelo próprio computador); "Ignorar"
-// esconde nesta página. Some sem o Novo agente ou com o recurso desligado no servidor (404).
+// projeto. Só começa com o seu clique em "Iniciar" (POST /api/vboards/start, só pelo próprio computador), ou fica com
+// uma conversa já aberta na pasta, de qualquer provedor ("Ligar a uma conversa aberta", POST /api/vboards/attach);
+// "Ignorar" esconde nesta página. Some sem o Novo agente ou com o recurso desligado no servidor (404).
 import { tr } from '../../../shared/i18n';
 import { access } from '../net/access';
 import type { UiComponent, UiContext } from './context';
@@ -20,6 +21,7 @@ export interface VBoardsTask {
   date?: string;
   folder?: string;
   candidates: Array<{ path: string; name: string }>;
+  agents?: Array<{ id: string; name: string; title?: string; provider: string; folder: string }>;
 }
 
 function readIgnored(): string[] {
@@ -193,6 +195,11 @@ export class VBoardsPanel implements UiComponent {
     const go = h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow', type: 'button', on: { click: () => void this.begin(t, select.value) } }, busy ? tr('Iniciando…') : tr('Iniciar'));
     go.disabled = !!this.busy;
     const skip = h('button', { class: 'ui-btn ui-perm__btn', type: 'button', on: { click: () => this.ignore(t.id) } }, tr('Ignorar'));
+    const open = t.agents ?? [];
+    const convo = h('select', { class: 'ui-rename__input ui-vboards__folder', attrs: { 'aria-label': tr('Conversa aberta') } });
+    for (const a of open) convo.append(h('option', { attrs: { value: a.id }, text: `${a.title || a.name} (${a.provider}) — ${shortPath(a.folder)}` }));
+    const link = h('button', { class: 'ui-btn ui-perm__btn', type: 'button', on: { click: () => void this.attach(t, convo.value) } }, tr('Ligar a uma conversa aberta'));
+    link.disabled = !!this.busy;
     const mark = h('input', { type: 'checkbox' });
     mark.checked = this.marked.has(t.id);
     mark.addEventListener('change', () => {
@@ -208,6 +215,8 @@ export class VBoardsPanel implements UiComponent {
       h('p', { class: 'ui-vboards__text', text: t.text }),
       select,
       h('div', { class: 'ui-vboards__actions' }, go, skip),
+      open.length ? convo : null,
+      open.length ? h('div', { class: 'ui-vboards__actions' }, link) : null,
     );
   }
 
@@ -216,6 +225,26 @@ export class VBoardsPanel implements UiComponent {
     writeIgnored(this.ignored);
     this.renderList();
     this.ctx.invalidate();
+  }
+
+  /** Liga a subtarefa a uma conversa já aberta: ela conclui quando essa sessão acabar. */
+  private async attach(t: VBoardsTask, agentId: string): Promise<void> {
+    if (this.busy || !agentId) return;
+    this.busy = t.id;
+    this.renderList();
+    try {
+      const res = await fetch('/api/vboards/attach', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: t.id, agentId }) });
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(body.error ?? tr('erro {0}', [res.status]));
+      this.tasks = this.tasks.filter((x) => x.id !== t.id);
+      this.say(tr('Ligada: a subtarefa conclui quando essa conversa acabar.'));
+    } catch (err) {
+      this.say(tr('Não ligou: {0}', [(err as Error).message]), true);
+    } finally {
+      this.busy = undefined;
+      this.renderList();
+      this.ctx.invalidate();
+    }
   }
 
   private async begin(t: VBoardsTask, folder: string): Promise<void> {

@@ -18,6 +18,7 @@ import { claudeDriver } from './drivers/claude';
 import { codexDriver } from './drivers/codex';
 import { RoleStore } from './roles';
 import { ChatStore, type ChatRecord } from './store';
+import { noPushEnv } from './worktree';
 import type { ChatDriver, ChatEvent, TurnSpec, WorktreeOps } from './types';
 import { addUsage, overLimit, remainingUsd } from './usage';
 
@@ -198,6 +199,7 @@ export class ChatService {
       spend: { usd: 0, tokens: 0 },
       items: [],
       ...(typeof r.vboardsTaskId === 'string' && r.vboardsTaskId ? { vboardsTaskId: r.vboardsTaskId } : {}),
+      ...(r.denyPush === true ? { denyPush: true as const } : {}),
       ...(name ? { name } : {}),
       seed: randomBytes(4).readUInt32LE(0),
       createdAt: this.now(),
@@ -545,12 +547,14 @@ export class ChatService {
         ? { mcp: { url: `http://127.0.0.1:${this.deps.port}/api/chat/mcp/${encodeURIComponent(rec.agentId)}`, token: rt.token } }
         : {}),
       ...(rec.account && this.deps.accounts.find(rec.account) ? { accountDir: this.deps.accounts.find(rec.account)!.dir } : {}),
+      ...(rec.denyPush ? { denyPush: true } : {}),
     };
     const driver = DRIVERS[rec.provider];
     const inv = driver.invocation(spec);
     const env: NodeJS.ProcessEnv = { ...process.env };
     for (const k of INHERITED_SESSION_VARS) delete env[k];
     for (const [k, v] of Object.entries(inv.env)) if (v !== undefined) env[k] = v;
+    if (spec.denyPush) Object.assign(env, noPushEnv(env));
     rec.running = true;
     rt.phase = 'thinking';
     rt.turnStart = this.now();

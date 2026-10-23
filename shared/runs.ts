@@ -1,10 +1,12 @@
 // Listas que rodam um agente do chat por item, em sequência (server/chat/runs.ts): o protocolo entre cliente e servidor.
 import type { ChatOpenRequest } from './chat';
+import type { Provider } from './types';
 
 export const RUN_ITEMS_MAX = 50;
 export const RUN_CONTEXT_MAX = 4000;
 
-export type RunItemState = 'pending' | 'running' | 'done' | 'failed' | 'interrupted' | 'canceled';
+/** 'review': lista automática do VBoards, passou pelo portão (checagens + revisão) e espera a pessoa. */
+export type RunItemState = 'pending' | 'running' | 'done' | 'failed' | 'interrupted' | 'canceled' | 'review';
 export type RunState = 'running' | 'paused' | 'stopped' | 'failed' | 'done';
 
 export interface RunItem {
@@ -16,6 +18,18 @@ export interface RunItem {
   summary?: string;
   startedAt?: number;
   endedAt?: number;
+  /** Lista automática: o erro do portão já voltou uma vez ao agente. */
+  retried?: boolean;
+  /** Lista automática: o relatório do portão (branch, checagens, revisão e resumo). */
+  report?: string;
+}
+
+/** Lista aberta sozinha pelo VBoards (vboards.auto da pasta): o portão de qualidade do fim de cada item. */
+export interface RunAuto {
+  /** vboards.check: comando de shell rodado na cópia isolada. */
+  check?: string;
+  reviewer: Provider;
+  reviewerModel?: string;
 }
 
 /** Opções de cada agente da lista: as da janela de abrir agente, sem pedido, nome e tarefa. */
@@ -34,6 +48,8 @@ export interface ChatRun {
   items: RunItem[];
   /** Por que parou (erro ao criar a cópia, etc.). */
   note?: string;
+  /** Aberta sozinha pelo VBoards: cada item passa pelo portão (server/chat/gate.ts) e termina em 'review'. */
+  auto?: RunAuto;
 }
 
 /** POST /api/chat/runs: a lista aprovada na tela de confirmação. */

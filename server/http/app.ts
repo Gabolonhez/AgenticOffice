@@ -15,6 +15,7 @@ import { handleSessionsRoute } from './sessions';
 import type { Hub } from './sse';
 import { handleStatsRoute } from './stats';
 import type { TerminalStreams } from './terminal';
+import { maskSecrets } from '../../shared/activity';
 import { tr } from '../../shared/i18n';
 import type { SpawnService } from '../spawn/spawn';
 import { ATTACHMENT_BODY_MAX, parseAttachment, type AttachmentStore } from '../spawn/attachments';
@@ -100,8 +101,12 @@ export interface ApiDeps {
    * local com Host local: pela porta do celular, nem com login (403 `local_only`).
    */
   world?: (req: IncomingMessage, res: ServerResponse, url: URL) => void;
-  /** Fila do VBoards (GET /api/vboards, POST /api/vboards/start {id, folder?}; vboards/vboards.ts). Ausente = desligado. */
-  vboards?: Pick<VBoardsService, 'list' | 'begin'>;
+  /**
+   * Fila do VBoards (GET /api/vboards, POST /api/vboards/start {id, folder?}, POST /api/vboards/attach {id, agentId};
+   * vboards/vboards.ts) e a configuração por pasta (GET /api/vboards/config[?folder=], POST /api/vboards/config
+   * {folder, config}). Ausente = desligado.
+   */
+  vboards?: Pick<VBoardsService, 'list' | 'begin' | 'attach' | 'configFolders' | 'folderSettings' | 'saveFolderSettings'>;
 }
 
 /** GET /api/agents/:id/terminal (ids nunca contêm '/'). */
@@ -551,8 +556,17 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
     }
     if (path === '/api/vboards' || path.startsWith('/api/vboards/')) {
       // Mostra a fila do time e abre agentes no computador: só pelo próprio computador (a trava do terminal interativo).
+      // A configuração das pastas pode ser LIDA pela porta remota (com login); gravar, nunca: vboards.check é um comando
+      // de shell e vboards.auto abre agentes sozinho.
       const vb = deps.vboards;
-      const problem = isRemote(req) ? tr('o VBoards só é usado pelo próprio computador (http://localhost)') : ptyRequestProblem(req);
+      const remoteConfigRead = path === '/api/vboards/config' && isRead && isRemote(req);
+      const problem = remoteConfigRead
+        ? undefined
+        : isRemote(req)
+          ? path === '/api/vboards/config'
+            ? tr('a configuração do VBoards só muda pelo próprio computador: pela porta remota ela é só leitura')
+            : tr('o VBoards só é usado pelo próprio computador (http://localhost)')
+          : ptyRequestProblem(req);
       if (!vb) sendJson(res, 404, { error: tr('rota desconhecida') });
       else if (problem) sendJson(res, 403, { error: problem });
       else if (path === '/api/vboards') {
@@ -564,6 +578,27 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
           readJson(req)
             .then((body) => vb.begin(body))
             .then((r) => ('spawn' in r ? sendJson(res, 201, r.spawn) : 'agentId' in r ? sendJson(res, 201, { agentId: r.agentId }) : sendJson(res, r.status, { error: r.error })))
+            .catch((err) => fail(res, err));
+      } else if (path === '/api/vboards/config') {
+        const editable = !isRemote(req);
+        const masked = <T extends { config: { check?: string } }>(r: T): T => (editable || !r.config.check ? r : { ...r, config: { ...r.config, check: maskSecrets(r.config.check) } });
+        const answer = (r: Awaited<ReturnType<typeof vb.folderSettings>>) => ('error' in r ? sendJson(res, r.status, { error: r.error }) : sendJson(res, 200, { ...masked(r), editable }));
+        if (isRead) {
+          const folder = url.searchParams.get('folder');
+          if (folder === null) vb.configFolders().then((folders) => sendJson(res, 200, { folders, editable }), (err) => fail(res, err));
+          else vb.folderSettings(folder).then(answer, (err) => fail(res, err));
+        } else if (method === 'POST') {
+          readJson(req)
+            .then((body) => vb.saveFolderSettings(body))
+            .then(answer)
+            .catch((err) => fail(res, err));
+        } else methodNotAllowed(res, 'GET, POST');
+      } else if (path === '/api/vboards/attach') {
+        if (method !== 'POST') methodNotAllowed(res, 'POST');
+        else
+          readJson(req)
+            .then((body) => vb.attach(body))
+            .then((r) => ('ok' in r ? sendJson(res, 200, { ok: true }) : sendJson(res, r.status, { error: r.error })))
             .catch((err) => fail(res, err));
       } else sendJson(res, 404, { error: tr('rota desconhecida') });
       if (!vb || problem) req.resume();

@@ -2,6 +2,9 @@
 // "Rodar lista" da tela de confirmação (POST /api/chat/runs = a aprovação da lista inteira); Parar interrompe o agente
 // atual e cancela o resto. Reiniciar o servidor nunca retoma: o item que rodava vira interrompido e a lista pausa até o
 // "Continuar". Itens do VBoards abrem pelo VBoardsService.begin, que liga a tarefa ao agente e a conclui com o resumo.
+// Lista automática (VBoards com vboards.auto, ChatRun.auto): no fim de cada item o portão (gate.ts) roda as checagens e a
+// revisão do diff; na 1ª falha o erro volta uma vez ao mesmo agente, depois o item fica 'review' com o relatório.
+// Nunca junta nem dá push: o "Juntar" continua sendo um clique.
 // Guardado em <dataDir>/chat/runs.json. Desenho: docs/superpowers/specs/2026-10-16-checklist-design.md.
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -9,20 +12,23 @@ import { randomUUID } from 'node:crypto';
 import { truncate } from '../../shared/activity';
 import { CHAT_TEXT_MAX } from '../../shared/chat';
 import { tr } from '../../shared/i18n';
-import { RUN_CONTEXT_MAX, RUN_ITEMS_MAX, type ChatRun, type RunAgentOptions, type RunItem } from '../../shared/runs';
+import { RUN_CONTEXT_MAX, RUN_ITEMS_MAX, type ChatRun, type RunAgentOptions, type RunAuto, type RunItem } from '../../shared/runs';
 import { errMsg, log } from '../log';
 import type { ChatOpener } from '../vboards/vboards';
+import { fixRequest, gatePassed, gateReport, type CheckResult, type ReviewResult } from './gate';
 import type { ChatService } from './service';
 import type { WorktreeOps } from './types';
 
 export const RUNS_KEEP = 20;
 const SUMMARY_MAX = 600;
-const OPTION_KEYS = ['folder', 'provider', 'account', 'model', 'roleId', 'permission', 'limits'] as const;
+const OPTION_KEYS = ['folder', 'provider', 'account', 'model', 'roleId', 'permission', 'limits', 'denyPush'] as const;
 
 export interface RunDeps {
-  chat: Pick<ChatService, 'check' | 'open' | 'turnOutcome' | 'lastReply' | 'stop' | 'onTurnEnd' | 'restoreCwd'>;
+  chat: Pick<ChatService, 'check' | 'open' | 'turnOutcome' | 'lastReply' | 'stop' | 'onTurnEnd' | 'restoreCwd' | 'send'>;
   vboards?: { begin(raw: unknown, open: ChatOpener): Promise<{ agentId: string } | { spawn: unknown } | { status: number; error: string }> };
   worktrees?: WorktreeOps;
+  /** Portão das listas automáticas (gate.ts runChecks/reviewDiff); ausente = o item vai para 'review' sem checar. */
+  gate?: { checks(cmd: string, cwd: string): Promise<CheckResult>; review(auto: RunAuto, diff: string): Promise<ReviewResult> };
   file: string;
   now?: () => number;
   newId?: () => string;
@@ -78,8 +84,19 @@ export class RunService {
     return this.runs.find((r) => r.id === id);
   }
 
-  /** "Rodar lista": valida tudo antes de abrir qualquer agente; o pedido já é a aprovação da lista inteira. */
-  create(raw: unknown): { run: ChatRun } | Fail {
+  /**
+   * Alguma lista guardada já tem esta tarefa do VBoards (rodando, pausada, parada ou falha): a abertura automática não
+   * cria outra, nem depois de a pessoa parar a lista.
+   */
+  hasTask(id: string): boolean {
+    return this.runs.some((r) => r.items.some((i) => i.vboardsTaskId === id));
+  }
+
+  /**
+   * "Rodar lista": valida tudo antes de abrir qualquer agente; o pedido já é a aprovação da lista inteira. `auto` só
+   * vem do servidor (VBoards com vboards.auto), nunca do corpo do pedido: ele traz um comando de shell.
+   */
+  create(raw: unknown, auto?: RunAuto): { run: ChatRun } | Fail {
     const bad = (error: string, status = 400): Fail => ({ status, error });
     const b = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
     const list = Array.isArray(b.items) ? b.items : [];
@@ -111,6 +128,7 @@ export class RunService {
       stopOnFail: b.stopOnFail !== false,
       wantIsolated: b.isolated === true,
       items,
+      ...(auto ? { auto } : {}),
     };
     this.runs = [run, ...this.runs].slice(0, RUNS_KEEP);
     this.kick(run);
@@ -239,6 +257,26 @@ export class RunService {
     if (end) this.finish(run, item, end);
   }
 
+  /**
+   * Para o VBoards: item de lista automática ainda rodando ou no portão = 'pending' (não conclui); passou pelo portão =
+   * 'review'; fora disso, undefined (vale o resultado da rodada).
+   */
+  gateState(agentId: string): 'pending' | 'review' | undefined {
+    for (const run of this.runs) {
+      if (!run.auto) continue;
+      const item = run.items.find((i) => i.agentId === agentId);
+      if (item?.state === 'running') return 'pending';
+      if (item?.state === 'review') return 'review';
+    }
+    return undefined;
+  }
+
+  /** Relatório do portão do item deste agente (o resumo que vai para o VBoards). */
+  reportOf(agentId: string): string | undefined {
+    for (const run of this.runs) for (const i of run.items) if (i.agentId === agentId && i.report) return i.report;
+    return undefined;
+  }
+
   private turnEnded(agentId: string): void {
     if (this.frozen) return;
     for (const run of this.runs) {
@@ -250,11 +288,38 @@ export class RunService {
   }
 
   private finish(run: ChatRun, item: RunItem, end: 'done' | 'failed', reason?: string): void {
+    // Lista automática: respondeu (ou já é a volta da correção) = passa pelo portão antes de seguir.
+    if (run.auto && run.isolated && item.agentId && (end === 'done' || item.retried)) return void this.gate(run, item, run.auto, run.isolated, item.agentId);
     item.state = end;
     item.endedAt = this.now();
     const text = end === 'done' ? (item.agentId && this.deps.chat.lastReply(item.agentId)) || '' : reason || tr('O agente terminou sem responder.');
     if (text) item.summary = truncate(text.replace(/\s+/g, ' ').trim(), SUMMARY_MAX);
     if (end === 'failed' && run.stopOnFail) return this.halt(run, tr('Parou: um item falhou.'));
+    this.advance(run);
+  }
+
+  private async gate(run: ChatRun, item: RunItem, auto: RunAuto, w: NonNullable<ChatRun['isolated']>, agentId: string): Promise<void> {
+    let checks: CheckResult | undefined;
+    let review: ReviewResult | undefined;
+    try {
+      if (auto.check && this.deps.gate) checks = await this.deps.gate.checks(auto.check, w.path);
+      const diff = (await this.deps.worktrees?.diff(w)) ?? '';
+      if (diff.trim() && this.deps.gate) review = await this.deps.gate.review(auto, diff);
+    } catch (err) {
+      checks = { ok: false, tail: errMsg(err) };
+    }
+    // Parada ou servidor desligando durante o portão: o item já mudou de estado.
+    if (item.state !== 'running' || run.state !== 'running' || this.frozen) return;
+    if (!gatePassed(checks, review) && !item.retried) {
+      item.retried = true;
+      this.save();
+      // Uma volta só: o próximo fim de rodada (turnEnded → finish) passa de novo pelo portão e termina em 'review'.
+      if (this.deps.chat.send(agentId, { text: fixRequest(checks, review) }) === 'ok') return;
+    }
+    item.report = gateReport({ branch: w.branch, checks, review, summary: this.deps.chat.lastReply(agentId), retried: item.retried });
+    item.state = 'review';
+    item.endedAt = this.now();
+    item.summary = truncate(item.report.replace(/\s+/g, ' ').trim(), SUMMARY_MAX);
     this.advance(run);
   }
 

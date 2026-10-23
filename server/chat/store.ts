@@ -24,6 +24,7 @@ export interface ChatRecord {
   items: ChatItem[];
   isolated?: { branch: string; path: string; base: string; merged?: boolean; discarded?: boolean };
   vboardsTaskId?: string;
+  denyPush?: true;
   name?: string;
   seed: number;
   createdAt: number;

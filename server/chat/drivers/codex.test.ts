@@ -33,3 +33,12 @@ describe('chat: driver do Codex', () => {
     expect(ev.at(-1)).toEqual({ type: 'done', ok: true });
   });
 });
+
+describe('chat: Codex sem push', () => {
+  it('denyPush: sandbox workspace-write sem rede no lugar do acesso total', () => {
+    const args = codexArgs({ folder: 'C:\proj', prompt: 'x', first: true, permission: 'auto', denyPush: true });
+    expect(args).toContain('sandbox_mode="workspace-write"');
+    expect(args).toContain('sandbox_workspace_write.network_access=false');
+    expect(args).not.toContain('sandbox_mode="danger-full-access"');
+  });
+});

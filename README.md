@@ -651,6 +651,35 @@ happens while it's running, and the day follows your browser's time zone. With d
 shows made-up numbers (with the "demo" badge) and lets you switch to the real data; the demo agents never
 go into the real stats.
 
+### VBoards (team board)
+
+With `git config --global vboards.url`/`vboards.token` (or `HABBLAUD_VBOARDS_URL`/`_TOKEN`), the **VBoards** counter
+lists the subtasks you sent to the agent on the team board. **Start** opens an agent in the project folder; **Link to an
+open conversation** attaches the subtask to a session that is already open in that folder (VS Code, terminal; Claude
+Code, Codex or Antigravity), and the subtask is completed only when that session ends.
+
+**Automatic start is opt-in and comes turned off.** Until you turn it on for a folder, nothing runs without your click.
+Each folder keeps its own settings in its local git config (the same values appear in **Settings › VBoards per folder**,
+which is read-only from the phone):
+
+| Key (`git config --local`) | Default | What it does |
+| --- | --- | --- |
+| `vboards.card` | folder name | Card title that matches this folder. |
+| `vboards.auto` | `false` | `true` turns on automatic start for this folder. |
+| `vboards.provider` | `claude` | Agent that does the work: `claude`, `codex` or `agy`. |
+| `vboards.budget` | `2` | Cost limit per item, in US$. |
+| `vboards.check` | none | Shell command run on the isolated copy after each item. The copy has no `node_modules` or `.env`, so the command installs what it needs (e.g. `npm ci && npm test`). |
+| `vboards.reviewer` | `claude` | Who reviews the diff: `claude`, `codex` or `agy`. |
+| `vboards.reviewerModel` | `sonnet` (Claude) | Reviewer model; Codex and agy use the CLI default. |
+
+With `vboards.auto` on (and the agent chat on), each subtask whose card matches **only** this folder becomes a list
+(one per folder, one at a time): a fresh agent per item, in an isolated git worktree on its own branch, with `git push`
+blocked (Claude: denied tool; Codex: sandbox without network; all of them: a git setting that breaks any push). At the
+end of each item Habblaud runs `vboards.check` and asks the reviewer to read only the diff, with no tools. On the first
+failure the error goes back to the same agent once; then the subtask goes to VBoards as **review**, with a report
+(branch, checks, review and the agent's summary). Habblaud never merges or pushes on its own: **Merge** is still your
+click.
+
 ### Demo mode
 
 Want to see the office full without having any sessions open?

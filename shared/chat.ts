@@ -39,4 +39,6 @@ export interface ChatOpenRequest {
   name?: string;
   prompt: string;
   vboardsTaskId?: string;
+  /** Sem `git push` (listas automáticas do VBoards; server/chat/types.ts TurnSpec.denyPush). */
+  denyPush?: boolean;
 }

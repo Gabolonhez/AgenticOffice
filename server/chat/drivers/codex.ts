@@ -1,6 +1,7 @@
 // Codex sem tela: `codex exec --json` na 1ª rodada e `codex exec resume <thread>` nas outras; pedido por stdin (`-`).
 // O `exec` não pede aprovação ação por ação: no chat ele roda com acesso total (decisão do usuário). O resume não aceita
-// `--sandbox`/`-C`, então tudo vai por `-c` (TOML) e a pasta é o cwd do processo.
+// `--sandbox`/`-C`, então tudo vai por `-c` (TOML) e a pasta é o cwd do processo. Sem push (denyPush): o sandbox
+// workspace-write sem rede (o push não sai; também não instala dependências nem faz commit, que o "Juntar" faz).
 import { tr } from '../../../shared/i18n';
 import type { ChatDriver, ChatEvent, StreamParser, TurnSpec } from '../types';
 
@@ -9,7 +10,8 @@ const toml = (s: string) => JSON.stringify(s);
 
 export function codexArgs(spec: TurnSpec): string[] {
   const args = spec.first ? ['exec'] : ['exec', 'resume', spec.resumeId ?? ''];
-  args.push('--json', '--skip-git-repo-check', '-c', `sandbox_mode=${toml('danger-full-access')}`);
+  args.push('--json', '--skip-git-repo-check', '-c', `sandbox_mode=${toml(spec.denyPush ? 'workspace-write' : 'danger-full-access')}`);
+  if (spec.denyPush) args.push('-c', 'sandbox_workspace_write.network_access=false');
   if (spec.role) args.push('-c', `developer_instructions=${toml(spec.role)}`);
   if (spec.model) args.push('-m', spec.model);
   args.push('-');

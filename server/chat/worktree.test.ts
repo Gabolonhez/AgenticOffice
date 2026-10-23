@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createWorktreeOps } from './worktree';
+import { createWorktreeOps, noPushEnv } from './worktree';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
@@ -102,3 +102,32 @@ describe('chat: cópia isolada (git worktree)', () => {
     expect(git(r, 'branch', '--list', w.branch)).toBe('');
   });
 });
+
+describe('trava de push no env (qualquer provedor)', () => {
+  it('git push falha, o fetch segue; soma às entradas GIT_CONFIG_* que já houver', () => {
+    expect(noPushEnv({ GIT_CONFIG_COUNT: '2' })).toEqual({ GIT_CONFIG_COUNT: '3', GIT_CONFIG_KEY_2: 'url.habblaud-no-push://.pushInsteadOf', GIT_CONFIG_VALUE_2: '' });
+    const dir = repo();
+    const bare = mkdtempSync(join(tmpdir(), 'hb-wt-bare-'));
+    git(bare, 'init', '-q', '--bare');
+    git(dir, 'remote', 'add', 'origin', bare);
+    const env = { ...process.env, ...noPushEnv({}) };
+    expect(() => execFileSync('git', ['push', '-q', 'origin', 'HEAD:main'], { cwd: dir, env, stdio: 'pipe' })).toThrow();
+    expect(() => execFileSync('git', ['push', '-q', bare, 'HEAD:main'], { cwd: dir, env, stdio: 'pipe' })).toThrow();
+    expect(() => execFileSync('git', ['fetch', '-q', 'origin'], { cwd: dir, env, stdio: 'pipe' })).not.toThrow();
+  });
+});
+
+describe('diff da cópia para o revisor', () => {
+  it('inclui os arquivos novos (intent-to-add) e as mudanças, contra a base', async () => {
+    const r = repo();
+    const ops = createWorktreeOps(mkdtempSync(join(tmpdir(), 'hb-wt-data-')));
+    const w = await ops.create(r, 'chat:1', 'lista');
+    if ('error' in w) throw new Error(w.error);
+    writeFileSync(join(w.path, 'novo.txt'), 'oi\n');
+    writeFileSync(join(w.path, 'a.txt'), 'dois\n');
+    const diff = await ops.diff(w);
+    expect(diff).toContain('novo.txt');
+    expect(diff).toContain('+dois');
+  });
+});
+

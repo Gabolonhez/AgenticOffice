@@ -649,6 +649,35 @@ acontece enquanto ele está rodando, e o dia segue o fuso do seu navegador. Com 
 mostra números fictícios (com o selo "demonstração") e deixa alternar para os dados reais; os agentes do demo nunca
 entram nas estatísticas de verdade.
 
+### VBoards (quadro do time)
+
+Com `git config --global vboards.url`/`vboards.token` (ou `HABBLAUD_VBOARDS_URL`/`_TOKEN`), o contador **VBoards**
+lista as subtarefas que você mandou para o agente no quadro do time. **Iniciar** abre um agente na pasta do projeto;
+**Ligar a uma conversa aberta** liga a subtarefa a uma sessão que já está aberta nessa pasta (VS Code, terminal; Claude
+Code, Codex ou Antigravity), e a subtarefa só é concluída quando essa sessão acaba.
+
+**A abertura automática é opt-in e vem desligada.** Enquanto você não liga numa pasta, nada roda sem o seu clique. Cada
+pasta guarda a própria configuração no git config local dela (os mesmos valores aparecem em **Configurações › VBoards
+por pasta**, só leitura pelo celular):
+
+| Chave (`git config --local`) | Padrão | O que faz |
+| --- | --- | --- |
+| `vboards.card` | nome da pasta | Título do card que combina com esta pasta. |
+| `vboards.auto` | `false` | `true` liga a abertura automática nesta pasta. |
+| `vboards.provider` | `claude` | Agente que faz o trabalho: `claude`, `codex` ou `agy`. |
+| `vboards.budget` | `2` | Limite de custo por item, em US$. |
+| `vboards.check` | nenhum | Comando de shell rodado na cópia isolada depois de cada item. A cópia não tem `node_modules` nem `.env`, então o comando instala o que precisar (ex.: `npm ci && npm test`). |
+| `vboards.reviewer` | `claude` | Quem revisa o diff: `claude`, `codex` ou `agy`. |
+| `vboards.reviewerModel` | `sonnet` (Claude) | Modelo do revisor; Codex e agy usam o padrão da CLI. |
+
+Com `vboards.auto` ligado (e o chat com agentes ligado), cada subtarefa cujo card combina **só** com esta pasta vira uma
+lista (uma por pasta, uma de cada vez): um agente novo por item, numa cópia isolada (git worktree num branch próprio),
+com `git push` bloqueado (Claude: ferramenta negada; Codex: sandbox sem rede; todos: uma configuração do git que quebra
+qualquer push). No fim de cada item o Habblaud roda o `vboards.check` e pede ao revisor que leia só o diff, sem
+ferramentas. Na primeira falha o erro volta uma vez ao mesmo agente; depois a subtarefa vai ao VBoards como **review**,
+com um relatório (branch, checagens, revisão e o resumo do agente). O Habblaud nunca junta nem dá push sozinho:
+**Juntar** continua sendo um clique seu.
+
 ### Modo demonstração
 
 Quer ver o escritório cheio sem ter sessões abertas?

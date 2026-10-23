@@ -16,6 +16,8 @@ export function claudeArgs(spec: TurnSpec): string[] {
   if (spec.model) args.push('--model', spec.model);
   if (spec.role) args.push('--append-system-prompt', spec.role);
   if (spec.budgetUsd !== undefined) args.push('--max-budget-usd', String(spec.budgetUsd));
+  // A regra de negação vale mesmo com bypassPermissions.
+  if (spec.denyPush) args.push('--disallowedTools', 'Bash(git push:*)');
   // MCP do escritório sempre (ferramentas office_*); no automático sem strict, para os MCPs do usuário continuarem.
   if (spec.mcp) {
     const config = { mcpServers: { habblaud: { type: 'http', url: spec.mcp.url, headers: { Authorization: `Bearer ${spec.mcp.token}` }, timeout: MCP_SERVER_TIMEOUT_MS } } };

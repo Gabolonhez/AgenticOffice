@@ -25,14 +25,14 @@ export function aiPrompt(material: string): string {
 }
 
 /** Um turno `claude -p` (prompt pelo stdin, sem ferramentas). `cwd` neutro: não é um projeto. */
-export function claudeRunner(cwd: string, bin = resolveCliBin('claude'), timeoutMs = AI_TIMEOUT_MS): AiRunner {
+export function claudeRunner(cwd: string, bin = resolveCliBin('claude'), timeoutMs = AI_TIMEOUT_MS, model = 'haiku'): AiRunner {
   return (prompt) =>
     new Promise((ok, fail) => {
       if (!bin) return fail(new Error(tr('Claude Code não encontrado')));
       mkdirSync(cwd, { recursive: true });
       const env: NodeJS.ProcessEnv = { ...process.env };
       for (const k of INHERITED_SESSION_VARS) delete env[k];
-      const args = [...bin.prefix, '-p', '--model', 'haiku', '--output-format', 'json', '--tools', '', '--no-session-persistence'];
+      const args = [...bin.prefix, '-p', '--model', model, '--output-format', 'json', '--tools', '', '--no-session-persistence'];
       const proc = spawn(bin.file, args, { cwd, env, shell: false, windowsHide: true });
       let out = '';
       let err = '';

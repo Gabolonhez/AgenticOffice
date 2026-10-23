@@ -30,6 +30,8 @@ export interface TurnSpec {
   budgetUsd?: number;
   mcp?: { url: string; token: string };
   accountDir?: string;
+  /** Sem `git push` (listas automáticas do VBoards): cada driver usa o que a CLI dele tem; o env do git vale para todos. */
+  denyPush?: boolean;
 }
 
 export interface CliInvocation { args: string[]; stdin?: string; env: Record<string, string | undefined> }
@@ -38,6 +40,8 @@ export interface CliInvocation { args: string[]; stdin?: string; env: Record<str
 export interface WorktreeOps {
   create(repo: string, agentId: string, label: string): Promise<{ path: string; branch: string; base: string } | { error: string }>;
   summary(w: { path: string; base: string }): Promise<{ files: number; added: number; removed: number; commits: number; stat: string }>;
+  /** Diff da cópia contra a base, com os arquivos novos (git add -A -N antes): o que o revisor do portão lê. */
+  diff(w: { path: string; base: string }): Promise<string>;
   merge(repo: string, w: { path: string; branch: string }, message: string): Promise<{ ok: true } | { ok: false; reason: string }>;
   discard(repo: string, w: { path: string; branch: string }): Promise<{ ok: true } | { ok: false; reason: string }>;
 }

@@ -20,6 +20,17 @@ do meio (0.**3**.0).
 - **Papéis prontos:** Dev, QA, Revisor, Designer, Pesquisador e Orquestrador, editáveis, guardados em `~/.habblaud`.
 - **Cópia isolada:** o agente trabalha num git worktree num branch próprio; ao terminar, Juntar ou Descartar.
 - **VBoards:** o "Iniciar" abre a janela preenchida e inicia a task pelo chat.
+- **VBoards — ligar a uma conversa aberta:** a subtarefa pode ficar com uma sessão que já está aberta na pasta (VS Code,
+  terminal; Claude Code, Codex ou Antigravity); ela só é concluída quando essa sessão acaba. As conversas do Codex que
+  mexem em código também viram item no card do dia.
+- **VBoards — abertura automática (opt-in, desligada por padrão):** a regra "nada roda sem o seu clique" continua sendo o
+  padrão. Com `git config --local vboards.auto true` numa pasta, as subtarefas que só combinam com ela viram uma lista
+  numa cópia isolada, sem `git push`, com o agente (`vboards.provider`: claude, codex ou agy) e o orçamento por item
+  (`vboards.budget`) da pasta.
+- **VBoards — portão de qualidade:** no fim de cada item da lista automática roda o `vboards.check` e um revisor
+  (`vboards.reviewer`/`vboards.reviewerModel`: claude, codex ou agy) lê só o diff; na primeira falha o erro volta uma vez
+  ao agente, depois a subtarefa vai como **review** com o relatório. Juntar continua sendo um clique.
+- **Configurações › VBoards por pasta:** lê e grava o `git config --local` da pasta; pela porta do celular, só leitura.
 - **Docker:** o chat fica indisponível, com aviso; o resto segue igual.
 - **Chat pelo celular:** desligado por padrão; com `chat` no `HABBLAUD_REMOTE_ALLOW` (login + HTTPS) o chat, Rodar
   lista, Gatilhos e o Quadro funcionam pela porta do celular, com alvos de toque maiores e janelas em tela cheia. O MCP

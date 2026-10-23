@@ -1,19 +1,24 @@
-// Ponte com o VBoards (o quadro de Planning do time). Três partes:
+// Ponte com o VBoards (o quadro de Planning do time). Quatro partes:
 // - fila: a cada ~10 s (com espera maior depois de erro) busca as subtarefas que você marcou "mandar para o agente"
 //   (GET /api/agent-tasks) e guarda na memória; a página as lista (GET /api/vboards) e só começa uma com o seu clique
-//   em "Iniciar" (POST /api/vboards/start): nunca sozinha;
+//   em "Iniciar" (POST /api/vboards/start), salvo a abertura automática opt-in de uma pasta (última parte);
 // - conclusão: o agente aberto para a subtarefa fica ligado a ela (<dataDir>/vboards-links.json, sobrevive a um
 //   reinício); quando ele termina o turno depois de ter trabalhado, ou a sessão acaba, a subtarefa vira 'done' com a
-//   última resposta como resumo (ou 'failed', se nunca trabalhou). Uma vez por subtarefa;
-// - conversas: cada agente principal do Claude Code (fora os ligados a uma subtarefa) que mexeu em código (editou arquivos ou fez commit) vira um item no card do projeto
+//   última resposta como resumo (ou 'failed', se nunca trabalhou). Uma vez por subtarefa. "Ligar a uma conversa aberta"
+//   (POST /api/vboards/attach) liga a subtarefa a uma sessão já aberta (VS Code, terminal, de qualquer provedor): essa
+//   só conclui quando a sessão acaba, não na primeira pausa;
+// - conversas: cada agente principal (Claude Code, Codex; fora os ligados a uma subtarefa) que mexeu em código (editou arquivos ou fez commit) vira um item no card do projeto
 //   (POST /api/agent-tasks/todos): o título da conversa, done quando terminou o turno depois de trabalhar, com o
-//   resumo da última resposta. ~15 s de calma e só quando mudou.
+//   resumo da última resposta. ~15 s de calma e só quando mudou;
+// - abertura automática (opt-in, desligada por padrão): numa pasta com `git config --local vboards.auto true`, a
+//   subtarefa da fila que só combina com ela vira uma lista do chat sozinha (server/chat/runs.ts, cópia isolada, sem
+//   push, com o portão de qualidade de server/chat/gate.ts). Juntar continua sendo um clique.
 // O token só vai no cabeçalho Authorization: nunca em log, snapshot ou página. Git sem shell (execFile).
 import { execFile } from 'node:child_process';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { maskSecrets } from '../../shared/activity';
 import { tr } from '../../shared/i18n';
-import type { AgentInfo } from '../../shared/types';
+import type { AgentInfo, Provider } from '../../shared/types';
 import { errMsg, log } from '../log';
 import { FileTail } from '../sources/tail';
 import type { TerminalParser } from '../sources/terminal';
@@ -23,6 +28,8 @@ export const POLL_MS = 10_000;
 export const POLL_MAX_MS = 5 * 60_000;
 export const TODOS_QUIET_MS = 15_000;
 export const SUMMARY_MAX = 1_500;
+/** O relatório do portão (status 'review', server/chat/gate.ts REPORT_MAX) é mais longo que um resumo. */
+export const REVIEW_SUMMARY_MAX = 2_000;
 /** Agente que não apareceu na pasta neste prazo depois do "Iniciar": a subtarefa falha. */
 export const LINK_TIMEOUT_MS = 30 * 60_000;
 /** Ligações concluídas ficam este tempo (para não concluir duas vezes nem mostrar a subtarefa de novo). */
@@ -56,9 +63,12 @@ export interface VBoardsTaskView {
   date?: string;
   folder?: string;
   candidates: Array<{ path: string; name: string }>;
+  /** Conversas abertas (qualquer provedor) nas pastas da subtarefa, para "Ligar a uma conversa aberta". */
+  agents: Array<{ id: string; name: string; title?: string; provider: string; folder: string }>;
 }
 
-export type TaskStatus = 'running' | 'done' | 'failed';
+/** 'review': lista automática que passou pelo portão e espera a pessoa (relatório no resumo). */
+export type TaskStatus = 'running' | 'done' | 'failed' | 'review';
 
 /** Subtarefa iniciada daqui, ligada ao agente aberto para ela. */
 export interface TaskLink {
@@ -71,6 +81,8 @@ export interface TaskLink {
   spawnId: string;
   startedAt: number;
   agentId?: string;
+  /** Ligada à mão a uma conversa já aberta: só conclui quando a sessão acaba. */
+  manual?: boolean;
   /** O agente já esteve trabalhando. */
   worked?: boolean;
   state: TaskStatus;
@@ -123,6 +135,106 @@ export function matchFolders(cardTitle: string, folders: readonly Folder[]): str
   return folders.filter((f) => norm(baseName(f.path)) === want || (!!f.card && norm(f.card) === want)).map((f) => f.path);
 }
 
+/** Configuração de uma pasta no `git config --local` dela (a única fonte; a tela do escritório lê e grava lá). */
+export interface FolderConfig {
+  card?: string;
+  /** vboards.auto: abre sozinho as subtarefas desta pasta (padrão: não). */
+  auto: boolean;
+  provider: Provider;
+  /** vboards.budget: dólares por item. */
+  budget: number;
+  /** vboards.check: comando de shell do portão (instala as dependências: a cópia isolada não tem node_modules nem .env). */
+  check?: string;
+  reviewer: Provider;
+  reviewerModel?: string;
+}
+
+export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'reviewer', 'reviewerModel'] as const;
+export type FolderKey = (typeof FOLDER_KEYS)[number];
+export const DEFAULT_BUDGET_USD = 2;
+/** Prazo de cada rodada de um item da lista automática. */
+export const AUTO_TURN_MINUTES = 30;
+/** No git config o Antigravity é `agy` (o nome da CLI). */
+export const PROVIDER_NAMES: Record<string, Provider> = { claude: 'claude', codex: 'codex', agy: 'antigravity', antigravity: 'antigravity' };
+/** Modelo do revisor quando a pasta não diz: sonnet no Claude; Codex e agy ficam com o padrão da CLI. */
+export const DEFAULT_REVIEWER_MODEL: Record<Provider, string | undefined> = { claude: 'sonnet', codex: undefined, antigravity: undefined };
+
+/** `git config --get-regexp ^vboards\.` (chaves em minúsculas) vira a configuração, com os padrões. */
+export function parseFolderConfig(out: string | undefined): FolderConfig {
+  const raw = new Map<string, string>();
+  for (const line of (out ?? '').split(/\r?\n/)) {
+    const m = /^vboards\.(\S+)(?: (.*))?$/i.exec(line.trim());
+    if (m) raw.set(m[1].toLowerCase(), (m[2] ?? '').trim());
+  }
+  const provider = PROVIDER_NAMES[raw.get('provider')?.toLowerCase() ?? ''] ?? 'claude';
+  const reviewer = PROVIDER_NAMES[raw.get('reviewer')?.toLowerCase() ?? ''] ?? 'claude';
+  const budget = Number(raw.get('budget'));
+  return {
+    ...(raw.get('card') ? { card: raw.get('card') } : {}),
+    auto: raw.get('auto')?.toLowerCase() === 'true',
+    provider,
+    budget: Number.isFinite(budget) && budget > 0 ? budget : DEFAULT_BUDGET_USD,
+    ...(raw.get('check') ? { check: raw.get('check') } : {}),
+    reviewer,
+    ...((raw.get('reviewermodel') || DEFAULT_REVIEWER_MODEL[reviewer]) ? { reviewerModel: raw.get('reviewermodel') || DEFAULT_REVIEWER_MODEL[reviewer] } : {}),
+  };
+}
+
+export function readFolderConfig(folder: string): Promise<FolderConfig> {
+  return gitConfig(['--local', '--get-regexp', '^vboards\\.'], folder).then(parseFolderConfig);
+}
+
+/** A configuração como a tela mostra e grava: o Antigravity volta a ser `agy`, como no git config. */
+export type FolderConfigView = Omit<FolderConfig, 'provider' | 'reviewer'> & { provider: string; reviewer: string };
+const providerName = (p: Provider): string => (p === 'antigravity' ? 'agy' : p);
+export const folderConfigView = (c: FolderConfig): FolderConfigView => ({ ...c, provider: providerName(c.provider), reviewer: providerName(c.reviewer) });
+
+/**
+ * Valida o que a tela manda gravar (só as chaves presentes). Texto vazio = tirar a chave (volta ao padrão). Nada de
+ * quebra de linha: cada valor vira um argumento do `git config`, sem shell.
+ */
+export function validateFolderConfig(raw: unknown): { values: Partial<Record<FolderKey, string>> } | { error: string } {
+  const b = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const values: Partial<Record<FolderKey, string>> = {};
+  for (const key of FOLDER_KEYS) {
+    const v = b[key];
+    if (v === undefined) continue;
+    const s = typeof v === 'string' ? v.trim() : typeof v === 'number' || typeof v === 'boolean' ? String(v) : null;
+    if (s === null || /[\r\n\0]/.test(s)) return { error: tr('Valor inválido em vboards.{0}.', [key]) };
+    if (s === '') {
+      values[key] = '';
+      continue;
+    }
+    const ok =
+      key === 'auto' ? s === 'true' || s === 'false'
+      : key === 'provider' || key === 'reviewer' ? ['claude', 'codex', 'agy'].includes(s)
+      : key === 'budget' ? /^\d+(\.\d+)?$/.test(s) && Number(s) > 0 && Number(s) <= 1000
+      : key === 'reviewerModel' ? /^[\w.:/[\]-]{1,60}$/.test(s)
+      : key === 'card' ? s.length <= 100
+      : s.length <= 500; // check
+    if (!ok) return { error: tr('Valor inválido em vboards.{0}.', [key]) };
+    values[key] = s;
+  }
+  return { values };
+}
+
+/** Grava no git config --local da pasta (sem shell); valor vazio tira a chave. */
+export async function writeFolderConfig(folder: string, values: Partial<Record<FolderKey, string>>): Promise<string | undefined> {
+  for (const [key, value] of Object.entries(values)) {
+    const err = await new Promise<string | undefined>((ok) =>
+      execFile('git', ['config', '--local', ...(value ? [`vboards.${key}`, value] : ['--unset', `vboards.${key}`])], { cwd: folder, timeout: 5_000, windowsHide: true, encoding: 'utf8' }, (e, _out, stderr) =>
+        // --unset de uma chave que não existe sai com 5: já está como pedido.
+        ok(e && !(value === '' && (e as { code?: unknown }).code === 5) ? stderr.trim() || e.message : undefined),
+      ),
+    );
+    if (err) return err;
+  }
+  return undefined;
+}
+
+/** O pedido do agente para uma subtarefa. */
+export const taskPrompt = (t: Pick<AgentTask, 'cardTitle' | 'text'>): string => `${tr('Tarefa do VBoards (card {0}):', [t.cardTitle])} ${t.text}`;
+
 /** Nome do card para uma pasta: o vboards.card dela ou o nome da pasta. */
 export const cardName = (f: Folder): string => f.card?.trim() || baseName(f.path);
 
@@ -140,6 +252,8 @@ export function decideCompletion(link: Pick<TaskLink, 'worked'>, agent: Pick<Age
 }
 
 const EDIT_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit|apply_patch|file_change)$/;
+// `command` é o nome da ferramenta de shell do Codex no chat (drivers/codex.ts).
+const SHELL_TOOLS = /^(Bash|shell|command|command_execution)$/i;
 const GIT_COMMIT = /\bgit\s+(?:-\S+\s+)*commit\b/;
 
 /**
@@ -148,7 +262,7 @@ const GIT_COMMIT = /\bgit\s+(?:-\S+\s+)*commit\b/;
  */
 export function changedCode(a: Pick<AgentInfo, 'stats' | 'recent' | 'activity'>): boolean {
   if ((a.stats?.linesAdded ?? 0) > 0 || (a.stats?.linesRemoved ?? 0) > 0) return true;
-  return [...(a.recent ?? []), ...(a.activity ? [a.activity] : [])].some((x) => (!!x.tool && EDIT_TOOLS.test(x.tool)) || (!x.error && /^(Bash|shell|command_execution)$/i.test(x.tool ?? '') && GIT_COMMIT.test(x.detail ?? x.text)));
+  return [...(a.recent ?? []), ...(a.activity ? [a.activity] : [])].some((x) => (!!x.tool && EDIT_TOOLS.test(x.tool)) || (!x.error && SHELL_TOOLS.test(x.tool ?? '') && GIT_COMMIT.test(x.detail ?? x.text)));
 }
 
 /** Item da conversa no card: o título, feito ou não e, feito, o resumo. */
@@ -164,10 +278,10 @@ export function conversationText(title: string | undefined): string | undefined 
 }
 
 /** Resumo para o VBoards: mascarado e cortado. */
-export function summaryText(text: string | undefined): string | undefined {
+export function summaryText(text: string | undefined, max = SUMMARY_MAX): string | undefined {
   const s = maskSecrets(text ?? '').trim();
   if (!s) return undefined;
-  return s.length > SUMMARY_MAX ? `${s.slice(0, SUMMARY_MAX - 1)}…` : s;
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
 /**
@@ -243,12 +357,21 @@ export interface VBoardsServiceOptions {
   /** Novo agente; ausente = a fila não é buscada (dá para iniciar só com ele). */
   spawn?: { submit(raw: unknown): SpawnSubmit; get(id: string): SpawnInfo | undefined };
   /** Chat do escritório (server/chat): com ele, o "Iniciar" abre o agente pelo chat em vez do Novo agente. */
-  chat?: { open: ChatOpener; outcome?(agentId: string): 'done' | 'failed' | undefined };
+  /** `outcome`: 'review' = a lista automática passou pelo portão; undefined = ainda não acabou (rodando ou no portão). */
+  chat?: { open: ChatOpener; outcome?(agentId: string): 'done' | 'failed' | 'review' | undefined };
   /** Última resposta do agente (transcript). */
   reply?: (agentId: string) => string | undefined;
   booting?: () => boolean;
   /** vboards.card de uma pasta. */
   cardOf?: (folder: string) => Promise<string | undefined>;
+  /** Configuração da pasta (git config --local vboards.*) e a gravação dela (testes). */
+  folderConfig?: (folder: string) => Promise<FolderConfig>;
+  writeConfig?: (folder: string, values: Partial<Record<FolderKey, string>>) => Promise<string | undefined>;
+  /**
+   * Abertura automática: chamada a cada busca da fila com as subtarefas soltas de uma pasta com vboards.auto=true (a
+   * única pasta que combina com o card). Ausente (chat desligado) = nada abre sozinho.
+   */
+  auto?: (folder: string, tasks: Array<{ id: string; prompt: string }>, config: FolderConfig) => void;
   file?: string;
   fetch?: typeof fetch;
   now?: () => number;
@@ -313,6 +436,7 @@ export class VBoardsService {
       });
       this.delay = POLL_MS;
       this.lastError = undefined;
+      await this.autoStart().catch((err) => log.warnOnce(`vboards:auto:${errMsg(err)}`, tr('VBoards: abertura automática falhou ({0}).', [errMsg(err)])));
     } catch (err) {
       const msg = errMsg(err);
       if (msg !== this.lastError) log.warn(tr('VBoards: falha ao buscar as tarefas ({0}); tentando de novo mais tarde.', [msg]));
@@ -322,6 +446,24 @@ export class VBoardsService {
     clearTimeout(this.pollTimer);
     this.pollTimer = setTimeout(() => void this.poll(), this.delay);
     this.pollTimer.unref?.();
+  }
+
+  /** Subtarefas soltas cuja única pasta tem vboards.auto=true vão para o `auto`, agrupadas por pasta. */
+  private async autoStart(): Promise<void> {
+    if (!this.opts.auto) return;
+    const started = new Set(this.links.map((l) => l.id));
+    const queued = this.tasks.filter((t) => !started.has(taskId(t)));
+    if (!queued.length) return;
+    const folders = await this.knownFolders();
+    const byFolder = new Map<string, AgentTask[]>();
+    for (const t of queued) {
+      const m = matchFolders(t.cardTitle, folders);
+      if (m.length === 1) byFolder.set(m[0], [...(byFolder.get(m[0]) ?? []), t]);
+    }
+    for (const [folder, tasks] of byFolder) {
+      const config = await (this.opts.folderConfig ?? readFolderConfig)(folder);
+      if (config.auto) this.opts.auto(folder, tasks.map((t) => ({ id: taskId(t), prompt: taskPrompt(t) })), config);
+    }
   }
 
   /** Fila para a página (sem as já iniciadas daqui). */
@@ -340,8 +482,38 @@ export class VBoardsService {
         ...(t.date ? { date: t.date } : {}),
         ...(matches.length === 1 ? { folder: matches[0] } : {}),
         candidates: pool.map((f) => ({ path: f.path, name: baseName(f.path) })),
+        agents: this.attachable(matches.length ? matches : folders.map((f) => f.path)).map(({ agent: a, folder }) => ({ id: a.id, name: a.name, ...(a.title ? { title: a.title } : {}), provider: a.provider ?? 'claude', folder })),
       };
     });
+  }
+
+  /** Conversas abertas que podem ser ligadas a uma subtarefa: principais, de qualquer provedor, numa destas pastas e soltas. */
+  private attachable(folders: readonly string[]): Array<{ agent: AgentInfo; folder: string }> {
+    const linked = new Set(this.links.filter((l) => l.state === 'running').map((l) => l.agentId));
+    return this.opts.agents().flatMap((agent) => {
+      if (agent.kind !== 'main' || agent.status === 'offline' || agent.status === 'done' || linked.has(agent.id)) return [];
+      const p = this.opts.roomPath(agent.roomId);
+      const folder = p && folders.find((f) => samePath(f, p));
+      return folder ? [{ agent, folder }] : [];
+    });
+  }
+
+  /** "Ligar a uma conversa aberta": a subtarefa fica ligada a uma sessão que já existe (nada é aberto). */
+  async attach(raw: unknown): Promise<{ ok: true } | { status: number; error: string }> {
+    const body = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+    const task = this.tasks.find((t) => taskId(t) === body.id);
+    if (!task) return { status: 404, error: tr('tarefa do VBoards desconhecida: atualize a lista') };
+    if (this.links.some((l) => l.id === body.id)) return { status: 409, error: tr('esta tarefa já foi iniciada') };
+    const folders = await this.knownFolders();
+    const matches = matchFolders(task.cardTitle, folders);
+    const hit = this.attachable(matches.length ? matches : folders.map((f) => f.path)).find((x) => x.agent.id === body.agentId);
+    if (!hit) return { status: 400, error: tr('conversa não encontrada na pasta do projeto: atualize a lista') };
+    // Duas requisições durante a espera acima: só a primeira liga.
+    if (this.links.some((l) => l.id === body.id)) return { status: 409, error: tr('esta tarefa já foi iniciada') };
+    this.links.push({ id: taskId(task), cardId: task.cardId, subtaskId: task.subtaskId, folder: hit.folder, session: '', spawnId: '', agentId: hit.agent.id, manual: true, startedAt: this.now(), state: 'running' });
+    this.save();
+    void this.report();
+    return { ok: true };
   }
 
   /** "Iniciar": a pasta vem do próprio servidor (a única que combina, ou uma das conhecidas escolhida na página). */
@@ -360,7 +532,7 @@ export class VBoardsService {
     if (!picked) return { status: 400, error: tr('escolha a pasta do projeto (uma das sugeridas)') };
     // Dois cliques durante a espera acima: só o primeiro abre.
     if (this.links.some((l) => l.id === body.id)) return { status: 409, error: tr('esta tarefa já foi iniciada') };
-    const prompt = `${tr('Tarefa do VBoards (card {0}):', [task.cardTitle])} ${task.text}`;
+    const prompt = taskPrompt(task);
     if (chat) {
       // Pelo chat: o agente já tem id, então o link nasce ligado a ele (sem casar por pasta e horário).
       const extra = body.chat && typeof body.chat === 'object' ? (body.chat as Record<string, unknown>) : {};
@@ -378,6 +550,31 @@ export class VBoardsService {
     this.save();
     void this.report();
     return { spawn: r.spawn };
+  }
+
+  /** Pastas que a tela de configuração mostra: só as conhecidas (nada de caminho arbitrário). */
+  async configFolders(): Promise<Array<{ path: string; name: string }>> {
+    return (await this.knownFolders()).map((f) => ({ path: f.path, name: baseName(f.path) }));
+  }
+
+  /** Configuração de uma pasta conhecida (git config --local vboards.*). */
+  async folderSettings(folder: unknown): Promise<{ folder: string; config: FolderConfigView } | { status: number; error: string }> {
+    const known = typeof folder === 'string' ? (await this.knownFolders()).find((f) => samePath(f.path, folder)) : undefined;
+    if (!known) return { status: 400, error: tr('Pasta desconhecida: abra uma sessão nela antes.') };
+    return { folder: known.path, config: folderConfigView(await (this.opts.folderConfig ?? readFolderConfig)(known.path)) };
+  }
+
+  /** Grava a configuração de uma pasta conhecida. A trava de quem pode (só local) fica na rota (http/app.ts). */
+  async saveFolderSettings(raw: unknown): Promise<{ folder: string; config: FolderConfigView } | { status: number; error: string }> {
+    const body = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+    const known = typeof body.folder === 'string' ? (await this.knownFolders()).find((f) => samePath(f.path, body.folder as string)) : undefined;
+    if (!known) return { status: 400, error: tr('Pasta desconhecida: abra uma sessão nela antes.') };
+    const v = validateFolderConfig(body.config);
+    if ('error' in v) return { status: 400, error: v.error };
+    const err = await (this.opts.writeConfig ?? writeFolderConfig)(known.path, v.values);
+    if (err) return { status: 409, error: tr('Não deu para gravar no git config da pasta: {0}', [maskSecrets(err)]) };
+    this.cards.delete(known.path);
+    return this.folderSettings(known.path);
   }
 
   /** Liga agentes, conclui subtarefas e manda as conversas. */
@@ -430,13 +627,15 @@ export class VBoardsService {
       }
       // Logo depois de subir, o escritório ainda pode não ter remontado a sessão.
       if (!agent && now - this.startedAt < STARTUP_GRACE_MS) continue;
+      // Ligada à mão: a pessoa segue conversando nela, então só o fim da sessão conclui (não a primeira pausa).
+      if (l.manual && agent && agent.status !== 'offline' && agent.status !== 'done') continue;
       // Agente do chat: vale o resultado da rodada (respondeu ou falhou), não só ter parado depois de começar.
-      const chatEnd = agent?.chat && this.opts.chat?.outcome ? this.opts.chat.outcome(l.agentId!) : null;
+      const chatEnd = !l.manual && agent?.chat && this.opts.chat?.outcome ? this.opts.chat.outcome(l.agentId!) : null;
       if (chatEnd === undefined) continue;
       const end = chatEnd ?? decideCompletion(l, agent);
       if (!end) continue;
       l.state = end;
-      l.summary = end === 'done' ? summaryText(this.opts.reply?.(l.agentId!)) : undefined;
+      l.summary = end === 'failed' ? undefined : summaryText(this.opts.reply?.(l.agentId!), end === 'review' ? REVIEW_SUMMARY_MAX : SUMMARY_MAX);
       changed = true;
     }
     if (changed) this.save();
@@ -476,7 +675,8 @@ export class VBoardsService {
 
   private async syncTodos(): Promise<void> {
     const linked = new Set(this.links.map((l) => l.agentId));
-    const agents = this.opts.agents().filter((a) => a.kind === 'main' && (a.provider ?? 'claude') === 'claude' && a.status !== 'offline' && !linked.has(a.id));
+    // Qualquer provedor: o changedCode decide (o Antigravity IDE não informa ferramentas nem linhas, então nunca entra).
+    const agents = this.opts.agents().filter((a) => a.kind === 'main' && a.status !== 'offline' && !linked.has(a.id));
     const entries: Array<{ id: string; item: ConversationItem }> = [];
     for (const a of agents) {
       const text = conversationText(a.title);

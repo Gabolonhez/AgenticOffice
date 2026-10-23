@@ -64,3 +64,11 @@ describe('chat: driver do Claude', () => {
     expect(p.end(1, 'boom')).toEqual([{ type: 'done', ok: false, error: 'boom' }]);
   });
 });
+
+describe('chat: Claude sem push', () => {
+  it('denyPush: --disallowedTools com o git push, mesmo no automático', () => {
+    const args = claudeArgs({ ...base, denyPush: true });
+    expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Bash(git push:*)');
+    expect(claudeArgs(base)).not.toContain('--disallowedTools');
+  });
+});

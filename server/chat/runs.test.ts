@@ -26,6 +26,7 @@ function fakeChat() {
     stop: vi.fn(() => 'ok' as const),
     onTurnEnd: (cb: (id: string) => void) => void listeners.push(cb),
     restoreCwd: vi.fn(),
+    send: vi.fn((_id: string, _raw: unknown) => 'ok' as const),
   };
   const end = (id: string, outcome: 'done' | 'failed', reply?: string) => {
     outcomes.set(id, outcome);
@@ -47,6 +48,17 @@ const run = (r: ReturnType<RunService['create']> | Awaited<ReturnType<RunService
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe('chat: lista que roda um agente por item', () => {
+  it('hasTask: a tarefa do VBoards numa lista guardada (mesmo parada) não abre outra lista sozinha', async () => {
+    const vboards = { begin: vi.fn(async () => ({ agentId: 'chat:1' })) };
+    const { svc } = setup({ vboards });
+    expect(svc.hasTask('c:s')).toBe(false);
+    const r = run(await svc.create({ items: [{ text: 'a', vboardsTaskId: 'c:s' }, { text: 'b', vboardsTaskId: 'c:t' }], options }));
+    expect(svc.hasTask('c:t')).toBe(true);
+    svc.stop(r.id);
+    expect(svc.hasTask('c:t')).toBe(true);
+    expect(svc.hasTask('c:u')).toBe(false);
+  });
+
   it('valida antes de abrir qualquer agente', async () => {
     const { svc, opened } = setup();
     expect(await svc.create({ items: [], options })).toMatchObject({ status: 400 });
@@ -160,7 +172,7 @@ describe('chat: lista que roda um agente por item', () => {
     const create = vi.fn(async () => ({ path: 'C:\\wt', branch: 'agentic/lista-1', base: 'abc' }));
     const merge = vi.fn(async () => ({ ok: true as const }));
     const discard = vi.fn(async () => ({ ok: true as const }));
-    const worktrees = { create, merge, discard, summary: vi.fn() };
+    const worktrees = { create, merge, discard, summary: vi.fn(), diff: vi.fn() };
     const { svc, opened, end, chat } = setup({ worktrees });
     await svc.create({ items: items('a', 'b'), options, isolated: true });
     await flush();
@@ -177,7 +189,7 @@ describe('chat: lista que roda um agente por item', () => {
   });
 
   it('cópia que não nasce: a lista falha sem abrir agente', async () => {
-    const worktrees = { create: vi.fn(async () => ({ error: 'não é git' })), merge: vi.fn(), discard: vi.fn(), summary: vi.fn() };
+    const worktrees = { create: vi.fn(async () => ({ error: 'não é git' })), merge: vi.fn(), discard: vi.fn(), summary: vi.fn(), diff: vi.fn() };
     const { svc, opened } = setup({ worktrees });
     await svc.create({ items: items('a'), options, isolated: true });
     await flush();
@@ -200,5 +212,52 @@ describe('chat: lista que roda um agente por item', () => {
     await flush();
     expect(svc.get('r1')?.items[1]).toMatchObject({ state: 'failed', summary: 'esta tarefa já foi iniciada' });
     expect(opened.map((o) => o.raw.prompt)).toEqual(['T1', 'livre']);
+  });
+
+  it('lista automática: portão reprova → volta uma vez ao agente → item em review com o relatório; nunca junta', async () => {
+    const worktrees = { create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(), discard: vi.fn(), summary: vi.fn(), diff: vi.fn(async () => 'diff --git a/x b/x') };
+    const failed = { ok: false, tail: 'teste quebrou' };
+    // O item 1 reprova duas vezes (antes e depois da correção); o item 2 passa.
+    const gate = { checks: vi.fn(async (_cmd: string, _cwd: string) => ({ ok: true, tail: '' })).mockResolvedValueOnce(failed).mockResolvedValueOnce(failed), review: vi.fn(async () => ({ ok: true, findings: 'OK', by: 'claude/sonnet' })) };
+    const { svc, opened, end, chat } = setup({ worktrees, gate });
+    svc.create({ items: items('a', 'b'), options, isolated: true }, { check: 'npm test', reviewer: 'claude', reviewerModel: 'sonnet' });
+    await flush();
+    end('chat:1', 'done', 'Feito.');
+    await flush();
+    expect(gate.checks).toHaveBeenCalledWith('npm test', 'C:\wt');
+    expect(chat.send).toHaveBeenCalledTimes(1);
+    expect(chat.send.mock.calls[0][0]).toBe('chat:1');
+    expect(svc.gateState('chat:1')).toBe('pending');
+    expect(opened).toHaveLength(1);
+    end('chat:1', 'done', 'Corrigi.');
+    await flush();
+    expect(chat.send).toHaveBeenCalledTimes(1);
+    const item = svc.get('r1')!.items[0];
+    expect(item).toMatchObject({ state: 'review', retried: true });
+    expect(item.report).toContain('agentic/lista-1');
+    expect(item.report).toContain('teste quebrou');
+    expect(svc.gateState('chat:1')).toBe('review');
+    expect(svc.reportOf('chat:1')).toBe(item.report);
+    expect(opened).toHaveLength(2);
+    end('chat:2', 'done');
+    await flush();
+    expect(svc.get('r1')?.state).toBe('done');
+    expect(worktrees.merge).not.toHaveBeenCalled();
+    expect(worktrees.discard).not.toHaveBeenCalled();
+  });
+
+  it('lista automática que passa no portão: review direto, sem mandar nada ao agente', async () => {
+    const worktrees = { create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(), discard: vi.fn(), summary: vi.fn(), diff: vi.fn(async () => '') };
+    const gate = { checks: vi.fn(async () => ({ ok: true, tail: '' })), review: vi.fn() };
+    const { svc, end, chat } = setup({ worktrees, gate });
+    svc.create({ items: items('a'), options, isolated: true }, { reviewer: 'codex' });
+    await flush();
+    end('chat:1', 'done', 'Feito.');
+    await flush();
+    expect(gate.checks).not.toHaveBeenCalled(); // sem vboards.check
+    expect(gate.review).not.toHaveBeenCalled(); // diff vazio
+    expect(chat.send).not.toHaveBeenCalled();
+    expect(svc.get('r1')?.items[0].state).toBe('review');
+    expect(worktrees.merge).not.toHaveBeenCalled();
   });
 });

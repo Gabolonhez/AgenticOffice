@@ -59,13 +59,14 @@ import { OwnerSocial } from './world/social';
 import { BuildingTokens } from './world/tokens';
 import { BuildingUplink } from './world/uplink';
 import { WorldViewer } from './world/viewer';
-import { lastReply, loadVBoardsConfig, VBoardsService } from './vboards/vboards';
+import { AUTO_TURN_MINUTES, lastReply, loadVBoardsConfig, VBoardsService } from './vboards/vboards';
 import { Delegation } from './chat/delegation';
 import { createChatRoutes } from './chat/http';
 import { claudeRunner, DaySummaryService, gitSubjectsToday, summaryCwd } from './summary/service';
 import { ChatService, chatOffReason } from './chat/service';
 import { createWorktreeOps } from './chat/worktree';
 import { RunService } from './chat/runs';
+import { reviewDiff, runChecks } from './chat/gate';
 import { officeApprover, TriggerService } from './chat/triggers';
 
 const config = loadConfig();
@@ -88,7 +89,7 @@ const roomAliases = new RoomAliases(join(config.dataDir, 'rooms.json'));
 roomAliases.load();
 
 // Office, contas e fontes de agentes se referenciam (avisos de mudança / fontes): ligação tardia.
-const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; ptys?: PtyManager; ptyOff?: string; chat?: ChatService } = {};
+const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; ptys?: PtyManager; ptyOff?: string; chat?: ChatService; runs?: RunService } = {};
 // Versão nova: consulta a release mais recente no GitHub a cada 6 h (HABBLAUD_UPDATE_CHECK=0 desliga).
 const updates = new UpdateChecker({
   current: config.version,
@@ -355,14 +356,41 @@ const vboards =
         // Com o chat (fora do Docker e com HABBLAUD_PTY=1), o "Iniciar" abre o agente por ele (o chat nasce mais abaixo).
         chat: chatOff
           ? undefined
-          : { open: (raw: unknown) => late.chat?.open(raw) ?? { error: 'unavailable', reason: chatOff ?? '' }, outcome: (id: string) => late.chat?.turnOutcome(id) },
+          : {
+              open: (raw: unknown) => late.chat?.open(raw) ?? { error: 'unavailable', reason: chatOff ?? '' },
+              // Lista automática: nada conclui enquanto o portão (chat/gate.ts) roda; no fim, 'review'.
+              outcome: (id: string) => {
+                const gate = late.runs?.gateState(id);
+                return gate === 'pending' ? undefined : gate ?? late.chat?.turnOutcome(id);
+              },
+            },
         reply: (id) => {
+          const report = late.runs?.reportOf(id);
+          if (report) return report;
           const fromChat = late.chat?.lastReply(id);
           if (fromChat) return fromChat;
           const path = agents.transcriptPathOf(id);
           return path ? lastReply(path, agents.parserFor(id)) : undefined;
         },
         booting: () => office.isBooting(),
+        // Opt-in por pasta (git config --local vboards.auto true): uma lista do chat por pasta, na cópia isolada, sem
+        // push. Uma lista por vez (a regra das listas): com outra rodando, espera a próxima busca. Nunca junta sozinho.
+        auto: chatOff
+          ? undefined
+          : (folder, tasks, cfg) => {
+              const runs = late.runs;
+              const fresh = runs ? tasks.filter((t) => !runs.hasTask(t.id)) : [];
+              if (!runs || !fresh.length) return;
+              const r = runs.create(
+                {
+                  items: fresh.map((t) => ({ text: t.prompt, vboardsTaskId: t.id })),
+                  isolated: true,
+                  options: { folder, provider: cfg.provider, permission: 'auto', denyPush: true, limits: { maxCostUsd: cfg.budget, maxTurnMinutes: AUTO_TURN_MINUTES } },
+                },
+                { ...(cfg.check ? { check: cfg.check } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}) },
+              );
+              if ('error' in r && r.status !== 409) log.warnOnce(`vboards:auto:${r.error}`, tr('VBoards: não abriu a lista automática de {0} ({1}).', [folder, r.error]));
+            },
         file: join(config.dataDir, 'vboards-links.json'),
       });
 vboards?.load();
@@ -412,7 +440,17 @@ late.chat = chat;
 // Agentes conversando entre si (chat/delegation.ts): só com o registro de permissões, que mostra os cartões de aprovação.
 const delegation = chat && permissions ? new Delegation({ chat, registry: permissions, folders: () => chatFolders }) : undefined;
 // Listas (chat/runs.ts): um agente do chat por item, em sequência; só começam com o "Rodar lista" da página.
-const runs = chat ? new RunService({ chat, vboards, worktrees: createWorktreeOps(config.dataDir), file: join(config.dataDir, 'chat', 'runs.json') }) : undefined;
+const runs = chat
+  ? new RunService({
+      chat,
+      vboards,
+      worktrees: createWorktreeOps(config.dataDir),
+      // Portão das listas automáticas do VBoards: checagens na cópia e revisão só do diff, numa pasta neutra.
+      gate: { checks: (cmd, cwd) => runChecks(cmd, cwd), review: (auto, diff) => reviewDiff(auto, diff, join(config.dataDir, 'review')) },
+      file: join(config.dataDir, 'chat', 'runs.json'),
+    })
+  : undefined;
+late.runs = runs;
 // Gatilhos (chat/triggers.ts): todo disparo vira um cartão de aprovação; sem o registro de permissões, não existem.
 const triggers =
   chat && permissions

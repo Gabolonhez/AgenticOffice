@@ -1,7 +1,11 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentInfo } from '../../shared/types';
 import { setQuiet } from '../log';
-import { baseFromUrl, decideCompletion, matchFolders, resolveConfig, SUMMARY_MAX, TodoTracker, TODOS_QUIET_MS, VBoardsService } from './vboards';
+import { baseFromUrl, decideCompletion, matchFolders, parseFolderConfig, readFolderConfig, resolveConfig, validateFolderConfig, writeFolderConfig, REVIEW_SUMMARY_MAX, SUMMARY_MAX, TodoTracker, TODOS_QUIET_MS, VBoardsService, type FolderConfig } from './vboards';
 
 setQuiet(true);
 const flush = () => new Promise((ok) => setTimeout(ok, 0));
@@ -80,7 +84,7 @@ describe('serviço', () => {
   const mainAgent = (p: Partial<AgentInfo>): AgentInfo =>
     ({ id: 'acc:1', kind: 'main', roomId: 'r1', name: 'Ana', look: 'f', role: '', sessionId: 's', account: 'acc', status: 'idle', recent: [], tasks: [], startedAt: 2_000, lastEventAt: 0, statusSince: 0, stats: { toolCalls: 0, tokensIn: 0, tokensOut: 0, subagents: 0, linesAdded: 1 }, seed: 1, ...p }) as AgentInfo;
 
-  function setup(over: { spawnStatus?: 'opened' | 'failed'; chat?: boolean; outcome?: 'done' | 'failed' } = {}) {
+  function setup(over: { spawnStatus?: 'opened' | 'failed'; chat?: boolean; outcome?: 'done' | 'failed' | 'review' } = {}) {
     let now = 100_000;
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -156,6 +160,20 @@ describe('serviço', () => {
     const updates = calls.filter((c) => c.url.endsWith('/update')).map((c) => JSON.parse(String(c.init.body)));
     expect(updates.map((u) => u.status)).toEqual(['running', 'done']);
     expect(updates[1].summary).toBe('Feito: login corrigido.');
+  });
+
+  it('lista automática: outcome review vai como review, com o relatório do portão (até 2000)', async () => {
+    const { svc, calls, setAgents, setReply } = setup({ chat: true, outcome: 'review' });
+    await svc.poll();
+    svc.stop();
+    await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web' });
+    setReply(`Branch: agentic/lista-1 ${'r'.repeat(3000)}`);
+    setAgents([mainAgent({ id: 'chat:1', chat: true, status: 'idle' })]);
+    await svc.check();
+    await flush();
+    const updates = calls.filter((c) => c.url.endsWith('/update')).map((c) => JSON.parse(String(c.init.body)));
+    expect(updates.map((u) => u.status)).toEqual(['running', 'review']);
+    expect(updates[1].summary).toHaveLength(REVIEW_SUMMARY_MAX);
   });
 
   it('com o chat: o pedido editado na janela vale no lugar do texto da tarefa', async () => {
@@ -256,9 +274,61 @@ describe('serviço', () => {
       mainAgent({ id: 'a:1', title: 'Só perguntas', status: 'idle', stats: noStats, recent: [act('Read')] }),
       mainAgent({ id: 'a:2', title: 'Com edição', status: 'idle', stats: noStats, recent: [act('Edit')] }),
       mainAgent({ id: 'a:3', title: 'Só commit', status: 'idle', stats: noStats, recent: [act('Bash', 'git commit -m "x"')] }),
+      mainAgent({ id: 'a:4', provider: 'codex', title: 'Codex no chat', status: 'idle', stats: noStats, recent: [act('command', 'git commit -m y')] }),
     ]);
     await settle();
-    expect(titles().sort()).toEqual(['Com edição', 'Só commit']);
+    expect(titles().sort()).toEqual(['Codex no chat', 'Com edição', 'Só commit']);
+  });
+
+  it('ligar a uma conversa aberta: lista a sessão da pasta (qualquer provedor), cria o link e manda running', async () => {
+    const { svc, calls, setAgents } = setup();
+    await svc.poll();
+    svc.stop();
+    setAgents([mainAgent({ id: 'codex:1', provider: 'codex', title: 'No VS Code', status: 'working' }), mainAgent({ id: 'x:2', roomId: 'r9' })]);
+    const [view] = await svc.list();
+    expect(view.agents).toEqual([{ id: 'codex:1', name: 'Ana', title: 'No VS Code', provider: 'codex', folder: '/p/payposts-web' }]);
+    expect(await svc.attach({ id: 'c1:s1', agentId: 'x:2' })).toMatchObject({ status: 400 });
+    expect(await svc.attach({ id: 'nada', agentId: 'codex:1' })).toMatchObject({ status: 404 });
+    expect(await svc.attach({ id: 'c1:s1', agentId: 'codex:1' })).toEqual({ ok: true });
+    expect(await svc.attach({ id: 'c1:s1', agentId: 'codex:1' })).toMatchObject({ status: 409 });
+    expect(await svc.list()).toEqual([]);
+    await svc.check();
+    await flush();
+    expect(calls.filter((c) => c.url.endsWith('/update')).map((c) => JSON.parse(String(c.init.body)).status)).toEqual(['running']);
+  });
+
+  it('conversa ligada à mão sai das conversas do card', async () => {
+    const { svc, calls, setAgents, tick } = setup();
+    await svc.poll();
+    svc.stop();
+    setAgents([mainAgent({ id: 'a:1', title: 'Trabalho no VS Code', status: 'working' })]);
+    await svc.attach({ id: 'c1:s1', agentId: 'a:1' });
+    await svc.check();
+    tick(TODOS_QUIET_MS);
+    await svc.check();
+    await svc.check();
+    expect(calls.filter((c) => c.url.endsWith('/todos'))).toEqual([]);
+  });
+
+  it('ligada à mão: só conclui quando a sessão acaba, não na primeira pausa', async () => {
+    const { svc, calls, setAgents, setReply } = setup();
+    const statuses = () => calls.filter((c) => c.url.endsWith('/update')).map((c) => JSON.parse(String(c.init.body)).status);
+    await svc.poll();
+    svc.stop();
+    setAgents([mainAgent({ id: 'a:1', status: 'working', stats: { toolCalls: 1, tokensIn: 1, tokensOut: 9, subagents: 0 } })]);
+    await svc.attach({ id: 'c1:s1', agentId: 'a:1' });
+    await svc.check();
+    setAgents([mainAgent({ id: 'a:1', status: 'idle', stats: { toolCalls: 1, tokensIn: 1, tokensOut: 9, subagents: 0 } })]);
+    await svc.check();
+    await svc.check();
+    await flush();
+    expect(statuses()).toEqual(['running']);
+    setReply('Terminei no VS Code.');
+    setAgents([mainAgent({ id: 'a:1', status: 'offline', stats: { toolCalls: 1, tokensIn: 1, tokensOut: 9, subagents: 0 } })]);
+    await svc.check();
+    await flush();
+    expect(statuses()).toEqual(['running', 'done']);
+    expect(JSON.parse(String(calls.filter((c) => c.url.endsWith('/update')).at(-1)!.init.body)).summary).toBe('Terminei no VS Code.');
   });
 
   it('agente ligado a uma subtarefa não vira item de conversa', async () => {
@@ -304,3 +374,110 @@ describe('VBoards e o resultado do chat', () => {
     expect(calls).toEqual(['running', 'failed']);
   });
 });
+
+describe('configuração da pasta (git config --local vboards.*)', () => {
+  it('padrões: desligado, claude, US$ 2, revisor claude com sonnet; agy é o Antigravity', () => {
+    expect(parseFolderConfig(undefined)).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'sonnet' });
+    const out = 'vboards.card PostsBuilder\nvboards.auto TRUE\nvboards.provider agy\nvboards.budget 0.75\nvboards.check npm ci && npm test\nvboards.reviewer codex';
+    expect(parseFolderConfig(out)).toEqual({ card: 'PostsBuilder', auto: true, provider: 'antigravity', budget: 0.75, check: 'npm ci && npm test', reviewer: 'codex' });
+    expect(parseFolderConfig('vboards.auto yes\nvboards.budget -1\nvboards.provider gpt\nvboards.reviewermodel opus')).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'opus' });
+  });
+});
+
+describe('abertura automática (opt-in)', () => {
+  const tasks = [
+    { cardId: 'c1', subtaskId: 's1', text: 'Login', cardTitle: 'Posts Builder' },
+    { cardId: 'c1', subtaskId: 's2', text: 'Logout', cardTitle: 'Posts Builder' },
+    { cardId: 'c2', subtaskId: 's1', text: 'X', cardTitle: 'outro' },
+    { cardId: 'c3', subtaskId: 's1', text: 'Y', cardTitle: 'Agentic Office' },
+  ];
+  const cfg = (auto: boolean): FolderConfig => ({ auto, provider: 'codex', budget: 1, reviewer: 'claude', reviewerModel: 'sonnet' });
+  function setup(withAuto = true) {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify(String(url).includes('/api/agent-tasks?') ? { tasks } : { ok: true }), { status: 200 }));
+    const auto = vi.fn();
+    const folderConfig = vi.fn(async (f: string) => cfg(f.endsWith('payposts-web') || f.includes('office')));
+    const svc = new VBoardsService({
+      config: { base: 'https://vb.dev', token: 't', email: 'eu@x' },
+      agents: () => [],
+      roomPath: () => undefined,
+      folders: async () => ['/p/payposts-web', '/p/outro', '/a/agentic-office', '/b/agentic_office'],
+      cardOf: async (f) => (f.endsWith('payposts-web') ? 'PostsBuilder' : undefined),
+      chat: { open: () => ({ agentId: 'chat:1' }) },
+      folderConfig,
+      ...(withAuto ? { auto } : {}),
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    return { svc, auto, folderConfig };
+  }
+
+  it('só com vboards.auto=true e exatamente uma pasta; as soltas da pasta vão juntas', async () => {
+    const { svc, auto } = setup();
+    await svc.poll();
+    svc.stop();
+    expect(auto).toHaveBeenCalledTimes(1);
+    expect(auto).toHaveBeenCalledWith('/p/payposts-web', [{ id: 'c1:s1', prompt: 'Tarefa do VBoards (card Posts Builder): Login' }, { id: 'c1:s2', prompt: 'Tarefa do VBoards (card Posts Builder): Logout' }], cfg(true));
+  });
+
+  it('a subtarefa já ligada a um agente não vai de novo', async () => {
+    const { svc, auto } = setup();
+    await svc.poll();
+    svc.stop();
+    await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web' });
+    await svc.poll();
+    svc.stop();
+    expect(auto.mock.calls[1][1]).toEqual([{ id: 'c1:s2', prompt: 'Tarefa do VBoards (card Posts Builder): Logout' }]);
+  });
+
+  it('sem o chat (sem auto): nada abre e a configuração das pastas nem é lida', async () => {
+    const { svc, folderConfig } = setup(false);
+    await svc.poll();
+    svc.stop();
+    expect(folderConfig).not.toHaveBeenCalled();
+    expect(await svc.list()).toHaveLength(4);
+  });
+});
+
+describe('tela de configuração das pastas', () => {
+  it('valida: enums, orçamento numérico, sem quebra de linha; vazio tira a chave', () => {
+    expect(validateFolderConfig({ auto: true, provider: 'agy', budget: '1.5', check: 'npm ci && npm test', reviewer: 'codex', reviewerModel: 'gpt-5.1', card: 'Posts' })).toEqual({
+      values: { card: 'Posts', auto: 'true', provider: 'agy', budget: '1.5', check: 'npm ci && npm test', reviewer: 'codex', reviewerModel: 'gpt-5.1' },
+    });
+    expect(validateFolderConfig({ check: '', reviewerModel: '' })).toEqual({ values: { check: '', reviewerModel: '' } });
+    for (const bad of [{ auto: 'sim' }, { provider: 'gemini' }, { reviewer: 'antigravity' }, { budget: 'dois' }, { budget: 0 }, { budget: '-1' }, { check: 'npm test\nrm -rf /' }, { reviewerModel: 'a b' }, { card: {} }]) {
+      expect(validateFolderConfig(bad)).toHaveProperty('error');
+    }
+  });
+
+  it('só grava em pasta conhecida, com os valores validados', async () => {
+    const writeConfig = vi.fn(async () => undefined);
+    const svc = new VBoardsService({
+      config: { base: 'https://vb.dev', token: 't', email: 'eu@x' },
+      agents: () => [],
+      roomPath: () => undefined,
+      folders: async () => ['/p/app'],
+      cardOf: async () => undefined,
+      folderConfig: async () => parseFolderConfig('vboards.auto true'),
+      writeConfig,
+      fetch: vi.fn() as unknown as typeof fetch,
+    });
+    expect(await svc.saveFolderSettings({ folder: '/etc', config: { auto: true } })).toMatchObject({ status: 400 });
+    expect(await svc.saveFolderSettings({ folder: '/p/app', config: { budget: 'x' } })).toMatchObject({ status: 400 });
+    expect(writeConfig).not.toHaveBeenCalled();
+    expect(await svc.saveFolderSettings({ folder: '/p/app/', config: { auto: true, provider: 'agy' } })).toMatchObject({ folder: '/p/app', config: { auto: true } });
+    expect(writeConfig).toHaveBeenCalledWith('/p/app', { auto: 'true', provider: 'agy' });
+    expect(await svc.folderSettings('/p/app')).toMatchObject({ config: { provider: 'claude', reviewer: 'claude' } });
+  });
+});
+
+describe('git config --local de verdade', () => {
+  it('grava, lê de volta e tira (tirar o que não existe não é erro)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hb-vb-cfg-'));
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    expect(await writeFolderConfig(dir, { auto: 'true', provider: 'agy', check: 'npm ci && npm test', reviewerModel: '' })).toBeUndefined();
+    expect(await readFolderConfig(dir)).toMatchObject({ auto: true, provider: 'antigravity', check: 'npm ci && npm test' });
+    expect(await writeFolderConfig(dir, { check: '' })).toBeUndefined();
+    expect(await readFolderConfig(dir)).not.toHaveProperty('check');
+    expect(await writeFolderConfig(mkdtempSync(join(tmpdir(), 'hb-vb-nogit-')), { auto: 'true' })).toEqual(expect.any(String));
+  });
+});
+

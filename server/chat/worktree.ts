@@ -10,6 +10,16 @@ import type { WorktreeOps } from './types';
 
 type Git = (args: string[], cwd: string) => Promise<{ code: number; out: string }>;
 
+/**
+ * Trava de push para qualquer provedor (best effort): pushInsteadOf com prefixo vazio reescreve todo endereço de push
+ * para um esquema que não existe, então `git push` falha e o fetch segue normal. Vale para o processo do agente e os
+ * shells dele (o env é herdado); soma às entradas GIT_CONFIG_* que já houver.
+ */
+export function noPushEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  const n = Number(env.GIT_CONFIG_COUNT) || 0;
+  return { GIT_CONFIG_COUNT: String(n + 1), [`GIT_CONFIG_KEY_${n}`]: 'url.habblaud-no-push://.pushInsteadOf', [`GIT_CONFIG_VALUE_${n}`]: '' };
+}
+
 const realGit: Git = (args, cwd) =>
   new Promise((ok) => {
     execFile('git', args, { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
@@ -59,6 +69,12 @@ export function createWorktreeOps(dataDir: string, git: Git = realGit): Worktree
       const commits = Number((await git(['rev-list', '--count', `${w.base}..HEAD`], w.path)).out) || 0;
       const stat = (await git(['diff', '--stat', w.base], w.path)).out;
       return { files, added, removed, commits, stat };
+    },
+
+    async diff(w) {
+      // intent-to-add: os arquivos novos entram no diff sem ir para o índice de verdade.
+      await git(['add', '-A', '-N'], w.path);
+      return (await git(['diff', w.base], w.path)).out;
     },
 
     async merge(repo, w, message) {

