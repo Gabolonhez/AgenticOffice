@@ -512,6 +512,9 @@ próprio computador.
 | `HABBLAUD_WORLD_URL` | — (desligado) | servidor do Habblaud World: só `https://` ou `wss://`, sem caminho; `http://127.0.0.1:*` só no modo dev. O prédio sobe pelo WebSocket na mesma origem (`/v1/socket`) |
 | `HABBLAUD_WORLD` | ligado | `0` (`false`, `off`, `no`) esconde o Habblaud World: rotas 404 e nada na interface |
 | `HABBLAUD_WORLD_DEV` | desligado (`--dev` liga) | `1` aceita o servidor do mundo em `http://127.0.0.1` ou `ws://127.0.0.1` |
+| `HABBLAUD_MAX_PARALLEL_RUNS` | `2` | listas do chat (`chat/runs.ts`) rodando ao mesmo tempo, somando as pastas (mínimo 1); na mesma pasta, sempre uma de cada vez |
+| `HABBLAUD_QUOTA_PAUSE_5H` | `90` | percentual da sessão de 5 h da conta em que as listas pausam (`chat/quota.ts`); número velho ou desconhecido não trava |
+| `HABBLAUD_QUOTA_PAUSE_WEEK` | `95` | o mesmo para o limite semanal |
 
 No hook de permissão (ambiente do Claude Code; os argumentos `--port`/`--timeout` gravados pelo instalador têm
 preferência): `HABBLAUD_PORT` (porta do Habblaud, padrão `4747`), `HABBLAUD_PERMISSION_TIMEOUT` (segundos de espera

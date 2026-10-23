@@ -11187,6 +11187,128 @@ html.is-replay #world {
   overflow-wrap: anywhere;
 }
 
+.ui-runs__comment {
+  grid-column: 2;
+  justify-self: start;
+  font-size: 11px;
+}
+
+/* Diff da cópia isolada com comentários por linha (ui/run-diff.ts): cada arquivo rola na horizontal. */
+.ui-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ui-diff__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.ui-diff__head .ui-spawn__label {
+  overflow-wrap: anywhere;
+}
+
+.ui-diff__file {
+  border: 1px solid var(--ui-line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.ui-diff__name {
+  margin: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+  background: var(--ui-bg-soft);
+  overflow-wrap: anywhere;
+}
+
+.ui-diff__lines {
+  display: flex;
+  flex-direction: column;
+  max-height: 50vh;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.ui-diff__line {
+  display: flex;
+  gap: 8px;
+  min-width: max-content;
+  margin: 0;
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: pre;
+}
+
+button.ui-diff__line {
+  cursor: pointer;
+}
+
+button.ui-diff__line:hover,
+button.ui-diff__line:focus-visible {
+  background: var(--ui-bg-hover);
+}
+
+.ui-diff__line.is-add {
+  background: color-mix(in srgb, var(--ui-ok, #3fb950) 16%, transparent);
+}
+
+.ui-diff__line.is-del {
+  background: color-mix(in srgb, var(--ui-danger, #f85149) 16%, transparent);
+}
+
+.ui-diff__line.is-hunk,
+.ui-diff__line.is-meta {
+  color: var(--ui-muted);
+}
+
+.ui-diff__num {
+  min-width: 4ch;
+  text-align: right;
+  color: var(--ui-faint);
+  user-select: none;
+}
+
+.ui-diff__editor,
+.ui-diff__note {
+  display: flex;
+  gap: 6px;
+  position: sticky;
+  left: 0;
+  padding: 4px 6px;
+  white-space: normal;
+  background: var(--ui-bg-soft);
+}
+
+.ui-diff__editor {
+  flex-direction: column;
+}
+
+.ui-diff__note {
+  align-items: flex-start;
+  justify-content: space-between;
+  border-left: 2px solid var(--ui-accent);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+@media (pointer: coarse) {
+  .ui-diff__line {
+    min-height: 26px;
+    align-items: center;
+  }
+}
+
 /* Chat com agentes abertos pelo escritório (ui/chat.ts). */
 .ui-chat {
   display: flex;

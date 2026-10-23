@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discoverClaudeDirs } from './accounts/detect';
+import type { QuotaLimits } from './chat/quota';
 import { parseAllowedHosts } from './http/guard';
 import { parseRemoteConfig, type RemoteConfig } from './http/remote';
 import { parseGithubRepo } from './updates/checker';
@@ -60,6 +61,10 @@ export interface ServerConfig {
   remoteWarning?: string;
   /** Habblaud World (server/world/): conta, personagem e, nas próximas fases, o prédio no mundo. */
   world: WorldConfig;
+  /** Listas do chat (server/chat/runs.ts): quantas rodam ao mesmo tempo, somando as pastas (HABBLAUD_MAX_PARALLEL_RUNS). */
+  maxParallelRuns: number;
+  /** Listas pausam com a cota da conta neste percentual (HABBLAUD_QUOTA_PAUSE_5H / _WEEK; server/chat/quota.ts). */
+  quotaPause: QuotaLimits;
 }
 
 export interface WorldConfig {
@@ -77,6 +82,12 @@ export interface WorldConfig {
   dev: boolean;
   /** Por que HABBLAUD_WORLD_URL foi recusada (vai para o log ao iniciar). */
   warning?: string;
+}
+
+/** Inteiro de uma variável de ambiente entre min e max; vazio ou inválido = o padrão. */
+export function envInt(v: string | undefined, def: number, min: number, max = Number.MAX_SAFE_INTEGER): number {
+  const n = Number(v?.trim() || Number.NaN);
+  return Number.isInteger(n) && n >= min && n <= max ? n : def;
 }
 
 export function isTruthy(v: string | undefined): boolean {
@@ -244,5 +255,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, argv: string[] 
     remote: remote.config,
     remoteWarning: remote.warning,
     world: parseWorldConfig(env, argv),
+    maxParallelRuns: envInt(env.HABBLAUD_MAX_PARALLEL_RUNS, 2, 1),
+    quotaPause: { fiveHour: envInt(env.HABBLAUD_QUOTA_PAUSE_5H, 90, 1, 100), week: envInt(env.HABBLAUD_QUOTA_PAUSE_WEEK, 95, 1, 100) },
   };
 }

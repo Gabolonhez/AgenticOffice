@@ -1,6 +1,7 @@
 // Lista que roda um agente por item (ui/runs.ts): o pedido de POST /api/chat/runs e os nomes dos estados.
 import { tr } from '../../../shared/i18n';
-import { RUN_ITEMS_MAX, type RunCreateRequest, type RunItemState, type RunState } from '../../../shared/runs';
+import { RUN_ITEMS_MAX, type ChatRun, type RunCreateRequest, type RunItemState, type RunState } from '../../../shared/runs';
+import { formatResetAt } from './format';
 import { toRequest, type OpenForm } from './spawn-model';
 
 export type RunSource = Array<{ text: string; vboardsTaskId?: string }>;
@@ -15,7 +16,7 @@ export function toRunRequest(form: OpenForm, items: RunSource, context: string, 
 }
 
 export function runStateLabel(s: RunState): string {
-  return { running: tr('rodando'), paused: tr('pausada (o servidor reiniciou)'), stopped: tr('parada'), failed: tr('parou com falha'), done: tr('terminou') }[s];
+  return { queued: tr('na fila (espera a pasta ou uma vaga)'), running: tr('rodando'), paused: tr('pausada (o servidor reiniciou)'), stopped: tr('parada'), failed: tr('parou com falha'), done: tr('terminou') }[s];
 }
 
 export function itemStateLabel(s: RunItemState): string {
@@ -23,3 +24,14 @@ export function itemStateLabel(s: RunItemState): string {
 }
 
 export const ITEM_MARK: Record<RunItemState, string> = { pending: '○', running: '▶', done: '✓', failed: '✗', interrupted: '⏸', canceled: '–', review: '👀' };
+
+/** Rótulo da lista: a pausada pela cota diz a janela, o uso e quando reinicia (a automática volta sozinha depois). */
+export function runLabel(run: Pick<ChatRun, 'state' | 'quota' | 'auto'>, now: number): string {
+  const q = run.quota;
+  if (run.state !== 'paused' || !q) return runStateLabel(run.state);
+  const when = q.resetsAt ? formatResetAt(q.resetsAt, now) : '';
+  const win = q.window === '5h' ? tr('5 h') : tr('semana');
+  const base = tr('pausada: cota de {0} em {1}%', [win, q.pct]);
+  if (!when) return base;
+  return run.auto ? tr('{0} · volta sozinha {1}', [base, when]) : tr('{0} · reinicia {1}', [base, when]);
+}

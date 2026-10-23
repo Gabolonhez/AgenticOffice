@@ -26,7 +26,7 @@ export interface ChatRouteDeps {
   /** Ferramentas office_* e ligações entre agentes (delegation.ts); sem ela, só o permission tool. */
   delegation?: Pick<Delegation, 'tools' | 'links'>;
   /** Listas que rodam um agente por item (runs.ts); sem ela, 404. */
-  runs?: Pick<RunService, 'list' | 'get' | 'create' | 'stop' | 'continue' | 'merge' | 'discard'>;
+  runs?: Pick<RunService, 'list' | 'get' | 'create' | 'stop' | 'continue' | 'merge' | 'discard' | 'diff' | 'feedback'>;
   /** Gatilhos (triggers.ts); sem eles, 404. */
   /** Resumo do dia (server/summary); sem ele, 404. */
   summary?: { generate(mode: SummaryMode): Promise<DaySummary>; last(): DaySummary | undefined };
@@ -39,7 +39,8 @@ const SSE_BEAT_MS = 15_000;
 const AGENT_ROUTE = /^\/api\/chat\/agents\/([^/]+)(?:\/(messages|stop|limits|merge|discard))?$/;
 const MCP_ROUTE = /^\/api\/chat\/mcp\/([^/]+)$/;
 const ROLE_ROUTE = /^\/api\/chat\/roles\/([^/]+)$/;
-const RUN_ROUTE = /^\/api\/chat\/runs\/([^/]+)(?:\/(stop|continue|merge|discard))?$/;
+const RUN_ROUTE = /^\/api\/chat\/runs\/([^/]+)(?:\/(stop|continue|merge|discard|diff))?$/;
+const FEEDBACK_ROUTE = /^\/api\/chat\/runs\/([^/]+)\/items\/(\d{1,4})\/feedback$/;
 const TRIGGER_ROUTE = /^\/api\/chat\/triggers\/([^/]+)(?:\/(test))?$/;
 
 function isLoopback(addr: string | undefined): boolean {
@@ -201,10 +202,22 @@ export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
       const r = d.runs.create(await readJson(req));
       return 'run' in r ? sendJson(res, 201, r.run) : sendJson(res, r.status, { error: r.error });
     }
+    // Comentários por linha do diff (revisão): uma mensagem ao mesmo agente do item.
+    const feedback = FEEDBACK_ROUTE.exec(path);
+    if (feedback && d.runs) {
+      if (method !== 'POST') return notAllowed(res, 'POST');
+      const r = await d.runs.feedback(decode(feedback[1]), Number(feedback[2]), await readJson(req));
+      return 'ok' in r ? sendJson(res, 202, {}) : sendJson(res, r.status, { error: r.error });
+    }
     const runRoute = RUN_ROUTE.exec(path);
     if (runRoute && d.runs) {
       const id = decode(runRoute[1]);
       const action = runRoute[2];
+      if (action === 'diff') {
+        if (method !== 'GET') return notAllowed(res, 'GET');
+        const r = await d.runs.diff(id);
+        return 'diff' in r ? sendJson(res, 200, r) : sendJson(res, r.status, { error: r.error });
+      }
       if (!action) {
         if (method !== 'GET') return notAllowed(res, 'GET');
         const run = d.runs.get(id);
@@ -215,7 +228,7 @@ export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
       if (action === 'stop' || action === 'continue') {
         const r = action === 'stop' ? d.runs.stop(id) : d.runs.continue(id);
         const status = { ok: 200, idle: 200, 'not-found': 404, invalid: 409, busy: 409 }[r];
-        const error = r === 'busy' ? tr('Já há uma lista rodando.') : r === 'invalid' ? tr('Esta lista não pode continuar.') : r;
+        const error = r === 'busy' ? tr('Já há uma lista rodando nesta pasta ou o limite de listas ao mesmo tempo foi atingido.') : r === 'invalid' ? tr('Esta lista não pode continuar.') : r;
         return sendJson(res, status, status === 200 ? {} : { error });
       }
       const r = await (action === 'merge' ? d.runs.merge(id) : d.runs.discard(id));

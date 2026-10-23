@@ -176,6 +176,32 @@ describe('serviço', () => {
     expect(updates[1].summary).toHaveLength(REVIEW_SUMMARY_MAX);
   });
 
+  it('comentários da revisão (reopen): a subtarefa volta a running e, no fim do portão, vai de novo como review', async () => {
+    const over: { chat: boolean; outcome?: 'review' } = { chat: true, outcome: 'review' };
+    const { svc, calls, setAgents, setReply } = setup(over);
+    await svc.poll();
+    svc.stop();
+    await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web' });
+    setReply('Branch: agentic/lista-1, rodada 1');
+    setAgents([mainAgent({ id: 'chat:1', chat: true, status: 'idle' })]);
+    await svc.check();
+    await flush();
+    expect(svc.reopen('chat:9')).toBe(false);
+    over.outcome = undefined; // rodando de novo / no portão
+    expect(svc.reopen('chat:1')).toBe(true);
+    await flush();
+    await svc.check();
+    await flush();
+    over.outcome = 'review';
+    setReply('Branch: agentic/lista-1, rodada 2');
+    await svc.check();
+    await flush();
+    const updates = calls.filter((c) => c.url.endsWith('/update')).map((c) => JSON.parse(String(c.init.body)));
+    expect(updates.map((u) => u.status)).toEqual(['running', 'review', 'running', 'review']);
+    expect(updates[2].summary).toBeUndefined();
+    expect(updates[3].summary).toContain('rodada 2');
+  });
+
   it('com o chat: o pedido editado na janela vale no lugar do texto da tarefa', async () => {
     const { svc, open } = setup({ chat: true });
     await svc.poll();

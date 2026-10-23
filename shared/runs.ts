@@ -7,7 +7,8 @@ export const RUN_CONTEXT_MAX = 4000;
 
 /** 'review': lista automática do VBoards, passou pelo portão (checagens + revisão) e espera a pessoa. */
 export type RunItemState = 'pending' | 'running' | 'done' | 'failed' | 'interrupted' | 'canceled' | 'review';
-export type RunState = 'running' | 'paused' | 'stopped' | 'failed' | 'done';
+/** 'queued': espera a pasta ficar livre (uma lista por pasta) ou uma vaga (HABBLAUD_MAX_PARALLEL_RUNS). */
+export type RunState = 'queued' | 'running' | 'paused' | 'stopped' | 'failed' | 'done';
 
 export interface RunItem {
   text: string;
@@ -22,6 +23,8 @@ export interface RunItem {
   retried?: boolean;
   /** Lista automática: o relatório do portão (branch, checagens, revisão e resumo). */
   report?: string;
+  /** Interrompido pelo reinício (lista automática): ao voltar, segue no mesmo agente (agentId), avisado disso. */
+  resume?: boolean;
 }
 
 /** Lista aberta sozinha pelo VBoards (vboards.auto da pasta): o portão de qualidade do fim de cada item. */
@@ -51,6 +54,12 @@ export interface ChatRun {
   note?: string;
   /** Aberta sozinha pelo VBoards: cada item passa pelo portão (server/chat/gate.ts) e termina em 'review'. */
   auto?: RunAuto;
+  /** Pausada pela cota da conta (server/chat/quota.ts): a janela, o uso e quando reinicia; a automática volta sozinha. */
+  quota?: { window: '5h' | 'week'; pct: number; resetsAt?: number };
+  /** A pessoa mandou rodar com a cota no limite ("Rodar lista"/"Continuar"): esta lista não pausa mais pela cota. */
+  quotaOverride?: boolean;
+  /** Rodada de comentários num item de uma lista que já tinha parado: o estado a que ela volta quando o item termina. */
+  resumeTo?: RunState;
 }
 
 /** POST /api/chat/runs: a lista aprovada na tela de confirmação. */
@@ -60,6 +69,18 @@ export interface RunCreateRequest {
   stopOnFail?: boolean;
   isolated?: boolean;
   options: RunAgentOptions;
+}
+
+/** Comentários numa linha do diff da cópia isolada (POST /api/chat/runs/:id/items/:n/feedback). */
+export const RUN_FEEDBACK_MAX = 50;
+export const RUN_FEEDBACK_TEXT_MAX = 2000;
+
+/** `side`: 'new' = linha do lado novo (adicionada ou de contexto); 'old' = do lado antigo (removida). */
+export interface RunFeedbackComment {
+  file: string;
+  line: number;
+  side: 'old' | 'new';
+  text: string;
 }
 
 /** Itens de um checklist em Markdown: as caixas abertas (`- [ ]`, `* [ ]`, de qualquer nível). */

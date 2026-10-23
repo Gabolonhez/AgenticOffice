@@ -674,12 +674,26 @@ which is read-only from the phone):
 | `vboards.copy` | none | Files (comma-separated relative paths, e.g. `.env`) copied from the folder into each isolated copy. They stay out of the reviewer's diff and of the Merge commit. |
 
 With `vboards.auto` on (and the agent chat on), each subtask whose card matches **only** this folder becomes a list
-(one per folder, one at a time): a fresh agent per item, in an isolated git worktree on its own branch, with `git push`
+(one at a time per folder; lists of different folders run in parallel, up to `HABBLAUD_MAX_PARALLEL_RUNS`, default 2;
+with no free slot it waits for the next fetch): a fresh agent per item, in an isolated git worktree on its own branch, with `git push`
 blocked (Claude: denied tool; Codex: sandbox without network; all of them: a git setting that breaks any push). At the
 end of each item Habblaud runs `vboards.check` and asks the reviewer to read only the diff, with no tools. On the first
 failure the error goes back to the same agent once; then the subtask goes to VBoards as **review**, with a report
 (branch, checks, review and the agent's summary). Habblaud never merges or pushes on its own: **Merge** is still your
 click.
+
+- **Restart:** an automatic list resumes on its own; the interrupted item continues with the same agent in the same
+  copy, told to check `git status`/`git diff` first. A manual list pauses until you click **Continue**. If the isolated
+  copy is gone, the list fails with the reason. The gate's single retry is never repeated.
+- **Account quota:** when the account's 5-hour usage reaches `HABBLAUD_QUOTA_PAUSE_5H` (default 90%) or the weekly one
+  reaches `HABBLAUD_QUOTA_PAUSE_WEEK` (default 95%), an automatic list doesn't start and any list pauses before its
+  next item ("paused: quota", with the reset time), with one phone notification. Automatic lists resume after the
+  reset; manual ones only with **Continue**, which runs anyway and shows a warning (so does **Run list**). Old or
+  unknown numbers (e.g. agy) never block.
+- **Comments on the diff:** on an item that finished in a list with an isolated copy, **View the diff and comment**
+  shows the diff; tap a line to comment, then **Send comments to the agent** sends them all in one message to the same
+  agent. The item runs again, goes through the gate again (with its single retry available again) and the subtask
+  goes back to **review**.
 
 **Refine:** clicking "Refine" on a VBoards card arrives with the same queue fetch and runs on its own when exactly one
 folder matches the card: one **read-only** turn in the folder itself, with `vboards.provider` (Claude with only

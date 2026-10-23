@@ -672,12 +672,26 @@ por pasta**, só leitura pelo celular):
 | `vboards.copy` | nenhum | Arquivos (caminhos relativos, separados por vírgula, ex.: `.env`) copiados da pasta para cada cópia isolada. Ficam fora do diff do revisor e do commit do Juntar. |
 
 Com `vboards.auto` ligado (e o chat com agentes ligado), cada subtarefa cujo card combina **só** com esta pasta vira uma
-lista (uma por pasta, uma de cada vez): um agente novo por item, numa cópia isolada (git worktree num branch próprio),
+lista (uma de cada vez por pasta; listas de pastas diferentes rodam em paralelo, até `HABBLAUD_MAX_PARALLEL_RUNS`,
+padrão 2; sem vaga, espera a próxima busca): um agente novo por item, numa cópia isolada (git worktree num branch próprio),
 com `git push` bloqueado (Claude: ferramenta negada; Codex: sandbox sem rede; todos: uma configuração do git que quebra
 qualquer push). No fim de cada item o Habblaud roda o `vboards.check` e pede ao revisor que leia só o diff, sem
 ferramentas. Na primeira falha o erro volta uma vez ao mesmo agente; depois a subtarefa vai ao VBoards como **review**,
 com um relatório (branch, checagens, revisão e o resumo do agente). O Habblaud nunca junta nem dá push sozinho:
 **Juntar** continua sendo um clique seu.
+
+- **Reinício:** a lista automática volta sozinha; o item interrompido segue no mesmo agente e na mesma cópia, avisado
+  para conferir o `git status`/`git diff` antes. A lista manual pausa até o **Continuar**. Se a cópia isolada sumiu, a
+  lista falha com o motivo. A volta única do portão nunca se repete.
+- **Cota da conta:** com o uso de 5 horas da conta em `HABBLAUD_QUOTA_PAUSE_5H` (padrão 90%) ou o da semana em
+  `HABBLAUD_QUOTA_PAUSE_WEEK` (padrão 95%), a lista automática não começa e qualquer lista pausa antes do próximo item
+  ("pausada: cota", com o horário do reinício), com um aviso no celular. A automática volta sozinha depois do reinício;
+  a manual só com **Continuar**, que roda mesmo assim e mostra um aviso (o **Rodar lista** também). Número velho ou
+  desconhecido (ex.: agy) nunca trava.
+- **Comentários no diff:** num item que terminou, numa lista com cópia isolada, **Ver o diff e comentar** mostra o diff;
+  toque numa linha para comentar e **Enviar comentários ao agente** manda todos numa mensagem só ao mesmo agente. O item
+  volta a rodar, passa de novo pelo portão (com a volta de correção disponível outra vez) e a subtarefa volta a
+  **review**.
 
 **Refinar:** o "Refinar" clicado num card do VBoards chega na mesma busca da fila e roda sozinho quando uma única pasta
 combina com o card: uma rodada **só de leitura** na própria pasta, pelo `vboards.provider` (Claude só com Read/Grep/Glob e

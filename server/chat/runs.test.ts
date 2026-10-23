@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatRun } from '../../shared/runs';
-import { RunService, type RunDeps } from './runs';
+import { feedbackMessage, parseComments, RunService, type RunDeps } from './runs';
 
 const PROJ = 'C:\\proj';
 const options = { folder: PROJ, provider: 'claude', permission: 'auto', limits: {} };
@@ -15,7 +15,7 @@ function fakeChat() {
   const opened: Array<{ id: string; raw: Record<string, unknown>; run?: { cwd?: string } }> = [];
   let n = 0;
   const chat = {
-    check: vi.fn((raw: { folder?: string }) => (raw.folder === PROJ ? undefined : { error: 'invalid' as const, reason: 'Pasta desconhecida' })),
+    check: vi.fn((raw: { folder?: string }) => (raw.folder?.startsWith(PROJ) ? undefined : { error: 'invalid' as const, reason: 'Pasta desconhecida' })),
     open: vi.fn((raw: unknown, _from?: unknown, run?: { cwd?: string }) => {
       const id = `chat:${++n}`;
       opened.push({ id, raw: raw as Record<string, unknown>, run });
@@ -125,10 +125,45 @@ describe('chat: lista que roda um agente por item', () => {
     expect(svc.stop('nada')).toBe('not-found');
   });
 
-  it('uma lista rodando por vez', async () => {
-    const { svc } = setup({ newId: (() => { let n = 0; return () => `r${++n}`; })() });
+  const ids = () => (() => { let n = 0; return () => `r${++n}`; })();
+
+  it('pastas diferentes rodam ao mesmo tempo; a mesma pasta espera na fila e começa sozinha', async () => {
+    const { svc, opened, end } = setup({ newId: ids() });
     await svc.create({ items: items('a'), options });
-    expect(await svc.create({ items: items('b'), options })).toMatchObject({ status: 409 });
+    const b = run(await svc.create({ items: items('b'), options: { ...options, folder: `${PROJ}2` } }));
+    expect(b.state).toBe('running');
+    expect(opened.map((o) => o.raw.prompt)).toEqual(['a', 'b']);
+    const c = run(await svc.create({ items: items('c'), options: { ...options, folder: `${PROJ}/` } }));
+    expect(c.state).toBe('queued');
+    expect(svc.canStart(PROJ)).toBe(false);
+    expect(opened).toHaveLength(2);
+    end('chat:1', 'done');
+    expect(svc.get('r3')?.state).toBe('running');
+    expect(opened.map((o) => o.raw.prompt)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('teto de listas ao mesmo tempo (maxParallel); a automática não entra na fila (409)', async () => {
+    const { svc, opened, end } = setup({ newId: ids(), maxParallel: 1 });
+    await svc.create({ items: items('a'), options });
+    expect(svc.canStart(`${PROJ}2`)).toBe(false);
+    expect(await svc.create({ items: items('auto'), options: { ...options, folder: `${PROJ}3` } }, { reviewer: 'claude' })).toMatchObject({ status: 409 });
+    expect(run(await svc.create({ items: items('b'), options: { ...options, folder: `${PROJ}2` } })).state).toBe('queued');
+    expect(svc.continue('r1')).toBe('invalid');
+    expect(opened).toHaveLength(1);
+    svc.stop('r1');
+    expect(svc.get('r2')?.state).toBe('running');
+    expect(opened.map((o) => o.raw.prompt)).toEqual(['a', 'b']);
+    end('chat:2', 'done');
+    expect(svc.get('r2')?.state).toBe('done');
+  });
+
+  it('Parar uma lista na fila: cancela tudo sem abrir agente', async () => {
+    const { svc, opened } = setup({ newId: ids() });
+    await svc.create({ items: items('a'), options });
+    await svc.create({ items: items('b'), options });
+    expect(svc.stop('r2')).toBe('ok');
+    expect(svc.get('r2')).toMatchObject({ state: 'stopped', items: [{ state: 'canceled' }] });
+    expect(opened).toHaveLength(1);
   });
 
   it('reinício: o item que rodava vira interrompido, a lista pausa e só volta com Continuar', async () => {
@@ -259,5 +294,234 @@ describe('chat: lista que roda um agente por item', () => {
     expect(chat.send).not.toHaveBeenCalled();
     expect(svc.get('r1')?.items[0].state).toBe('review');
     expect(worktrees.merge).not.toHaveBeenCalled();
+  });
+});
+
+describe('chat: listas depois de reiniciar o servidor', () => {
+  const wt = () => ({ create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(), discard: vi.fn(), summary: vi.fn(), diff: vi.fn(async () => 'diff --git a/x b/x') });
+  const auto = { check: 'npm test', reviewer: 'claude' as const };
+
+  it('automática: volta sozinha; o item interrompido segue no mesmo agente (rodada nova avisada), depois o resto', async () => {
+    const first = setup({ worktrees: wt(), exists: () => true });
+    first.svc.create({ items: items('a', 'b'), options, isolated: true }, auto);
+    await flush();
+    expect(first.opened).toHaveLength(1);
+    const gate = { checks: vi.fn(async () => ({ ok: true, tail: '' })), review: vi.fn(async () => ({ ok: true, findings: 'OK', by: 'claude' })) };
+    const again = setup({ worktrees: wt(), gate, exists: () => true }, first.file);
+    expect(again.svc.get('r1')).toMatchObject({ state: 'queued', items: [{ state: 'pending', resume: true, agentId: 'chat:1' }, { state: 'pending' }] });
+    expect(again.chat.send).not.toHaveBeenCalled();
+    again.svc.tick();
+    expect(again.chat.send).toHaveBeenCalledTimes(1);
+    const [id, msg] = again.chat.send.mock.calls[0] as [string, { text: string }];
+    expect(id).toBe('chat:1');
+    expect(msg.text).toContain('git status');
+    expect(msg.text.endsWith('\n\na')).toBe(true);
+    expect(again.opened).toHaveLength(0);
+    expect(again.svc.get('r1')?.items[0]).toMatchObject({ state: 'running', agentId: 'chat:1' });
+    expect(again.svc.get('r1')?.items[0].resume).toBeUndefined();
+    again.end('chat:1', 'done', 'Terminei.');
+    await flush();
+    expect(again.svc.get('r1')?.items[0].state).toBe('review');
+    expect(again.opened.map((o) => o.raw.prompt)).toEqual(['b']);
+    expect(again.opened[0].run).toEqual({ cwd: 'C:\wt' });
+  });
+
+  it('automática: o portão já tinha devolvido o erro uma vez; depois do reinício não devolve de novo', async () => {
+    const failed = { ok: false, tail: 'teste quebrou' };
+    const gate = { checks: vi.fn(async () => failed), review: vi.fn(async () => ({ ok: true, findings: 'OK', by: 'claude' })) };
+    const first = setup({ worktrees: wt(), gate, exists: () => true });
+    first.svc.create({ items: items('a'), options, isolated: true }, auto);
+    await flush();
+    first.end('chat:1', 'done', 'Feito.');
+    await flush();
+    expect(first.chat.send).toHaveBeenCalledTimes(1); // a única volta do portão
+    const again = setup({ worktrees: wt(), gate, exists: () => true }, first.file);
+    again.svc.tick();
+    expect(again.chat.send).toHaveBeenCalledTimes(1); // só o aviso do reinício
+    again.end('chat:1', 'done', 'Corrigi.');
+    await flush();
+    expect(again.chat.send).toHaveBeenCalledTimes(1);
+    expect(again.svc.get('r1')?.items[0]).toMatchObject({ state: 'review', retried: true });
+    expect(again.svc.get('r1')?.state).toBe('done');
+  });
+
+  it('cópia isolada que sumiu: a lista falha com o motivo, sem abrir nem retomar agente', async () => {
+    const first = setup({ worktrees: wt(), exists: () => true });
+    first.svc.create({ items: items('a'), options, isolated: true }, auto);
+    await flush();
+    const again = setup({ worktrees: wt(), exists: () => false }, first.file);
+    expect(again.svc.get('r1')).toMatchObject({ state: 'failed', items: [{ state: 'interrupted' }] });
+    expect(again.svc.get('r1')?.note).toContain('C:\wt');
+    again.svc.tick();
+    expect(again.svc.continue('r1')).toBe('ok');
+    expect(again.svc.get('r1')?.state).toBe('failed');
+    expect(again.chat.send).not.toHaveBeenCalled();
+    expect(again.opened).toHaveLength(0);
+  });
+
+  it('agente que não retoma (ex.: orçamento esgotado): o item falha com o motivo', async () => {
+    const first = setup({ worktrees: wt(), exists: () => true });
+    first.svc.create({ items: items('a'), options, isolated: true, stopOnFail: false }, auto);
+    await flush();
+    const again = setup({ worktrees: wt(), exists: () => true }, first.file);
+    again.chat.send.mockReturnValueOnce('blocked' as 'ok');
+    again.svc.tick();
+    await flush();
+    expect(again.svc.get('r1')?.items[0]).toMatchObject({ state: 'failed' });
+    expect(again.svc.get('r1')?.items[0].summary).toContain('blocked');
+    expect(again.chat.send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('chat: listas e a cota da conta', () => {
+  const wt = () => ({ create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(), discard: vi.fn(), summary: vi.fn(), diff: vi.fn(async () => '') });
+  const auto = { reviewer: 'claude' as const };
+  function withQuota(over: Partial<RunDeps> = {}) {
+    let block: ReturnType<NonNullable<RunDeps['quota']>> = undefined;
+    let now = 100;
+    const notify = vi.fn();
+    const quota = vi.fn(() => block);
+    const s = setup({ quota, notify, now: () => now, exists: () => true, ...over });
+    return { ...s, quota, notify, set: (b: typeof block) => void (block = b), at: (t: number) => void (now = t) };
+  }
+
+  it('automática com a cota no limite: nem começa, pausa com a janela e avisa UMA vez; volta sozinha depois do reinício', async () => {
+    const t = withQuota({ worktrees: wt(), newId: (() => { let n = 0; return () => `r${++n}`; })() });
+    t.set({ window: '5h', pct: 93, resetsAt: 1000 });
+    const r = run(t.svc.create({ items: items('a'), options: { ...options, account: '.claude-b' } }, auto));
+    expect(t.quota).toHaveBeenCalledWith('claude', '.claude-b');
+    expect(r).toMatchObject({ state: 'paused', quota: { window: '5h', pct: 93, resetsAt: 1000 } });
+    expect(t.opened).toHaveLength(0);
+    expect(t.notify).toHaveBeenCalledTimes(1);
+    expect(t.notify).toHaveBeenCalledWith('proj', 'quota');
+    // Tarefas novas da mesma pasta esperam a pausada (sem outro aviso).
+    expect(t.svc.create({ items: items('b'), options }, auto)).toMatchObject({ status: 409 });
+    t.svc.tick();
+    expect(t.opened).toHaveLength(0); // antes do reinício
+    t.at(1001);
+    t.svc.tick();
+    expect(t.opened).toHaveLength(0); // reiniciou, mas a leitura ainda diz cheia
+    t.set(undefined);
+    t.svc.tick();
+    await flush();
+    expect(t.svc.get('r1')).toMatchObject({ state: 'running' });
+    expect(t.svc.get('r1')?.quota).toBeUndefined();
+    expect(t.opened).toHaveLength(1);
+    expect(t.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('pausa antes do próximo item; a manual só volta com Continuar, que passa por cima da cota com aviso', async () => {
+    const t = withQuota();
+    t.svc.create({ items: items('a', 'b', 'c'), options });
+    expect(t.opened).toHaveLength(1);
+    t.set({ window: 'week', pct: 97 });
+    t.end('chat:1', 'done');
+    expect(t.svc.get('r1')).toMatchObject({ state: 'paused', quota: { window: 'week', pct: 97 } });
+    expect(t.svc.get('r1')?.items.map((i) => i.state)).toEqual(['done', 'pending', 'pending']);
+    expect(t.notify).toHaveBeenCalledTimes(1);
+    t.set(undefined);
+    t.svc.tick();
+    expect(t.opened).toHaveLength(1); // manual: nada volta sozinho
+    t.set({ window: 'week', pct: 97 });
+    expect(t.svc.continue('r1')).toBe('ok');
+    expect(t.svc.get('r1')).toMatchObject({ state: 'running', quotaOverride: true });
+    expect(t.svc.get('r1')?.note).toContain('97%');
+    expect(t.opened).toHaveLength(2);
+    t.end('chat:2', 'done');
+    expect(t.opened).toHaveLength(3); // a pessoa já decidiu: não pausa de novo
+  });
+
+  it('"Rodar lista" com a cota no limite roda (a pessoa decidiu) e deixa o aviso; cota desconhecida não trava', () => {
+    const t = withQuota();
+    t.set({ window: '5h', pct: 91 });
+    const r = run(t.svc.create({ items: items('a'), options }));
+    expect(r).toMatchObject({ state: 'running', quotaOverride: true });
+    expect(r.note).toContain('91%');
+    expect(t.opened).toHaveLength(1);
+    expect(t.notify).not.toHaveBeenCalled();
+    const free = setup({ newId: () => 'r2' });
+    expect(run(free.svc.create({ items: items('a'), options }, auto)).state).toBe('running');
+  });
+});
+
+describe('chat: comentários por linha no diff (revisão)', () => {
+  const DIFF = 'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,2 +1,2 @@\n um\n-dois\n+DOIS\n';
+  const wt = () => ({ create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(), discard: vi.fn(), summary: vi.fn(), diff: vi.fn(async () => DIFF) });
+  const c = (over: Record<string, unknown> = {}) => ({ file: 'src/a.ts', line: 2, side: 'new', text: 'use uma constante', ...over });
+
+  it('valida: até 50, texto até 2000, linha e lado válidos', () => {
+    expect(parseComments({ comments: [] })).toHaveProperty('error');
+    expect(parseComments({ comments: Array.from({ length: 51 }, () => c()) })).toHaveProperty('error');
+    expect(parseComments({ comments: [c({ text: 'x'.repeat(2001) })] })).toHaveProperty('error');
+    expect(parseComments({ comments: [c({ text: '   ' })] })).toHaveProperty('error');
+    expect(parseComments({ comments: [c({ line: 0 })] })).toHaveProperty('error');
+    expect(parseComments({ comments: [c({ line: 1.5 })] })).toHaveProperty('error');
+    expect(parseComments({ comments: [c({ side: 'meio' })] })).toHaveProperty('error');
+    expect(parseComments({ comments: [c({ file: 'a\nb' })] })).toHaveProperty('error');
+    expect(parseComments(null)).toHaveProperty('error');
+    expect(parseComments({ comments: Array.from({ length: 50 }, () => c({ text: 'x'.repeat(2000) })) })).toHaveLength(50);
+  });
+
+  it('mensagem: uma linha por comentário, arquivo:linha — comentário', () => {
+    const msg = feedbackMessage([c({ text: 'primeira\nsegunda' }) as never, c({ line: 2, side: 'old', text: 'por que tirou?' }) as never]);
+    const lines = msg.split('\n');
+    expect(lines[0]).toContain('sem git push');
+    expect(lines.slice(2)).toEqual(['- src/a.ts:2 — primeira segunda', '- src/a.ts:2 (linha antiga, removida) — por que tirou?']);
+  });
+
+  async function reviewed() {
+    const gate = { checks: vi.fn(async () => ({ ok: true, tail: '' })), review: vi.fn(async () => ({ ok: true, findings: 'OK', by: 'claude' })) };
+    const vboards = { begin: vi.fn(async (raw: unknown, open: (r: unknown) => unknown) => open((raw as { chat: unknown }).chat) as { agentId: string }), reopen: vi.fn(() => true) };
+    const worktrees = wt();
+    const s = setup({ worktrees, gate, vboards, exists: () => true });
+    s.svc.create({ items: [{ text: 'a', vboardsTaskId: 'c:1' }], options, isolated: true }, { check: 'npm test', reviewer: 'claude' });
+    await flush();
+    s.end('chat:1', 'done', 'Feito.');
+    await flush();
+    expect(s.svc.get('r1')).toMatchObject({ state: 'done', items: [{ state: 'review' }] });
+    return { ...s, gate, vboards, worktrees };
+  }
+
+  it('manda UMA mensagem ao mesmo agente; o item volta a rodar, o portão roda de novo (com a volta de correção outra vez) e termina em review', async () => {
+    const s = await reviewed();
+    expect(await s.svc.feedback('r1', 0, { comments: [c()] })).toEqual({ ok: true });
+    expect(s.chat.send).toHaveBeenCalledTimes(1);
+    expect(s.chat.send.mock.calls[0][0]).toBe('chat:1');
+    expect((s.chat.send.mock.calls[0][1] as { text: string }).text).toContain('- src/a.ts:2 — use uma constante');
+    expect(s.svc.get('r1')).toMatchObject({ state: 'running', resumeTo: 'done', items: [{ state: 'running', agentId: 'chat:1' }] });
+    expect(s.svc.gateState('chat:1')).toBe('pending');
+    expect(s.vboards.reopen).toHaveBeenCalledWith('chat:1');
+    // Comentário enquanto roda: recusado.
+    expect(await s.svc.feedback('r1', 0, { comments: [c()] })).toMatchObject({ status: 409 });
+    s.gate.checks.mockResolvedValueOnce({ ok: false, tail: 'quebrou' });
+    s.end('chat:1', 'done', 'Mudei.');
+    await flush();
+    expect(s.chat.send).toHaveBeenCalledTimes(2); // a volta de correção do portão, disponível de novo
+    s.end('chat:1', 'done', 'Corrigi.');
+    await flush();
+    expect(s.svc.get('r1')).toMatchObject({ state: 'done', items: [{ state: 'review', retried: true }] });
+    expect(s.svc.get('r1')?.resumeTo).toBeUndefined();
+    expect(s.svc.gateState('chat:1')).toBe('review');
+    expect(s.opened).toHaveLength(1);
+    expect(s.worktrees.merge).not.toHaveBeenCalled();
+  });
+
+  it('recusa: arquivo fora do diff, item que não terminou, sem cópia aberta, lista/item desconhecido', async () => {
+    const s = await reviewed();
+    expect(await s.svc.feedback('r1', 0, { comments: [c({ file: 'src/b.ts' })] })).toMatchObject({ status: 400 });
+    expect(await s.svc.feedback('r1', 5, { comments: [c()] })).toMatchObject({ status: 404 });
+    expect(await s.svc.feedback('nada', 0, { comments: [c()] })).toMatchObject({ status: 404 });
+    expect(await s.svc.feedback('r1', 0, { comments: [] })).toMatchObject({ status: 400 });
+    s.worktrees.discard.mockResolvedValue({ ok: true });
+    await s.svc.discard('r1');
+    expect(await s.svc.feedback('r1', 0, { comments: [c()] })).toMatchObject({ status: 409 });
+    expect(await s.svc.diff('r1')).toMatchObject({ status: 409 });
+    expect(s.chat.send).not.toHaveBeenCalled();
+  });
+
+  it('diff da cópia aberta', async () => {
+    const s = await reviewed();
+    expect(await s.svc.diff('r1')).toEqual({ diff: DIFF });
+    expect(await s.svc.diff('nada')).toMatchObject({ status: 404 });
   });
 });

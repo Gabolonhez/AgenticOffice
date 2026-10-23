@@ -241,7 +241,7 @@ async function start(allow: RemoteFeature[] = ['permissions']): Promise<Harness>
       folders: () => [],
       accounts: () => [],
       // Listas falsas: só a trava do Juntar/Descartar pela porta remota é testada aqui.
-      runs: { merge: async () => (runActions.push('merge'), { ok: true }), discard: async () => (runActions.push('discard'), { ok: true }) } as unknown as ChatRouteDeps['runs'],
+      runs: { merge: async () => (runActions.push('merge'), { ok: true }), discard: async () => (runActions.push('discard'), { ok: true }), feedback: async () => (runActions.push('feedback'), { ok: true }), diff: async () => (runActions.push('diff'), { diff: '' }) } as unknown as ChatRouteDeps['runs'],
     }),
     remote: { is: isRemoteRequest, allows: (f) => allowSet.has(f) },
     // VBoards falso: só a trava de quem lê e quem grava a configuração das pastas (http/app.ts) é testada aqui.
@@ -379,6 +379,21 @@ describe('porta remota', () => {
     expect((await request(on.remoteBase, '/api/chat/runs/r1/merge', { method: 'POST', body: {} })).status).toBe(401);
     for (const action of ['merge', 'discard']) expect((await request(on.remoteBase, `/api/chat/runs/r1/${action}`, { method: 'POST', body: {}, headers: { Cookie: c2 } })).status).toBe(200);
     expect(on.runActions).toEqual(['merge', 'discard']);
+  });
+
+  it('comentários no diff pelo celular: a mesma trava do chat ("chat" + login)', async () => {
+    const body = { comments: [{ file: 'a.ts', line: 1, side: 'new', text: 'x' }] };
+    const off = await start(['permissions', 'spawn']);
+    const c1 = await login(off.remoteBase);
+    expect((await request(off.remoteBase, '/api/chat/runs/r1/items/0/feedback', { method: 'POST', body, headers: { Cookie: c1 } })).status).toBe(403);
+    expect((await request(off.remoteBase, '/api/chat/runs/r1/diff', { headers: { Cookie: c1 } })).status).toBe(403);
+    expect(off.runActions).toEqual([]);
+    const on = await start(['permissions', 'chat']);
+    expect((await request(on.remoteBase, '/api/chat/runs/r1/items/0/feedback', { method: 'POST', body })).status).toBe(401);
+    const c2 = await login(on.remoteBase);
+    expect((await request(on.remoteBase, '/api/chat/runs/r1/items/0/feedback', { method: 'POST', body, headers: { Cookie: c2 } })).status).toBe(202);
+    expect((await request(on.remoteBase, '/api/chat/runs/r1/diff', { headers: { Cookie: c2 } })).status).toBe(200);
+    expect(on.runActions).toEqual(['feedback', 'diff']);
   });
 
   it('logado: terminal interativo, rotas do hook e do plugin e o auxiliar nunca passam, nem com Host local', async () => {

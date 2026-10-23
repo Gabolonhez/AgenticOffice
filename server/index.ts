@@ -65,6 +65,7 @@ import { createChatRoutes } from './chat/http';
 import { claudeRunner, DaySummaryService, gitSubjectsToday, summaryCwd } from './summary/service';
 import { ChatService, chatOffReason } from './chat/service';
 import { createWorktreeOps } from './chat/worktree';
+import { quotaBlock } from './chat/quota';
 import { RunService } from './chat/runs';
 import { refinerFor, reviewDiff, runChecks } from './chat/gate';
 import { NtfySettings } from './vboards/ntfy';
@@ -377,7 +378,8 @@ const vboards =
         },
         booting: () => office.isBooting(),
         // Opt-in por pasta (git config --local vboards.auto true): uma lista do chat por pasta, na cópia isolada, sem
-        // push. Uma lista por vez (a regra das listas): com outra rodando, espera a próxima busca. Nunca junta sozinho.
+        // push. Uma lista por pasta, até HABBLAUD_MAX_PARALLEL_RUNS ao mesmo tempo: sem vaga, espera a próxima busca
+        // (o create devolve 409). Nunca junta sozinho.
         auto: chatOff
           ? undefined
           : (folder, tasks, cfg) => {
@@ -454,6 +456,14 @@ const runs = chat
       // Portão das listas automáticas do VBoards: checagens na cópia e revisão só do diff, numa pasta neutra.
       gate: { checks: (cmd, cwd) => runChecks(cmd, cwd), review: (auto, diff) => reviewDiff(auto, diff, join(config.dataDir, 'review')) },
       file: join(config.dataDir, 'chat', 'runs.json'),
+      maxParallel: config.maxParallelRuns,
+      // Cota da conta (chat/quota.ts): a da lista ou a padrão do provedor (a pasta que a CLI usa sem conta escolhida).
+      quota: (provider, account) => {
+        const dir = provider === 'claude' ? process.env.CLAUDE_CONFIG_DIR || join(config.home, '.claude') : provider === 'codex' ? process.env.CODEX_HOME || join(config.home, '.codex') : undefined;
+        const id = account || (dir ? accounts.idForDir(dir) : undefined);
+        return id ? quotaBlock(accounts.usageView(id), config.quotaPause) : undefined;
+      },
+      notify: (title, event) => ntfy.notify(title, event),
     })
   : undefined;
 late.runs = runs;
@@ -494,6 +504,7 @@ const chatRoutes = chat
 if (chat) {
   chat.start();
   runs?.load();
+  runs?.start();
   triggers?.load();
   triggers?.start();
   refreshChatFolders();

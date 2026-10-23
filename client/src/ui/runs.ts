@@ -1,14 +1,15 @@
 // Rodar lista (server/chat/runs.ts): um agente novo do chat por item, em sequência. Três vistas no mesmo popover:
 // montar (colar um checklist em Markdown ou as tarefas marcadas no VBoards + as opções da janela de abrir agente),
 // confirmar (todos os itens, a pasta, o agente, o papel e a permissão; "Rodar lista" é a aprovação da lista inteira) e
-// acompanhar (cada item com o agente dele; Parar, Continuar, Juntar/Descartar).
+// acompanhar (cada item com o agente dele; Parar, Continuar, Juntar/Descartar; o diff da cópia com comentários por linha).
 import { tr } from '../../../shared/i18n';
-import { parseChecklist, type ChatRun, type RunCreateRequest } from '../../../shared/runs';
+import { parseChecklist, type ChatRun, type RunCreateRequest, type RunFeedbackComment } from '../../../shared/runs';
 import { ChatOptionsFields } from './chat-options';
 import type { UiContext } from './context';
 import { h, iconButton, setHidden, setText } from './dom';
 import { ICONS } from './icons';
-import { ITEM_MARK, itemStateLabel, runStateLabel, toRunRequest, type RunSource } from './runs-model';
+import { RunDiffView } from './run-diff';
+import { ITEM_MARK, itemStateLabel, runLabel, toRunRequest, type RunSource } from './runs-model';
 import { ago, shortPath } from './spawn';
 import { providerLabel } from './spawn-model';
 
@@ -60,6 +61,7 @@ export class RunsPanel {
   private shown = '';
   private timer?: ReturnType<typeof setInterval>;
   private busy = false;
+  private readonly diff: RunDiffView;
 
   constructor(private readonly ctx: UiContext) {
     this.folder = h('select', { class: 'ui-rename__input', attrs: { 'aria-label': tr('Pasta do projeto') } });
@@ -89,7 +91,15 @@ export class RunsPanel {
     );
     this.confirmEl = h('div', { class: 'ui-runs__view' });
     this.runsList = h('ul', { class: 'ui-vboards__list ui-runs__runs' });
-    this.listEl = h('div', { class: 'ui-runs__view' }, h('div', { class: 'ui-vboards__actions' }, primary(tr('Nova lista'), () => this.show('edit'))), this.runsList);
+    this.diff = new RunDiffView({
+      load: (id) => api(`/api/chat/runs/${encodeURIComponent(id)}/diff`),
+      send: async (id, index, comments: RunFeedbackComment[]) => {
+        await api(`/api/chat/runs/${encodeURIComponent(id)}/items/${index}/feedback`, { comments });
+        await this.refresh();
+      },
+      say: (text, error) => this.say(text, error),
+    });
+    this.listEl = h('div', { class: 'ui-runs__view' }, h('div', { class: 'ui-vboards__actions' }, primary(tr('Nova lista'), () => this.show('edit'))), this.runsList, this.diff.el);
     this.title = h('h2', { text: tr('Rodar lista') });
     this.el = h(
       'div',
@@ -235,11 +245,11 @@ export class RunsPanel {
     this.busy = true;
     try {
       this.say(tr('Começando no computador…'));
-      await api<ChatRun>('/api/chat/runs', this.pending);
+      const run = await api<ChatRun>('/api/chat/runs', this.pending);
       this.pending = undefined;
       this.items.value = '';
       this.fixed = undefined;
-      this.say(tr('Lista rodando: um item por vez.'));
+      this.say(run.quotaOverride && run.note ? run.note : run.state === 'queued' ? tr('Lista na fila: começa sozinha quando a pasta (ou uma vaga) ficar livre.') : tr('Lista rodando: um item por vez.'));
       this.ctx.announce(tr('Lista rodando.'));
       await this.refresh();
       this.show('list');
@@ -289,16 +299,18 @@ export class RunsPanel {
     const done = run.items.filter((i) => i.state === 'done').length;
     const w = run.isolated;
     const copyOpen = !!w && !w.merged && !w.discarded && run.state !== 'running';
+    // Comentar o diff: item que terminou, com a cópia aberta e nenhum item da lista rodando (a cópia é a mesma).
+    const canComment = !!w && !w.merged && !w.discarded && !run.items.some((i) => i.state === 'running');
     return h(
       'li',
       { class: `ui-vboards__item ui-runs__run is-${run.state}` },
-      h('span', { class: 'ui-spawn__folder-name', text: `${runStateLabel(run.state)} · ${done}/${run.items.length} · ${ago(run.createdAt)}` }),
+      h('span', { class: 'ui-spawn__folder-name', text: `${runLabel(run, Date.now())} · ${done}/${run.items.length} · ${ago(run.createdAt)}` }),
       h('span', { class: 'ui-spawn__folder-path', text: shortPath(run.options.folder) + (w ? ` · ${w.branch}` : '') }),
       run.note ? h('p', { class: 'ui-rename__hint is-error', text: run.note }) : null,
       h(
         'ol',
         { class: 'ui-runs__items' },
-        ...run.items.map((i) =>
+        ...run.items.map((i, index) =>
           h(
             'li',
             { class: `ui-runs__item is-${i.state}`, attrs: { title: i.summary ?? '' } },
@@ -307,6 +319,9 @@ export class RunsPanel {
               ? h('button', { class: 'ui-runs__link', type: 'button', text: i.text, attrs: { title: tr('Ver o agente deste item') }, on: { click: () => this.ctx.select({ type: 'agent', id: i.agentId! }, { focus: true }) } })
               : h('span', { class: 'ui-runs__text', text: i.text }),
             i.summary ? h('span', { class: 'ui-runs__summary-text', text: i.summary }) : null,
+            canComment && i.agentId && (i.state === 'review' || i.state === 'done')
+              ? h('button', { class: 'ui-runs__link ui-runs__comment', type: 'button', text: tr('Ver o diff e comentar'), on: { click: () => void this.diff.open(run.id, index, i.text) } })
+              : null,
           ),
         ),
       ),
@@ -314,7 +329,7 @@ export class RunsPanel {
         'div',
         { class: 'ui-vboards__actions' },
         run.state === 'paused' || run.state === 'failed' ? btn(tr('Continuar'), 'continue', true) : null,
-        run.state === 'running' || run.state === 'paused' || run.state === 'failed' ? btn(tr('Parar'), 'stop') : null,
+        run.state === 'running' || run.state === 'queued' || run.state === 'paused' || run.state === 'failed' ? btn(tr('Parar'), 'stop') : null,
         copyOpen ? btn(tr('Juntar'), 'merge', true) : null,
         copyOpen ? btn(tr('Descartar'), 'discard') : null,
       ),

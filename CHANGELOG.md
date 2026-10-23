@@ -39,6 +39,21 @@ do meio (0.**3**.0).
   revisor e do commit do Juntar, e o Juntar recusa um trabalho que os tenha commitado. Os que faltam vão no relatório.
 - **Aviso no celular (ntfy):** opcional, em Configurações › VBoards por pasta: um tópico do ntfy recebe só o título do
   card e "aguardando revisão", "plano pronto" ou "falhou". Gravar só pelo próprio computador.
+- **Listas em paralelo por pasta:** listas de pastas diferentes rodam ao mesmo tempo (até `HABBLAUD_MAX_PARALLEL_RUNS`,
+  padrão 2); na mesma pasta continuam uma de cada vez. A que não cabe fica **na fila** e começa sozinha quando abre a
+  vaga; a abertura automática do VBoards espera a próxima busca.
+- **Listas depois de reiniciar:** a lista automática volta sozinha e o item interrompido segue no mesmo agente e na mesma
+  cópia, avisado para conferir o `git status`/`git diff` antes; a manual pausa até o "Continuar". Cópia isolada que
+  sumiu = a lista falha com o motivo. A volta única do portão não se repete.
+- **Pausa pela cota da conta:** com a cota de 5 h (`HABBLAUD_QUOTA_PAUSE_5H`, padrão 90%) ou da semana
+  (`HABBLAUD_QUOTA_PAUSE_WEEK`, padrão 95%) no limite, a lista automática não começa e qualquer lista pausa antes do
+  próximo item ("pausada: cota", com o horário do reinício), com um aviso no celular. A automática volta sozinha depois
+  do reinício; a manual só com "Continuar", que roda mesmo assim e deixa o aviso. Número velho ou desconhecido (ex.:
+  agy) não trava.
+- **Comentários no diff:** na lista com cópia isolada, "Ver o diff e comentar" num item que terminou mostra o diff;
+  tocar numa linha abre o comentário, e "Enviar comentários ao agente" manda tudo numa mensagem ao mesmo agente. O item
+  volta a rodar, passa de novo pelo portão (com a volta de correção outra vez) e a subtarefa do VBoards volta a
+  **review**. Pelo celular, com `chat` no `HABBLAUD_REMOTE_ALLOW`.
 - **Docker:** o chat fica indisponível, com aviso; o resto segue igual.
 - **Chat pelo celular:** desligado por padrão; com `chat` no `HABBLAUD_REMOTE_ALLOW` (login + HTTPS) o chat, Rodar
   lista, Gatilhos e o Quadro funcionam pela porta do celular, com alvos de toque maiores e janelas em tela cheia. O MCP

@@ -695,6 +695,21 @@ export class VBoardsService {
     });
   }
 
+  /**
+   * Comentários da revisão voltaram ao agente (chat/runs.ts feedback): a subtarefa dele volta a 'running' e, quando o
+   * portão terminar, vai de novo como 'review' com o relatório novo. Sem ligação (já saiu, KEEP_DONE_MS) = false.
+   */
+  reopen(agentId: string): boolean {
+    const l = this.links.find((x) => x.agentId === agentId && !x.manual);
+    if (!l) return false;
+    l.state = 'running';
+    l.summary = undefined;
+    l.retryAt = undefined;
+    this.save();
+    void this.report();
+    return true;
+  }
+
   /** "Ligar a uma conversa aberta": a subtarefa fica ligada a uma sessão que já existe (nada é aberto). */
   async attach(raw: unknown): Promise<{ ok: true } | { status: number; error: string }> {
     const body = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};

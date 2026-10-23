@@ -8,7 +8,8 @@ import { maskSecrets } from '../../shared/activity';
 import { tr } from '../../shared/i18n';
 import { errMsg, log } from '../log';
 
-export type NotifyEvent = 'review' | 'ready' | 'failed';
+/** 'quota': uma lista pausou pela cota da conta (chat/runs.ts); o título é o nome da pasta. */
+export type NotifyEvent = 'review' | 'ready' | 'failed' | 'quota';
 
 const TITLE_MAX = 100;
 const URL_MAX = 300;
@@ -45,7 +46,7 @@ export function validateNtfyUrl(raw: unknown): { url: string } | { error: string
 export function ntfyMessage(cardTitle: string, event: NotifyEvent): { title: string; text: string } {
   const t = maskSecrets(cardTitle).replace(/\s+/g, ' ').trim() || tr('(card sem título)');
   const title = t.length > TITLE_MAX ? `${t.slice(0, TITLE_MAX - 1)}…` : t;
-  return { title, text: event === 'review' ? tr('aguardando revisão') : event === 'ready' ? tr('plano pronto') : tr('falhou') };
+  return { title, text: event === 'review' ? tr('aguardando revisão') : event === 'ready' ? tr('plano pronto') : event === 'quota' ? tr('lista pausada: cota da conta no limite') : tr('falhou') };
 }
 
 /** POST no tópico; o título vai como RFC 2047 (o fetch não aceita cabeçalho fora do latin1). Erro só vira log. */
