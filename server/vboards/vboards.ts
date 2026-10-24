@@ -320,6 +320,7 @@ export function refinePrompt(r: Pick<RefineRequest, 'cardTitle' | 'description' 
     'Leia o repositório desta pasta o quanto precisar para entender o pedido e responda com UM único bloco ```json, sem mais nada depois dele:',
     '{"plan": "escopo, arquivos afetados e critérios de aceite", "questions": ["o que falta decidir"], "subtasks": ["itens pequenos, de um propósito só, implementáveis"]}',
     `Limites: plan até ${REFINE_LIMITS.plan} caracteres; até ${REFINE_LIMITS.questions} perguntas; até ${REFINE_LIMITS.subtasks} subtarefas, sem repetir as que já existem.`,
+    'Cada subtarefa vira um agente que implementa e já faz o próprio commit: não crie subtarefa só de commit, push, PR, merge ou revisão. Para o pedido pequeno, uma subtarefa basta.',
     '',
     `Card: ${cutText(r.cardTitle, 200)}`,
     `Descrição:\n${cutText(r.description.trim(), REFINE_DESCRIPTION_MAX) || '(sem descrição)'}`,
