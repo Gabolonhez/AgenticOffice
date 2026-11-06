@@ -13,8 +13,8 @@
 // aviso no celular; a automática volta sozinha depois do reinício da janela, a manual só com "Continuar" (que, como o
 // "Rodar lista", passa por cima da cota e deixa um aviso).
 // Guardado em <dataDir>/chat/runs.json. Desenho: docs/superpowers/specs/2026-10-16-checklist-design.md.
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, join, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { truncate } from '../../shared/activity';
 import { CHAT_TEXT_MAX } from '../../shared/chat';
@@ -25,7 +25,7 @@ import { errMsg, log } from '../log';
 import type { Provider } from '../../shared/types';
 import type { ChatOpener } from '../vboards/vboards';
 import type { QuotaBlock } from './quota';
-import { fixRequest, gatePassed, gateReport, type CheckResult, type ReviewResult } from './gate';
+import { fixRequest, gatePassed, gateReport, type CheckResult, type QaResult, type ReviewResult } from './gate';
 import type { ChatService } from './service';
 import { appendJournal, trimJournal, type JournalStage } from './journal';
 import type { WorktreeOps } from './types';
@@ -49,7 +49,9 @@ export interface RunDeps {
   };
   worktrees?: WorktreeOps;
   /** Portão das listas automáticas (gate.ts runChecks/reviewDiff); ausente = o item vai para 'review' sem checar. */
-  gate?: { checks(cmd: string, cwd: string): Promise<CheckResult>; review(auto: RunAuto, diff: string): Promise<ReviewResult> };
+  gate?: { checks(cmd: string, cwd: string): Promise<CheckResult>; qa?(cmd: string, cwd: string, dir: string): Promise<QaResult>; review(auto: RunAuto, diff: string): Promise<ReviewResult> };
+  /** <dataDir>/chat/qa/<lista>/<item>: onde o vboards.qa grava os PNGs (HABBLAUD_QA_DIR); ausente = sem QA visual. */
+  qaDir?: string;
   file: string;
   /** <dataDir>/chat/run-metrics.jsonl: uma linha por item que terminou (ausente = sem métricas). */
   metricsFile?: string;
@@ -648,11 +650,35 @@ export class RunService {
     this.advance(run);
   }
 
+  private itemQaDir(run: ChatRun, item: RunItem): string | undefined {
+    return this.deps.qaDir ? join(this.deps.qaDir, run.id, String(run.items.indexOf(item))) : undefined;
+  }
+
+  /** O PNG do QA de um item, só se o nome está na lista do item e o arquivo real continua dentro da pasta dele (sem `..`, sem link para fora). */
+  shotPath(id: string, index: number, name: string): string | undefined {
+    const run = this.get(id);
+    const item = run?.items[index];
+    if (!run || !item?.shots?.includes(name)) return undefined;
+    try {
+      const base = realpathSync(this.itemQaDir(run, item)!);
+      const file = realpathSync(join(base, name));
+      return file.startsWith(base + sep) && statSync(file).isFile() ? file : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   private async gate(run: ChatRun, item: RunItem, auto: RunAuto, w: NonNullable<ChatRun['isolated']>, agentId: string): Promise<void> {
     let checks: CheckResult | undefined;
     let review: ReviewResult | undefined;
+    let qa: QaResult | undefined;
     try {
       if (auto.check && this.deps.gate) checks = await this.deps.gate.checks(auto.check, w.path);
+      // QA visual: depois do check (e só se ele passou); falhar só avisa no relatório, não reprova.
+      if (auto.qa && this.deps.gate?.qa && this.deps.qaDir && (!checks || checks.ok)) {
+        qa = await this.deps.gate.qa(auto.qa, w.path, this.itemQaDir(run, item)!).catch((err): QaResult => ({ ok: false, tail: errMsg(err), shots: [] }));
+        item.shots = qa.shots;
+      }
       const diff = (await this.deps.worktrees?.diff(w)) ?? '';
       if (diff.trim() && this.deps.gate) review = await this.deps.gate.review(auto, diff);
     } catch (err) {
@@ -668,7 +694,7 @@ export class RunService {
       // Uma volta só: o próximo fim de rodada (turnEnded → finish) passa de novo pelo portão e termina em 'review'.
       if (this.deps.chat.send(agentId, { text: fixRequest(checks, review) }) === 'ok') return;
     }
-    item.report = gateReport({ branch: w.branch, checks, review, summary: this.deps.chat.lastReply(agentId), retried: item.retried, missing: w.missing });
+    item.report = gateReport({ branch: w.branch, checks, qa, review, summary: this.deps.chat.lastReply(agentId), retried: item.retried, missing: w.missing });
     item.state = 'review';
     item.endedAt = this.now();
     this.metric(run, item);

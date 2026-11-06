@@ -660,7 +660,7 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
             .catch((err) => fail(res, err));
       } else if (path === '/api/vboards/config') {
         const editable = !isRemote(req);
-        const masked = <T extends { config: { check?: string } }>(r: T): T => (editable || !r.config.check ? r : { ...r, config: { ...r.config, check: maskSecrets(r.config.check) } });
+        const masked = <T extends { config: { check?: string; qa?: string } }>(r: T): T => (editable ? r : { ...r, config: { ...r.config, ...(r.config.check ? { check: maskSecrets(r.config.check) } : {}), ...(r.config.qa ? { qa: maskSecrets(r.config.qa) } : {}) } });
         const answer = (r: Awaited<ReturnType<typeof vb.folderSettings>>) => ('error' in r ? sendJson(res, r.status, { error: r.error }) : sendJson(res, 200, { ...masked(r), editable }));
         if (isRead) {
           const folder = url.searchParams.get('folder');

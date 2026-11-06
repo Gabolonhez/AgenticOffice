@@ -218,6 +218,8 @@ export interface FolderConfig {
   budget: number;
   /** vboards.check: comando de shell do portão (instala as dependências: a cópia isolada não tem node_modules nem .env). */
   check?: string;
+  /** vboards.qa: comando opcional do QA visual (depois do check); escreve PNGs em $HABBLAUD_QA_DIR. Falha só avisa. */
+  qa?: string;
   reviewer: Provider;
   reviewerModel?: string;
   /** vboards.copy: arquivos (caminhos relativos, separados por vírgula) copiados da pasta para cada cópia isolada (ex.: .env). */
@@ -232,7 +234,7 @@ export interface FolderConfig {
 
 export const SHIP_MODES = ['off', 'pr', 'merge'] as const;
 export type ShipMode = (typeof SHIP_MODES)[number];
-export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'reviewer', 'reviewerModel', 'copy', 'ship', 'base', 'remote'] as const;
+export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'qa', 'reviewer', 'reviewerModel', 'copy', 'ship', 'base', 'remote'] as const;
 export type FolderKey = (typeof FOLDER_KEYS)[number];
 export const DEFAULT_BUDGET_USD = 2;
 /** Prazo de cada rodada de um item da lista automática. */
@@ -258,6 +260,7 @@ export function parseFolderConfig(out: string | undefined): FolderConfig {
     provider,
     budget: Number.isFinite(budget) && budget > 0 ? budget : DEFAULT_BUDGET_USD,
     ...(raw.get('check') ? { check: raw.get('check') } : {}),
+    ...(raw.get('qa') ? { qa: raw.get('qa') } : {}),
     reviewer,
     ...((raw.get('reviewermodel') || DEFAULT_REVIEWER_MODEL[reviewer]) ? { reviewerModel: raw.get('reviewermodel') || DEFAULT_REVIEWER_MODEL[reviewer] } : {}),
     copy: parseCopyList(raw.get('copy')),
@@ -312,7 +315,7 @@ export function validateFolderConfig(raw: unknown): { values: Partial<Record<Fol
       : key === 'ship' ? (SHIP_MODES as readonly string[]).includes(s)
       : key === 'base' ? validRef(s)
       : key === 'remote' ? validRemote(s)
-      : s.length <= 500; // check
+      : s.length <= 500; // check, qa
     if (!ok) return { error: tr('Valor inválido em vboards.{0}.', [key]) };
     values[key] = s;
   }

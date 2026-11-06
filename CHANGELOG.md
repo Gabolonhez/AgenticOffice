@@ -30,6 +30,11 @@ do meio (0.**3**.0).
 - **Segurança:** pedido por voz conta como de fora (o microfone ouve o ambiente): ações pedem cartão com PIN, e o que
   parece PIN ou senha falado não chega ao Jarvis. O modelo de voz só tem uma ferramenta, perguntar ao Jarvis.
 - A leitura em voz alta das respostas na gaveta segue a língua da página (antes, sempre pt-BR).
+### Escritório autônomo: áudio e QA visual
+
+- **Áudio do WhatsApp:** mande um áudio para o Jarvis (na conversa com você mesmo) e ele é transcrito no Whisper local, sem sair do computador. A resposta começa com "Entendi: «…»" para você conferir, e o pedido entra como dado de fora (nunca vale como ordem sua). Áudio grande demais é recusado; o prazo da transcrição cresce com o tamanho. Sem o Whisper, o Jarvis responde o que falta, agora com o passo a passo para Windows (release do whisper.cpp, `scoop`, `winget` para o ffmpeg, `HABBLAUD_WHISPER_BIN`). Pede ao VBoards o campo `audio` na caixa e `GET /api/v1/jarvis/inbox/:id/audio`.
+- **QA visual no portão:** nova chave `vboards.qa` por pasta, um comando (ex.: script do Playwright) rodado depois do `vboards.check`, que grava PNGs em `HABBLAUD_QA_DIR`. As capturas (até 6) aparecem como miniaturas clicáveis no item da lista; se o QA falhar, o relatório só avisa e não reprova.
+
 ### Escritório autônomo: fundação
 
 - **Produtos com vários repositórios:** em **Configurações › Produtos e repositórios** (`~/.habblaud/products.json`), um
