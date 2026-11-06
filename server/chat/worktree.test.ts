@@ -186,3 +186,44 @@ describe('vboards.copy: arquivos copiados para a cópia', () => {
   });
 });
 
+
+describe('chat: cópia isolada a partir do remoto (vboards.ship)', () => {
+  /** Um "origin" (clone bare) com um commit a mais que o checkout local não tem, e um commit local que o origin não tem. */
+  function withOrigin(ship: string) {
+    const up = repo();
+    const bare = mkdtempSync(join(tmpdir(), 'hb-wt-bare-'));
+    git(bare, 'clone', '-q', '--bare', up, '.');
+    const local = mkdtempSync(join(tmpdir(), 'hb-wt-local-'));
+    git(local, 'clone', '-q', bare, '.');
+    for (const [k, v] of [['user.email', 't@t'], ['user.name', 't'], ['core.hooksPath', join(local, '.no-hooks')], ['core.autocrlf', 'false'], ['vboards.ship', ship]]) git(local, 'config', k, v);
+    writeFileSync(join(up, 'novo.txt'), 'remoto\n');
+    git(up, 'add', '-A');
+    git(up, 'commit', '-q', '-m', 'no remoto');
+    git(up, 'push', '-q', bare, 'main');
+    writeFileSync(join(local, 'local.txt'), 'local\n');
+    git(local, 'add', '-A');
+    git(local, 'commit', '-q', '-m', 'só local');
+    return { local, bare, ops: createWorktreeOps(mkdtempSync(join(tmpdir(), 'hb-wt-data-'))) };
+  }
+
+  it('ship off: nasce do HEAD local, como antes', async () => {
+    const { local, ops } = withOrigin('off');
+    const w = await made(ops, local);
+    expect(w.base).toBe(git(local, 'rev-parse', 'HEAD'));
+  });
+
+  it('ship pr: busca o origin e nasce de origin/main, sem seguir a base', async () => {
+    const { local, bare, ops } = withOrigin('pr');
+    const w = await made(ops, local);
+    expect(w.base).toBe(git(bare, 'rev-parse', 'main'));
+    expect(existsSync(join(w.path, 'novo.txt'))).toBe(true);
+    expect(existsSync(join(w.path, 'local.txt'))).toBe(false);
+    expect(() => git(w.path, 'rev-parse', '--abbrev-ref', '@{upstream}')).toThrow();
+  });
+
+  it('fetch que falha: erro claro, nada criado', async () => {
+    const { local, ops } = withOrigin('pr');
+    git(local, 'config', 'vboards.remote', 'nao-existe');
+    expect(await ops.create(local, 'chat:9', 'x')).toEqual({ error: expect.stringContaining('git fetch nao-existe main') });
+  });
+});
