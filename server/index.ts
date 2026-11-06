@@ -576,30 +576,30 @@ const jarvisInbox = jarvis && vboardsApi ? new JarvisInbox({ api: vboardsApi, wa
 // fechamento do dia e o semanal (só no horário deles, desligados por padrão). Mesmo material, mesmos canais.
 const routine = (kind: ReportKind) =>
   new Briefing({
-      kind,
-      settings: () => ntfy.briefing(kind),
-      runner: claudeRunner(summaryCwd(config.dataDir)),
-      gather: async (since) => {
-        let summary: Record<string, unknown> | undefined;
-        let summaryError: string | undefined;
-        if (vboardsApi?.enabled) {
-          try {
-            summary = await vboardsApi.summary();
-          } catch (err) {
-            summaryError = errMsg(err);
-          }
+    kind,
+    settings: () => ntfy.briefing(kind),
+    runner: claudeRunner(summaryCwd(config.dataDir)),
+    gather: async (since) => {
+      let summary: Record<string, unknown> | undefined;
+      let summaryError: string | undefined;
+      if (vboardsApi?.enabled) {
+        try {
+          summary = await vboardsApi.summary();
+        } catch (err) {
+          summaryError = errMsg(err);
         }
-        const failures = [
-          ...(runs?.list() ?? []).flatMap((r) => r.items.filter((i) => (i.state === 'failed' || i.state === 'interrupted') && (i.endedAt ?? 0) >= since).map((i) => tr('lista em {0}: {1} ({2})', [r.options.folder, i.text.slice(0, 80), i.state]))),
-          ...(triggers?.history() ?? []).filter((f) => f.outcome === 'failed' && f.at >= since).map((f) => tr('gatilho "{0}": {1}', [f.ruleName, f.note ?? ''])),
-        ];
-        const ledger = projectLedger(readJournal(journalFile, since - LEDGER_OPEN_MS), since);
-        return { since, summary, summaryError, metrics: readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since), quota: quotaLines(), failures, ledger };
-      },
-      post: (text) => void chat!.post(jarvis!.ensure(), text),
-      notify: (text, headline) => ntfy.sendText(text, { title: reportTitle(kind), headline }),
-      file: join(config.dataDir, 'jarvis', kind === 'briefing' ? 'briefing.json' : `${kind}.json`),
-    });
+      }
+      const failures = [
+        ...(runs?.list() ?? []).flatMap((r) => r.items.filter((i) => (i.state === 'failed' || i.state === 'interrupted') && (i.endedAt ?? 0) >= since).map((i) => tr('lista em {0}: {1} ({2})', [r.options.folder, i.text.slice(0, 80), i.state]))),
+        ...(triggers?.history() ?? []).filter((f) => f.outcome === 'failed' && f.at >= since).map((f) => tr('gatilho "{0}": {1}', [f.ruleName, f.note ?? ''])),
+      ];
+      const ledger = projectLedger(readJournal(journalFile, since - LEDGER_OPEN_MS), since);
+      return { since, summary, summaryError, metrics: readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since), quota: quotaLines(), failures, ledger };
+    },
+    post: (text) => void chat!.post(jarvis!.ensure(), text),
+    notify: (text, headline) => ntfy.sendText(text, { title: reportTitle(kind), headline }),
+    file: join(config.dataDir, 'jarvis', kind === 'briefing' ? 'briefing.json' : `${kind}.json`),
+  });
 const briefing = jarvis ? routine('briefing') : undefined;
 const extraRoutines = jarvis ? [routine('closing'), routine('weekly')] : [];
 late.briefing = briefing;
