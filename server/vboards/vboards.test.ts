@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentInfo } from '../../shared/types';
 import { setQuiet } from '../log';
 import { policyFile, readPolicy } from './policy';
-import { baseFromUrl, decideCompletion, policyChangeNeedsPin, matchFolders, parseFolderConfig, reportKey, taskFolders, parseRefineOutput, parseRefines, taskRisk, refinePrompt, REFINE_LIMITS, readFolderConfig, resolveConfig, validateFolderConfig, writeFolderConfig, REVIEW_SUMMARY_MAX, SUMMARY_MAX, TodoTracker, TODOS_QUIET_MS, VBoardsService, type FolderConfig } from './vboards';
+import { baseFromUrl, decideCompletion, policyChangeNeedsPin, repoTag, matchFolders, parseFolderConfig, reportKey, taskFolders, parseRefineOutput, parseRefines, taskRisk, refinePrompt, REFINE_LIMITS, readFolderConfig, resolveConfig, validateFolderConfig, writeFolderConfig, REVIEW_SUMMARY_MAX, SUMMARY_MAX, TodoTracker, TODOS_QUIET_MS, VBoardsService, type FolderConfig } from './vboards';
 
 setQuiet(true);
 const flush = () => new Promise((ok) => setTimeout(ok, 0));
@@ -657,7 +657,7 @@ describe('Refinar (plano só de leitura)', () => {
     await s.svc.poll();
     s.svc.stop();
     await settle();
-    expect(s.refine).toHaveBeenCalledWith('/p/payposts-web', expect.stringContaining('Fazer X'), expect.objectContaining({ provider: 'codex' }));
+    expect(s.refine).toHaveBeenCalledWith('/p/payposts-web', expect.stringContaining('Fazer X'), expect.objectContaining({ provider: 'codex' }), undefined);
     expect(s.posts).toEqual([{ email: 'eu@x', cardId: 'c9', status: 'running' }]);
     expect(s.svc.refineList()).toMatchObject([{ cardId: 'c9', state: 'running' }]);
     s.finish();
@@ -755,6 +755,36 @@ describe('VBoards: token vb_ recusado na fila', () => {
     expect(svc.problem()).toBe('O token do VBoards precisa do escopo agent.');
     expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe('https://vb.dev/api/agent-tasks');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Refinar num produto com vários repos', () => {
+  const product = { id: 'helix', name: 'PeptPro', cardName: 'PeptPro', repos: [{ path: '/p/helix-app', role: 'app' as const }, { path: '/p/helix-server', role: 'server' as const }, { path: '/p/peptpro-web', role: 'web' as const }] };
+  it('roda no repo server com os outros como leitura extra e pede a etiqueta em cada subtarefa', async () => {
+    const posts: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes('/api/agent-tasks?')) return new Response(JSON.stringify({ tasks: [], refines: [{ cardId: 'c1', cardTitle: 'PeptPro', description: 'Login com Google', subtasks: [] }] }), { status: 200 });
+      posts.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    const refine = vi.fn(async (_f: string, _p: string, _c: FolderConfig, _x?: string[]) => '```json\n{"plan":"P","questions":[],"subtasks":["[server] rota do Google","[app] botão"]}\n```');
+    const svc = new VBoardsService({ config: { base: 'https://vb.dev', token: 't', email: 'eu@x' }, agents: () => [], roomPath: () => undefined, folders: async () => [], chat: { open: () => ({ agentId: 'chat:1' }) }, folderConfig: async () => parseFolderConfig(undefined), refine, products: () => [product], fetch: fetchMock as unknown as typeof fetch });
+    await svc.poll();
+    svc.stop();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    await new Promise((ok) => setTimeout(ok, 0));
+    expect(refine).toHaveBeenCalledWith('/p/helix-server', expect.stringContaining('[app] /p/helix-app'), expect.anything(), ['/p/helix-app', '/p/peptpro-web']);
+    expect(refine.mock.calls[0][1]).toContain('Comece o texto de CADA subtarefa com a etiqueta');
+    expect(posts.at(-1)).toMatchObject({ status: 'ready', subtasks: ['[server] rota do Google', '[app] botão'] });
+    // A abertura automática acha a pasta pela etiqueta que o Refinar pôs.
+    expect(taskFolders({ cardTitle: 'PeptPro', text: '[server] rota do Google' }, [], [product])).toEqual({ paths: ['/p/helix-server'] });
+    expect(taskFolders({ cardTitle: 'PeptPro', text: '[app] botão' }, [], [product])).toEqual({ paths: ['/p/helix-app'] });
+    expect(taskFolders({ cardTitle: 'PeptPro', text: '[peptpro-web] rodapé' }, [], [product])).toEqual({ paths: ['/p/peptpro-web'] });
+  });
+
+  it('repoTag: o papel quando é único, senão o nome da pasta', () => {
+    const repos = [{ path: '/p/a-app', role: 'app' as const }, { path: '/p/b-app', role: 'app' as const }, { path: '/p/api', role: 'server' as const }];
+    expect(repos.map((r) => repoTag(repos, r))).toEqual(['a-app', 'b-app', 'server']);
   });
 });
 

@@ -440,7 +440,8 @@ const vboards =
               if ('error' in r && r.status !== 409) log.warnOnce(`vboards:auto:${r.error}`, tr('VBoards: não abriu a lista automática de {0} ({1}).', [folder, r.error]));
             },
         // "Refinar" (o clique já foi no VBoards): uma rodada só de leitura na pasta, pelo vboards.provider.
-        refine: chatOff ? undefined : (folder, prompt, cfg) => refinerFor(cfg.provider, folder, cfg.budget).run(prompt).then((r) => r.text),
+        // Produto com vários repos: os outros vão como leitura extra (extraDirs).
+        refine: chatOff ? undefined : (folder, prompt, cfg, extra) => refinerFor(cfg.provider, folder, cfg.budget, undefined, undefined, false, extra).run(prompt).then((r) => r.text),
         // Perguntas do Refinar: o card passa a esperar o dono (vboards/triage.ts).
         onQuestions: (r, questions) => late.triage?.askRefine(r, questions),
         notify: (title, event) => ntfy.notify(title, event),

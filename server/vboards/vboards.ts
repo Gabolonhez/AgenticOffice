@@ -30,7 +30,7 @@ import { apiErrorText } from './api';
 import type { NotifyEvent } from './ntfy';
 import type { RiskLevel } from '../../shared/runs';
 import { parseRisk } from '../chat/risk';
-import { pickRepo, productForCard, repoHint, type Product } from './products';
+import { pickRepo, productForCard, repoHint, type Product, type ProductRepo } from './products';
 import { pinError, type ApprovalPin } from '../permissions/pin';
 import { isSensitive, policyFile, policyNeedsPin, readPolicy, SENSITIVE_KEYS, writePolicy, type FolderPolicy, type SensitiveKey } from './policy';
 
@@ -492,8 +492,19 @@ export function parseRefines(raw: unknown): RefineRequest[] {
 }
 
 /** O pedido do "Refinar": o card e as subtarefas que já existem; a resposta é UM bloco ```json. */
-export function refinePrompt(r: Pick<RefineRequest, 'cardTitle' | 'description' | 'subtasks'>): string {
+/** A etiqueta de cada repo de um produto na subtarefa: o papel (se só um repo tem ele), senão o nome da pasta. */
+export const repoTag = (repos: readonly Pick<ProductRepo, 'path' | 'role'>[], r: Pick<ProductRepo, 'path' | 'role'>): string =>
+  r.role !== 'other' && repos.filter((x) => x.role === r.role).length === 1 ? r.role : baseName(r.path);
+
+export function refinePrompt(r: Pick<RefineRequest, 'cardTitle' | 'description' | 'subtasks'>, repos?: readonly Pick<ProductRepo, 'path' | 'role'>[]): string {
   const subtasks = r.subtasks.slice(0, 50).map((t) => `- ${cutText(t, REFINE_LIMITS.subtask)}`);
+  const multi = repos && repos.length > 1
+    ? [
+        'Este card é de um produto com vários repositórios. A pasta atual é o principal; os outros você só lê, pelo caminho:',
+        ...repos.map((x) => `- [${repoTag(repos, x)}] ${x.path}`),
+        'Comece o texto de CADA subtarefa com a etiqueta do repo onde ela será feita, exatamente como acima (ex.: "[server] validar o token no login"). Uma subtarefa mexe em um repo só.',
+      ]
+    : [];
   return [
     'Você planeja um card do quadro do time, em português do Brasil. Só leia: não edite arquivos, não rode comandos que mudem nada, não faça commit.',
     'Leia o repositório desta pasta o quanto precisar para entender o pedido e responda com UM único bloco ```json, sem mais nada depois dele:',
@@ -501,6 +512,7 @@ export function refinePrompt(r: Pick<RefineRequest, 'cardTitle' | 'description' 
     'risk: high se mexer em login, pagamento, assinatura, dados de usuário, banco/migration, CI, dependências ou build da loja; medium se mexer em regra de negócio ou em muitos arquivos; low só para mudança pequena, isolada e fácil de desfazer (texto, estilo, ajuste local). Na dúvida, medium.',
     `Limites: plan até ${REFINE_LIMITS.plan} caracteres; até ${REFINE_LIMITS.questions} perguntas; até ${REFINE_LIMITS.subtasks} subtarefas, sem repetir as que já existem.`,
     'Cada subtarefa vira um agente que implementa e já faz o próprio commit: não crie subtarefa só de commit, push, PR, merge ou revisão. Para o pedido pequeno, uma subtarefa basta.',
+    ...multi,
     '',
     `Card: ${cutText(r.cardTitle, 200)}`,
     `Descrição:\n${cutText(r.description.trim(), REFINE_DESCRIPTION_MAX) || '(sem descrição)'}`,
@@ -674,9 +686,9 @@ export interface VBoardsServiceOptions {
   auto?: (folder: string, tasks: Array<{ id: string; prompt: string } & Pick<AgentTask, 'risk' | 'riskWhy' | 'approvedAt'>>, config: FolderConfig) => void;
   /**
    * "Refinar": uma rodada só de leitura na pasta (gate.ts refinerFor) que devolve o texto da resposta. Ausente (chat
-   * desligado) = os pedidos de refinar ficam para outro Habblaud.
+   * desligado) = os pedidos de refinar ficam para outro Habblaud. `extraDirs`: os outros repos do produto (só leitura).
    */
-  refine?: (folder: string, prompt: string, config: FolderConfig) => Promise<string>;
+  refine?: (folder: string, prompt: string, config: FolderConfig, extraDirs?: string[]) => Promise<string>;
   /** O Refinar devolveu `questions`: o card passa a esperar o dono (vboards/triage.ts askRefine). */
   onQuestions?: (r: RefineRequest, questions: string[]) => void;
   /** Aviso no celular (vboards/ntfy.ts): só o título do card e o que aconteceu. */
@@ -815,7 +827,10 @@ export class VBoardsService {
   }
 
   private async refine(r: RefineRequest, run: NonNullable<VBoardsServiceOptions['refine']>): Promise<void> {
-    const m = taskFolders(r, await this.knownFolders(), this.products());
+    // Produto com vários repos: o card é refinado no repo principal (server, senão o primeiro), os outros só para leitura,
+    // e cada subtarefa volta com a etiqueta do repo dela (a abertura automática acha a pasta por ela).
+    const product = productForCard(r.cardTitle, this.products());
+    const m: { paths: string[]; error?: string } = product && product.repos.length > 1 ? { paths: [(product.repos.find((x) => x.role === 'server') ?? product.repos[0]).path] } : taskFolders(r, await this.knownFolders(), this.products());
     const matches = m.paths;
     if (m.error || matches.length !== 1) {
       const error = m.error
@@ -828,7 +843,9 @@ export class VBoardsService {
     // VBoards que recusa o "running" (antigo, 404/400): nem gasta a rodada.
     if ((await this.postRefine(r, { status: 'running' })) === 'rejected') return;
     const folder = matches[0];
-    const text = await run(folder, refinePrompt(r), await (this.opts.folderConfig ?? readFolderConfig)(folder));
+    const repos = product && product.repos.length > 1 ? product.repos : undefined;
+    const extra = repos?.filter((x) => !samePath(x.path, folder)).map((x) => x.path);
+    const text = await run(folder, refinePrompt(r, repos), await (this.opts.folderConfig ?? readFolderConfig)(folder), extra);
     const out = parseRefineOutput(text);
     if (out?.questions.length) this.opts.onQuestions?.(r, out.questions);
     await this.postRefine(r, out ? { status: 'ready', ...out } : { status: 'failed', error: `${tr('A resposta não trouxe um bloco ```json válido (plan, questions, subtasks). Fim da saída:')}\n${maskSecrets(text).trim().slice(-1_500)}` });
