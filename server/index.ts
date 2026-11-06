@@ -12,6 +12,7 @@ import { createRequestGuard, isLoopbackHost } from './http/guard';
 import { createRemoteGate, isRemoteRequest, loadSecret, RemoteSessions, startRemoteListener, type RemoteListener } from './http/remote';
 import { Hub } from './http/sse';
 import { createStaticHandler } from './http/static';
+import { packRoot } from './assets3d/pack';
 import { TerminalStreams } from './http/terminal';
 import { createTimelineHandler } from './http/timeline';
 import { TIMELINE_DIR, TimelineRecorder } from './history/timeline';
@@ -626,6 +627,7 @@ if (chat) {
 }
 
 const api = createApiHandler({
+  assets3dRoot: packRoot(config.dataDir),
   renameRoom: (id, name) => {
     const path = office.roomPath(id);
     if (!path) return undefined;

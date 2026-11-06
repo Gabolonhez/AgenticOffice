@@ -24,10 +24,15 @@ import { AUDIO_BODY_MAX, type DictationService } from '../dictation/dictation';
 import type { DeliveryIndex } from '../deliveries/deliveries';
 import type { FileFetcher } from '../deliveries/fetcher';
 import { HOST_WAIT_MS } from '../host-wait';
+import { importPack, packStatus } from '../assets3d/pack';
+import { ZipError } from '../assets3d/zip';
+import { serveAsset } from './assets3d';
 import { ptyRequestProblem } from './pty';
 import type { VBoardsService } from '../vboards/vboards';
 
 export interface ApiDeps {
+  /** Pasta do pacote 3D importado (GET /api/assets3d, /api/assets3d/file/*, POST /api/assets3d/import; server/assets3d). */
+  assets3dRoot?: string;
   office: Office;
   hub: Hub;
   accounts: AccountsService;
@@ -119,6 +124,9 @@ export interface ApiDeps {
    */
   ntfy?: { view(editable: boolean): Record<string, unknown>; update(raw: unknown): string | undefined };
 }
+
+/** Corpo do POST /api/assets3d/import: o zip (~10 MB) em base64. */
+const ZIP_BODY_MAX = 170 * 1024 * 1024;
 
 /** GET /api/agents/:id/terminal (ids nunca contêm '/'). */
 const TERMINAL_ROUTE = /^\/api\/agents\/([^/]+)\/terminal$/;
@@ -372,6 +380,33 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
         req.resume();
         sendJson(res, 403, { error: { code: 'local_only', message: tr('o Habblaud World só é usado pelo próprio computador (http://localhost)') } });
       } else deps.world(req, res, url);
+      return true;
+    }
+    if (path === '/api/assets3d' || path.startsWith('/api/assets3d/')) {
+      const root = deps.assets3dRoot;
+      if (!root) sendJson(res, 404, { error: tr('rota desconhecida') });
+      else if (path === '/api/assets3d' && isRead) sendJson(res, 200, packStatus(root));
+      else if (path.startsWith('/api/assets3d/file/') && isRead) serveAsset(root, path.slice('/api/assets3d/file/'.length), req, res);
+      else if (path === '/api/assets3d/import' && method === 'POST') {
+        // grava no disco do computador: só pelo próprio computador. O corpo é JSON ({data: zip em base64}) por causa da trava de CSRF.
+        if (!trusted(req)) {
+          req.resume();
+          sendJson(res, 403, { error: denied(req, tr('o pacote 3D só é importado pelo próprio computador (http://localhost)')) });
+        } else
+          readJson(req, ZIP_BODY_MAX)
+            .then((body) => {
+              const data = (body as { data?: unknown })?.data;
+              if (typeof data !== 'string' || !data) throw new HttpError(400, tr('esperado {data: zip em base64}'));
+              try {
+                importPack(Buffer.from(data, 'base64'), root);
+              } catch (err) {
+                if (err instanceof ZipError) throw new HttpError(400, err.message);
+                throw err;
+              }
+              sendJson(res, 200, packStatus(root));
+            })
+            .catch((err) => fail(res, err));
+      } else methodNotAllowed(res, 'GET, POST');
       return true;
     }
     if (path === '/api/stream') {
