@@ -10,6 +10,20 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Triagem, perguntas e pesquisa do VBoards
+
+- **Triagem das ideias:** cada ideia nova do VBoards passa por uma rodada só de leitura que diz se ela é válida, duplicada
+  ou já feita, a qual produto e repositório pertence, a prioridade e o que falta perguntar. O resultado vai para o card, para
+  o registro por projeto e para a tela do VBoards. Ferramenta do Jarvis: `vboards_triage`. `HABBLAUD_TRIAGE=0` desliga a
+  varredura automática.
+- **Laço de perguntas:** quando a triagem ou o Refinar devolvem perguntas, o card fica "Aguardando você" (selo na lista e no
+  briefing) e o Jarvis pergunta na conversa, no ntfy e no WhatsApp, numeradas. Responda na tela do card, no Jarvis ou com
+  "Jarvis, resposta do card X: ..."; a resposta volta como contexto e refina de novo. Resposta vinda do WhatsApp é marcada
+  como não verificada e nunca aprova nada.
+- **Pesquisa agendada:** modelo "Pesquisar ideias para <produto>" (`vboards_research_schedule`): uma rodada só de leitura,
+  com busca na web, resume oportunidades, concorrentes e avaliações. Criar os cards em "ideas" (origem `research`) pede
+  cartão de aprovação.
+
 ### Escritório 3D
 
 - **Escritório 3D:** o botão **3D** da barra do topo troca o escritório 2D por um escritório em 3D, onde cada agente vira um
