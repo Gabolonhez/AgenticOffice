@@ -12210,8 +12210,16 @@ html.has-jarvis {
 }
 @media (max-width: 760px) {
   .ui-jarvis {
+    display: flex;
+    flex-direction: column;
     overflow: auto;
-    grid-template-rows: auto auto auto;
+  }
+  .ui-jarvis__stage {
+    min-height: auto;
+    padding-top: 8px;
+  }
+  .ui-jarvis__history {
+    overflow: visible;
   }
   .ui-jarvis__head {
     padding: 12px 14px 0;
@@ -12223,6 +12231,7 @@ html.has-jarvis {
     display: none;
   }
   .ui-jarvis__body {
+    flex: none;
     grid-template-columns: 1fr;
     padding: 4px 14px 10px;
     gap: 14px;
@@ -12236,6 +12245,8 @@ html.has-jarvis {
   .ui-jarvis__foot {
     position: sticky;
     bottom: 0;
+    margin-top: auto;
+    background: #090c13;
     padding: 10px 14px max(12px, env(safe-area-inset-bottom));
   }
   .ui-jarvis__link {
