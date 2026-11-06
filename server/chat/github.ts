@@ -84,6 +84,7 @@ export function githubErrorText(status: number, message?: string): string {
 }
 
 const API = 'https://api.github.com';
+const CHECK_PAGES_MAX = 20;
 const TIMEOUT_MS = 20_000;
 const enc = encodeURIComponent;
 
@@ -115,9 +116,14 @@ export class GitHub {
   }
 
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
+    return (await this.request<T>(method, `${API}${path}`, body)).j;
+  }
+
+  /** `next`: a próxima página (cabeçalho Link), só se for da própria API do GitHub (o token não vai para outro host). */
+  private async request<T>(method: string, url: string, body?: unknown): Promise<{ j: T; next?: string }> {
     let res: Response;
     try {
-      res = await this.fetchImpl(`${API}${path}`, {
+      res = await this.fetchImpl(url, {
         method,
         headers: {
           Authorization: `Bearer ${this.token}`,
@@ -137,7 +143,8 @@ export class GitHub {
       const errors = Array.isArray(j.errors) ? j.errors.map((e) => (e as { message?: unknown })?.message).filter((x) => typeof x === 'string') : [];
       throw new GitHubError(githubErrorText(res.status, [j.message, ...errors].filter((x) => typeof x === 'string' && x).join(': ')), res.status);
     }
-    return j as T;
+    const next = /<([^>]+)>;\s*rel="next"/.exec(res.headers?.get?.('link') ?? '')?.[1];
+    return { j: j as T, ...(next && next.startsWith(`${API}/`) ? { next } : {}) };
   }
 
   /** Abre o PR (head → base); já existindo um aberto do mesmo branch, devolve ele. */
@@ -156,9 +163,18 @@ export class GitHub {
     return toPr(await this.call('GET', `/repos/${enc(r.owner)}/${enc(r.repo)}/pulls/${n}`));
   }
 
-  /** Check-runs e o status combinado do SHA. */
+  /** Check-runs (todas as páginas) e o status combinado do SHA. */
   async checks(r: GhRepo, sha: string): Promise<{ checkRuns: CheckRun[]; statuses: CommitStatus[] }> {
-    const runs = await this.call<{ check_runs?: Array<Record<string, unknown>> }>('GET', `/repos/${enc(r.owner)}/${enc(r.repo)}/commits/${enc(sha)}/check-runs?per_page=100`);
+    const all: Array<Record<string, unknown>> = [];
+    let url: string | undefined = `${API}/repos/${enc(r.owner)}/${enc(r.repo)}/commits/${enc(sha)}/check-runs?per_page=100`;
+    for (let page = 0; url && page < CHECK_PAGES_MAX; page++) {
+      const p: { j: { check_runs?: Array<Record<string, unknown>> }; next?: string } = await this.request<{ check_runs?: Array<Record<string, unknown>> }>('GET', url);
+      all.push(...(p.j.check_runs ?? []));
+      url = p.next;
+    }
+    // Páginas demais: não dá para dizer que está tudo verde.
+    if (url) all.push({ status: 'in_progress', conclusion: null });
+    const runs = { check_runs: all };
     const status = await this.call<{ statuses?: Array<Record<string, unknown>> }>('GET', `/repos/${enc(r.owner)}/${enc(r.repo)}/commits/${enc(sha)}/status?per_page=100`);
     return {
       checkRuns: (runs.check_runs ?? []).map((c) => ({ status: String(c.status ?? ''), conclusion: typeof c.conclusion === 'string' ? c.conclusion : null })),
@@ -195,8 +211,8 @@ export class GitHub {
   }
 }
 
-/** Token fine-grained (github_pat_) ou clássico (ghp_ e afins). */
-export const validGitHubToken = (s: string): boolean => /^(github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,255}$/.test(s);
+/** Só token fine-grained (github_pat_): o clássico (ghp_) vale para todos os repos da conta, e o Subir não aceita. */
+export const validGitHubToken = (s: string): boolean => /^github_pat_[A-Za-z0-9_]{20,255}$/.test(s);
 
 /** HABBLAUD_GITHUB_TOKEN (prioridade) ou <dataDir>/github.json {token} (600). */
 export class GitHubTokenStore {
@@ -214,18 +230,23 @@ export class GitHubTokenStore {
     }
   }
 
+  /** Só fine-grained: um clássico na variável conta como sem token. */
   get(): string | undefined {
-    return this.env.HABBLAUD_GITHUB_TOKEN?.trim() || this.fromFile();
+    const env = this.env.HABBLAUD_GITHUB_TOKEN?.trim();
+    if (env) return validGitHubToken(env) ? env : undefined;
+    return this.fromFile();
   }
 
   view(editable: boolean): GitHubTokenView {
-    const source = this.env.HABBLAUD_GITHUB_TOKEN?.trim() ? 'env' : this.fromFile() ? 'file' : null;
-    return { set: !!source, source, editable };
+    const env = this.env.HABBLAUD_GITHUB_TOKEN?.trim();
+    const source = env ? 'env' : this.fromFile() ? 'file' : null;
+    return { set: !!this.get(), source, editable };
   }
 
   /** Grava (600) ou apaga ('' ). Devolve o erro, se houver. */
   save(raw: unknown): string | undefined {
     const token = typeof raw === 'string' ? raw.trim() : undefined;
+    if (token && /^gh[pousr]_/.test(token)) return tr('Token clássico (ghp_) não é aceito: ele vale para todos os repositórios da conta. Crie um token fine-grained (github_pat_...) só com os repositórios que vão subir.');
     if (token === undefined || (token && !validGitHubToken(token))) return tr('Token do GitHub inválido: use um token fine-grained (github_pat_...).');
     try {
       if (!token) {

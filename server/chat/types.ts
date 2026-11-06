@@ -58,10 +58,10 @@ export interface ShipWorktreeOps extends WorktreeOps {
   commit(w: { path: string; base?: string; copied?: string[] }, message: string): Promise<{ ok: true; sha: string } | { ok: false; reason: string }>;
   /** Endereço do remoto (git remote get-url) e o branch padrão dele (refs/remotes/<remote>/HEAD), se houver. */
   remoteInfo(repo: string, remote: string): Promise<{ url?: string; head?: string }>;
-  /** Arquivos mudados entre a base da cópia e `sha`. */
-  changedFiles(w: { path: string; base: string }, sha: string): Promise<string[]>;
+  /** Arquivos mudados entre a base da cópia e `sha` e os segredos achados no diff (diff endurecido). */
+  scan(w: { path: string; base: string }, sha: string): Promise<{ names: string[]; secrets: string[] } | { error: string }>;
   /** Push só do branch agentic/* da cópia, do SHA aprovado, sem force, com varredura de segredos; token só no env. */
-  push(w: { path: string; branch: string; base: string }, o: { url: string; sha: string; token: string; baseBranch: string }): Promise<{ ok: true } | { ok: false; reason: string }>;
+  push(w: { path: string; branch: string; base: string }, o: { url: string; sha: string; token: string; baseBranch: string; message: string; parent?: string }): Promise<{ ok: true; pushed: string } | { ok: false; reason: string }>;
   /** Fast-forward do checkout local se estiver limpo e na base; devolve o aviso quando não deu. */
   fastForward(repo: string, remote: string, base: string): Promise<string | undefined>;
 }

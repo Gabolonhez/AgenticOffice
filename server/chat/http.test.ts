@@ -196,6 +196,7 @@ describe('chat: rotas HTTP', () => {
 
 describe('chat: rotas do "Subir"', () => {
   const SHA = 'a'.repeat(40);
+  const card = { sha: SHA, owner: 'acme', repo: 'api', base: 'main', remote: 'origin', mode: 'merge', deploy: 'none', risky: ['.husky/pre-push'] };
   async function startShip(o: { pinSet?: boolean; remote?: { is: boolean; trusted: boolean } } = {}) {
     const approvals: unknown[] = [];
     const saved: unknown[] = [];
@@ -222,7 +223,7 @@ describe('chat: rotas do "Subir"', () => {
 
   it('sem PIN definido = 403; nada sobe', async () => {
     const { port, approvals } = await startShip();
-    const r = await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456' });
+    const r = await post(port, '/api/chat/runs/r1/ship', { ...card, pin: '123456' });
     expect(r.status).toBe(403);
     expect(JSON.parse(r.body)).toMatchObject({ pin: 'unset', error: expect.stringMatching(/defina um PIN/) });
     expect(approvals).toEqual([]);
@@ -230,15 +231,19 @@ describe('chat: rotas do "Subir"', () => {
 
   it('PIN faltando ou errado = 403; certo sobe o SHA do cartão (e o noCi só quando pedido)', async () => {
     const { port, approvals } = await startShip({ pinSet: true });
-    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA })).status).toBe(403);
-    const wrong = await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '000000' });
+    expect((await post(port, '/api/chat/runs/r1/ship', card)).status).toBe(403);
+    const wrong = await post(port, '/api/chat/runs/r1/ship', { ...card, pin: '000000' });
     expect(wrong.status).toBe(403);
     expect(JSON.parse(wrong.body).pin).toBe('wrong');
     expect(approvals).toEqual([]);
     expect((await post(port, '/api/chat/runs/r1/ship', { sha: 'curto', pin: '123456' })).status).toBe(400);
-    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456' })).status).toBe(200);
-    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456', noCi: true })).status).toBe(200);
-    expect(approvals).toEqual([{ id: 'r1', sha: SHA }, { id: 'r1', sha: SHA, noCi: true }]);
+    expect((await post(port, '/api/chat/runs/r1/ship', { ...card, pin: '123456' })).status).toBe(200);
+    expect((await post(port, '/api/chat/runs/r1/ship', { ...card, pin: '123456', noCi: true })).status).toBe(200);
+    expect(approvals).toEqual([{ id: 'r1', ...card }, { id: 'r1', ...card, noCi: true }]);
+    // Cartão pela metade (só o SHA) não passa.
+    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456' })).status).toBe(400);
+    expect((await post(port, '/api/chat/runs/r1/ship', { ...card, risky: 'x', pin: '123456' })).status).toBe(400);
+    expect(approvals).toHaveLength(2);
   });
 
   it('prepare não pede PIN (só commita e mostra o cartão)', async () => {
@@ -251,7 +256,7 @@ describe('chat: rotas do "Subir"', () => {
 
   it('porta remota sem "chat" liberado: 403 no ship e no prepare', async () => {
     const { port, approvals } = await startShip({ pinSet: true, remote: { is: true, trusted: false } });
-    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456' })).status).toBe(403);
+    expect((await post(port, '/api/chat/runs/r1/ship', { ...card, pin: '123456' })).status).toBe(403);
     expect((await post(port, '/api/chat/runs/r1/ship/prepare', {})).status).toBe(403);
     expect(approvals).toEqual([]);
   });

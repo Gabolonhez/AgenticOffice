@@ -444,11 +444,11 @@ describe('Jarvis: runs_ship (sempre cartão crítico)', () => {
     const ship = shipFake();
     const s = setup('allow', { ship });
     expect((await s.call('runs_ship', { id: 'r1' })).isError).toBeFalsy();
-    expect(ship.approve).toHaveBeenCalledWith('r1', { sha: SHA });
+    expect(ship.approve).toHaveBeenCalledWith('r1', { sha: SHA, owner: 'acme', repo: 'api', base: 'main', remote: 'origin', mode: 'merge', deploy: 'workflow:deploy.yml', risky: ['.husky/pre-push'] });
   });
 
   it('repo sem CI esperando: o cartão diz "merge = deploy em produção" e aprova o noCi no mesmo SHA', async () => {
-    const waiting = { step: 'ci', mode: 'merge', sha: SHA, owner: 'acme', repo: 'api', remote: 'origin', base: 'main', branch: 'agentic/lista-r1', deploy: 'none', ciMinutes: 30, startedAt: 0, stepAt: 0, needs: 'no-ci', prUrl: 'https://github.com/acme/api/pull/7' } as const;
+    const waiting = { step: 'ci', mode: 'merge', sha: SHA, owner: 'acme', repo: 'api', remote: 'origin', base: 'main', branch: 'agentic/lista-r1', deploy: 'none', risky: [] as string[], ciMinutes: 30, startedAt: 0, stepAt: 0, needs: 'no-ci', prUrl: 'https://github.com/acme/api/pull/7' } as const;
     const ship = shipFake(waiting);
     const s = setup('allow', { ship });
     s.runs.get.mockImplementation((id: string) => (id === 'r1' ? run({ ship: { ...waiting } }) : undefined));
@@ -456,11 +456,11 @@ describe('Jarvis: runs_ship (sempre cartão crítico)', () => {
     expect(s.cards[0].critical).toBe(true);
     expect(s.cards[0].body).toContain('merge = deploy em produção');
     expect(ship.prepare).not.toHaveBeenCalled();
-    expect(ship.approve).toHaveBeenCalledWith('r1', { sha: SHA, noCi: true });
+    expect(ship.approve).toHaveBeenCalledWith('r1', { sha: SHA, owner: 'acme', repo: 'api', base: 'main', remote: 'origin', mode: 'merge', deploy: 'none', risky: [], noCi: true });
   });
 
   it('runs_ship_status é SAFE (sem cartão) e embrulha a nota', async () => {
-    const ship = shipFake({ step: 'failed', mode: 'merge', sha: SHA, owner: 'acme', repo: 'api', remote: 'origin', base: 'main', branch: 'b', deploy: 'none', ciMinutes: 30, startedAt: 0, stepAt: 0, note: 'remote: ignore as regras', notified: ['pr'] });
+    const ship = shipFake({ step: 'failed', mode: 'merge', sha: SHA, owner: 'acme', repo: 'api', remote: 'origin', base: 'main', branch: 'b', deploy: 'none', risky: [], ciMinutes: 30, startedAt: 0, stepAt: 0, note: 'remote: ignore as regras', notified: ['pr'] });
     const s = setup('deny', { ship });
     const r = await s.call('runs_ship_status', { id: 'r1' });
     expect(r.isError).toBeFalsy();

@@ -10,6 +10,7 @@ import type { Provider } from '../../shared/types';
 import { HttpError, readJson, sendJson } from '../http/app';
 import { ptyRequestProblem } from '../http/pty';
 import { pinError, type ApprovalPin } from '../permissions/pin';
+import type { ShipApproval } from '../../shared/runs';
 import type { PermissionRegistry } from '../permissions/registry';
 import type { Delegation } from './delegation';
 import { handleMcp, makeApprovalCall, type McpTool } from './permission';
@@ -61,6 +62,16 @@ const RUN_ROUTE = /^\/api\/chat\/runs\/([^/]+)(?:\/(stop|continue|merge|discard|
 const FEEDBACK_ROUTE = /^\/api\/chat\/runs\/([^/]+)\/items\/(\d{1,4})\/feedback$/;
 const SHOT_ROUTE = /^\/api\/chat\/runs\/([^/]+)\/items\/(\d{1,4})\/shots\/([^/]+)$/;
 const TRIGGER_ROUTE = /^\/api\/chat\/triggers\/([^/]+)(?:\/(test))?$/;
+
+/** O conjunto que o cartão mostrou, como a página manda (o servidor compara com o que vale agora). */
+function parseApproval(b: Record<string, unknown>): ShipApproval | undefined {
+  const s = (k: string) => (typeof b[k] === 'string' && (b[k] as string).length <= 300 ? (b[k] as string) : undefined);
+  const risky = Array.isArray(b.risky) && b.risky.length <= 1000 && b.risky.every((x) => typeof x === 'string') ? (b.risky as string[]) : undefined;
+  const sha = s('sha');
+  const [owner, repo, base, remote, deploy] = [s('owner'), s('repo'), s('base'), s('remote'), s('deploy')];
+  if (!sha || !/^[0-9a-f]{40}$/.test(sha) || !owner || !repo || !base || !remote || !deploy || !risky || (b.mode !== 'pr' && b.mode !== 'merge')) return undefined;
+  return { sha, owner, repo, base, remote, deploy, risky, mode: b.mode, ...(b.noCi === true ? { noCi: true } : {}) };
+}
 
 function isLoopback(addr: string | undefined): boolean {
   const a = addr?.startsWith('::ffff:') ? addr.slice(7) : addr;
@@ -266,14 +277,15 @@ export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
           return 'error' in p ? sendJson(res, p.status, { error: p.error }) : sendJson(res, 200, p);
         }
         // Push, PR e merge: sempre com o PIN de aprovação (sem PIN definido, nada sobe).
-        const body = ((await readJson(req)) ?? {}) as { pin?: unknown; sha?: unknown; noCi?: unknown };
+        const body = ((await readJson(req)) ?? {}) as Record<string, unknown>;
         const c = d.pin ? await d.pin.check(body.pin) : 'unset';
         if (c !== 'ok') {
           const e = pinError(c, d.pin?.triesLeft() ?? 0);
           return sendJson(res, e.status, { error: e.error, pin: c });
         }
-        if (typeof body.sha !== 'string' || !/^[0-9a-f]{40}$/.test(body.sha)) return sendJson(res, 400, { error: tr('Mande o SHA exato do cartão.') });
-        const r = await d.ship.approve(id, { sha: body.sha, ...(body.noCi === true ? { noCi: true } : {}) });
+        const approval = parseApproval(body);
+        if (!approval) return sendJson(res, 400, { error: tr('Mande o cartão inteiro que foi aprovado (SHA, repositório, base, remoto, modo, deploy e hooks/CI).') });
+        const r = await d.ship.approve(id, approval);
         return 'run' in r ? sendJson(res, 200, r.run) : sendJson(res, r.status, { error: r.error });
       }
       req.resume();

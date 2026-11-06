@@ -3,7 +3,7 @@
 // confirmar (todos os itens, a pasta, o agente, o papel e a permissão; "Rodar lista" é a aprovação da lista inteira) e
 // acompanhar (cada item com o agente dele; Parar, Continuar, Juntar/Descartar; o diff da cópia com comentários por linha).
 import { tr } from '../../../shared/i18n';
-import { parseChecklist, shipActive, type ChatRun, type RunCreateRequest, type RunFeedbackComment, type RunShip, type ShipPreview, type ShipStep } from '../../../shared/runs';
+import { parseChecklist, shipActive, shipApprovalOf, type ChatRun, type ShipApproval, type RunCreateRequest, type RunFeedbackComment, type RunShip, type ShipPreview, type ShipStep } from '../../../shared/runs';
 import { ChatOptionsFields } from './chat-options';
 import type { UiContext } from './context';
 import { h, iconButton, setHidden, setText } from './dom';
@@ -354,12 +354,14 @@ export class RunsPanel {
     this.renderRuns(true);
   }
 
-  private async sendShip(run: ChatRun, sha: string, noCi: boolean): Promise<void> {
+  /** Manda o cartão inteiro que a pessoa viu: o servidor recusa se qualquer campo mudou. */
+  private async sendShip(run: ChatRun, approval: ShipApproval): Promise<void> {
     const u = this.cardUi(run.id);
+    const noCi = !!approval.noCi;
     const pin = noCi ? u.noCiPin : u.pin;
     if (!pin) return this.say(tr('Digite o PIN de aprovação.'), true);
     try {
-      await api(`/api/chat/runs/${encodeURIComponent(run.id)}/ship`, { pin, sha, ...(noCi ? { noCi: true } : {}) });
+      await api(`/api/chat/runs/${encodeURIComponent(run.id)}/ship`, { pin, ...approval });
       u.preview = undefined;
       u.pin = u.noCiPin = '';
       this.say('');
@@ -397,7 +399,7 @@ export class RunsPanel {
     const u = this.cardUi(run.id);
     const row = (k: string, v: string | HTMLElement) => h('div', { class: 'ui-runs__row' }, h('dt', { text: k }), h('dd', {}, v));
     const gate = p.gate === 'pass' ? tr('passou') : p.gate === 'fail' ? tr('falhou') : tr('sem portão');
-    const go = () => void this.sendShip(run, p.sha, false);
+    const go = () => void this.sendShip(run, shipApprovalOf(p));
     return h(
       'div',
       { class: 'ui-ship__box' },
@@ -427,7 +429,7 @@ export class RunsPanel {
 
   private shipProgress(run: ChatRun, s: RunShip): HTMLElement {
     const u = this.cardUi(run.id);
-    const go = () => void this.sendShip(run, s.sha, true);
+    const go = () => void this.sendShip(run, shipApprovalOf(s, true));
     return h(
       'div',
       { class: 'ui-ship' },
@@ -445,7 +447,8 @@ export class RunsPanel {
         ? h(
             'div',
             { class: 'ui-ship__box ui-ship__box--danger' },
-            h('p', { class: 'ui-ship__warn', text: tr('Este repo não tem CI de PR; merge = deploy em produção.') }),
+            h('p', { class: 'ui-ship__warn', text: s.risky?.length ? tr('O diff muda workflows ou hooks ({0}): CI verde não prova nada; merge = deploy em produção.', [s.risky.join(', ')]) : tr('Este repo não tem CI de PR; merge = deploy em produção.') }),
+            h('p', { class: 'ui-rename__hint', text: `${s.owner}/${s.repo} · ${s.base} ← ${s.branch} · ${s.remote} · ${s.deploy}` }),
             h('code', { class: 'ui-ship__sha', text: s.sha }),
             this.pinInput(() => u.noCiPin, (v) => (u.noCiPin = v), go),
             h('div', { class: 'ui-vboards__actions' }, h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow', type: 'button', on: { click: go } }, tr('Aprovar merge sem CI'))),
@@ -477,7 +480,8 @@ export class RunsPanel {
     const copyOpen = open && run.state !== 'running';
     const shipping = shipActive(run.ship);
     const u = this.cardUi(run.id);
-    const canShip = copyOpen && !shipping && run.ship?.step !== 'deployed';
+    // Reinício antes do merge: o mesmo botão prepara o cartão de novo e pede o PIN para continuar.
+    const canShip = copyOpen && (!shipping || run.ship?.needs === 'reapprove') && run.ship?.step !== 'deployed';
     const canMerge = copyOpen && !shipping && (!run.ship || run.ship.step === 'failed');
     // Comentar o diff: item que terminou, com a cópia aberta e nenhum item da lista rodando (a cópia é a mesma).
     const canComment = !!w && !w.merged && !w.discarded && !run.items.some((i) => i.state === 'running');
@@ -524,7 +528,7 @@ export class RunsPanel {
         run.state === 'paused' || run.state === 'failed' ? btn(tr('Continuar'), 'continue', true) : null,
         run.state === 'running' || run.state === 'queued' || run.state === 'paused' || run.state === 'failed' ? btn(tr('Parar'), 'stop') : null,
         canShip && !u.preview
-          ? h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow', type: 'button', attrs: { disabled: u.loading }, on: { click: () => void this.prepareShip(run) } }, u.loading ? tr('Preparando…') : tr('Subir'))
+          ? h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow', type: 'button', attrs: { disabled: u.loading }, on: { click: () => void this.prepareShip(run) } }, u.loading ? tr('Preparando…') : run.ship?.needs === 'reapprove' ? tr('Aprovar de novo') : tr('Subir'))
           : null,
         canMerge ? btn(tr('Juntar'), 'merge', true) : null,
         copyOpen && !shipping ? btn(tr('Descartar'), 'discard') : null,

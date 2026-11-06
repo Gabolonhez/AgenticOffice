@@ -609,6 +609,7 @@ export class GitHubTokenGroup {
       h('h3', { text: tr('Token do GitHub') }),
       h('p', { class: 'ui-set__hint', text: tr('Usado pelo "Subir" para abrir o PR, esperar o CI e fazer o merge. Crie um token fine-grained só para os repositórios que vão subir, com as permissões: Pull requests: leitura e escrita; Contents: leitura e escrita; Actions: leitura e escrita; Checks: leitura; Statuses: leitura (opcional: Administration leitura e escrita, para criar repositórios no futuro).') }),
       h('p', { class: 'ui-set__hint', text: tr('Fica só neste computador (arquivo com permissão 600) e nunca é mostrado de novo.') }),
+      h('p', { class: 'ui-set__hint', text: tr('Limite: os agentes rodam com o seu usuário do sistema e conseguem ler os arquivos do Habblaud (~/.habblaud), inclusive este token. Por isso use só token fine-grained restrito aos repositórios necessários; token clássico (ghp_) não é aceito.') }),
       this.state,
       this.tokenRow,
       this.save,
