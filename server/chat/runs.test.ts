@@ -658,6 +658,22 @@ describe('chat: lista, registro por projeto e o fim no VBoards', () => {
     expect(readJournal(journalFile).at(-1)).toMatchObject({ stage: 'discarded', folder: PROJ });
   });
 
+  it('Descartar com PR aberto (ship=pr): só limpa a cópia, sem discarded no VBoards nem no journal', async () => {
+    const journalFile = join(mkdtempSync(join(tmpdir(), 'hb-runs-j-')), 'journal.jsonl');
+    const worktrees = { create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(), discard: vi.fn(async () => ({ ok: true as const })), summary: vi.fn(), diff: vi.fn() };
+    const settle = vi.fn(() => true);
+    const { svc, end } = setup({ worktrees, vboards: { begin: vi.fn(async () => ({ agentId: 'chat:1' })), settle }, journalFile });
+    await svc.create({ items: [{ text: 'X', vboardsTaskId: 'c1:s1' }], options, isolated: true });
+    await flush();
+    await flush();
+    end('chat:1', 'done');
+    svc.get('r1')!.ship = { step: 'pr', mode: 'pr', sha: 'a'.repeat(40), owner: 'o', repo: 'r', remote: 'origin', base: 'main', branch: 'agentic/lista-1', deploy: 'none', risky: [], ciMinutes: 30, startedAt: 0, stepAt: 0, prUrl: 'https://github.com/o/r/pull/1' };
+    expect(await svc.discard('r1')).toEqual({ ok: true });
+    expect(worktrees.discard).toHaveBeenCalled();
+    expect(settle).not.toHaveBeenCalledWith('c1:s1', expect.objectContaining({ stage: 'discarded' }));
+    expect(readJournal(journalFile).some((e) => e.stage === 'discarded')).toBe(false);
+  });
+
   it('Juntar × Subir: subida em andamento trava Juntar e Descartar; depois do PR, Juntar não cabe', async () => {
     const worktrees = { create: vi.fn(async () => ({ path: 'C:\\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(async () => ({ ok: true as const })), discard: vi.fn(async () => ({ ok: true as const })), summary: vi.fn(), diff: vi.fn() };
     const { svc, end } = setup({ worktrees, vboards: { begin: vi.fn(async () => ({ agentId: 'chat:1' })) } });
