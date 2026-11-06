@@ -89,8 +89,9 @@ export class JarvisOverlay implements UiComponent {
     const form = h('form', { class: 'ui-jarvis__form', on: { submit: (e: Event) => (e.preventDefault(), void this.sendTyped()) } }, this.input, h('button', { class: 'ui-btn', type: 'submit', text: tr('Enviar') }));
     const drawerBtn = h('button', { class: 'ui-btn ui-jarvis__link', type: 'button', text: tr('Abrir a conversa completa'), on: { click: () => this.toDrawer() } });
     this.closeBtn = iconButton(ICONS.close, tr('Fechar (Esc)'), () => this.close(), 'ui-jarvis__close');
-    const title = h('h2', { class: 'ui-jarvis__title', attrs: { id: 'ui-jarvis-title' } }, h('span', { class: 'ui-jarvis__mark', attrs: { 'aria-hidden': 'true' } }), h('span', { text: 'JARVIS' }));
-    title.querySelector('.ui-jarvis__mark')!.innerHTML = ICONS.jarvis;
+    const mark = h('span', { class: 'ui-jarvis__mark', attrs: { 'aria-hidden': 'true' } });
+    mark.innerHTML = ICONS.jarvis;
+    const title = h('h2', { class: 'ui-jarvis__title', attrs: { id: 'ui-jarvis-title' } }, mark, h('span', { text: 'JARVIS' }));
     this.el = h(
       'div',
       { class: 'ui-jarvis', hidden: true, role: 'dialog', attrs: { 'aria-modal': 'true', 'aria-labelledby': 'ui-jarvis-title' }, on: { keydown: (e: Event) => this.onKey(e as KeyboardEvent) } },
@@ -202,7 +203,7 @@ export class JarvisOverlay implements UiComponent {
 
   private paintVoice(): void {
     const v = this.voice;
-    this.el.dataset.phase = v.phase;
+    this.el.setAttribute('data-phase', v.phase);
     const ptt = !!this.engine?.pushToTalk;
     setText(this.stateEl, v.phase === 'error' ? v.error : v.phase === 'listening' && ptt ? tr('Toque no orb para falar') : phaseLabel(v.phase));
     setText(this.heardEl, v.heard ? `“${v.heard}”` : '');
