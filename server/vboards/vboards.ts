@@ -534,6 +534,8 @@ export interface VBoardsServiceOptions {
    * desligado) = os pedidos de refinar ficam para outro Habblaud.
    */
   refine?: (folder: string, prompt: string, config: FolderConfig) => Promise<string>;
+  /** O Refinar devolveu `questions`: o card passa a esperar o dono (vboards/triage.ts askRefine). */
+  onQuestions?: (r: RefineRequest, questions: string[]) => void;
   /** Aviso no celular (vboards/ntfy.ts): só o título do card e o que aconteceu. */
   notify?: (cardTitle: string, event: NotifyEvent) => void;
   /** Registro de produtos (products.ts); ausente = só o casamento por nome da pasta / vboards.card. */
@@ -685,6 +687,7 @@ export class VBoardsService {
     const folder = matches[0];
     const text = await run(folder, refinePrompt(r), await (this.opts.folderConfig ?? readFolderConfig)(folder));
     const out = parseRefineOutput(text);
+    if (out?.questions.length) this.opts.onQuestions?.(r, out.questions);
     await this.postRefine(r, out ? { status: 'ready', ...out } : { status: 'failed', error: `${tr('A resposta não trouxe um bloco ```json válido (plan, questions, subtasks). Fim da saída:')}\n${maskSecrets(text).trim().slice(-1_500)}` });
   }
 

@@ -7,7 +7,7 @@ import { basename, dirname } from 'node:path';
 import { tr } from '../../shared/i18n';
 import { errMsg, log } from '../log';
 
-export const JOURNAL_STAGES = ['queued', 'running', 'review', 'pr', 'ci_fail', 'merged', 'deployed', 'failed', 'discarded'] as const;
+export const JOURNAL_STAGES = ['queued', 'running', 'review', 'pr', 'ci_fail', 'merged', 'deployed', 'failed', 'discarded', 'triaged'] as const;
 export type JournalStage = (typeof JOURNAL_STAGES)[number];
 
 export interface JournalEntry {
@@ -21,6 +21,8 @@ export interface JournalEntry {
   /** Identifica a tarefa entre as linhas (a lista e o item) ou o PR. */
   ref?: string;
   title?: string;
+  /** Detalhe curto da etapa (a triagem: válida/duplicada/prioridade). */
+  note?: string;
 }
 
 export const JOURNAL_TRIM_BYTES = 2 * 1024 * 1024;
@@ -91,6 +93,7 @@ const BUCKET: Record<JournalStage, keyof Pick<ProjectLedger, 'done' | 'doing' | 
   deployed: 'done',
   failed: 'stuck',
   discarded: undefined,
+  triaged: undefined,
 };
 
 /** Quanto do registro conta para o que está em aberto (fazendo, a fazer). */

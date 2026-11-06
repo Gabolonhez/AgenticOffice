@@ -28,6 +28,7 @@ import { importPack, packStatus } from '../assets3d/pack';
 import { ZipError } from '../assets3d/zip';
 import { serveAsset } from './assets3d';
 import { ptyRequestProblem } from './pty';
+import type { TriageService } from '../vboards/triage';
 import type { VBoardsService } from '../vboards/vboards';
 
 export interface ApiDeps {
@@ -117,6 +118,8 @@ export interface ApiDeps {
    * {folder, config}). Ausente = desligado.
    */
   vboards?: Pick<VBoardsService, 'list' | 'refineList' | 'begin' | 'attach' | 'configFolders' | 'folderSettings' | 'saveFolderSettings'> & Partial<Pick<VBoardsService, 'problem'>>;
+  /** Triagem e perguntas (vboards/triage.ts): vai junto do GET /api/vboards; POST /api/vboards/triage/answer {id, answer} e /run {id}. */
+  triage?: Pick<TriageService, 'list' | 'answer' | 'triage'>;
   /**
    * Avisos ao dono (vboards/ntfy.ts NotifySettings), GET/POST /api/vboards/notify {url?, channel?, wa?, briefing?}: o
    * tópico do ntfy, o WhatsApp (WA-AKG), o canal e o horário do briefing do Jarvis. Pela porta remota só se sabe se está
@@ -649,8 +652,22 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
         else {
           // `problem`: o token foi recusado (escopo que falta, expirado): o painel mostra a frase.
           const problem = vb.problem?.();
-          vb.list().then((tasks) => sendJson(res, 200, { tasks, refines: vb.refineList(), ...(problem ? { problem } : {}) }), (err) => fail(res, err));
+          vb.list().then((tasks) => sendJson(res, 200, { tasks, refines: vb.refineList(), triage: deps.triage?.list() ?? [], ...(problem ? { problem } : {}) }), (err) => fail(res, err));
         }
+      } else if ((path === '/api/vboards/triage/answer' || path === '/api/vboards/triage/run') && deps.triage) {
+        const triage = deps.triage;
+        if (method !== 'POST') methodNotAllowed(res, 'POST');
+        else
+          readJson(req)
+            .then(async (body) => {
+              const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+              const id = typeof b.id === 'string' ? b.id : '';
+              if (!id) return sendJson(res, 400, { error: tr('Diga o card.') });
+              // Pela página: é o dono (a trava de cima só deixa o próprio computador), então a resposta é confiável.
+              const r = path.endsWith('/run') ? await triage.triage(id) : await triage.answer(id, typeof b.answer === 'string' ? b.answer : '', true);
+              sendJson(res, 'error' in r && !('cardId' in r) ? 400 : 200, r);
+            })
+            .catch((err) => fail(res, err));
       } else if (path === '/api/vboards/start') {
         if (method !== 'POST') methodNotAllowed(res, 'POST');
         else
