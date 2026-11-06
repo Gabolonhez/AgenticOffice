@@ -11229,6 +11229,120 @@ html.is-replay #world {
   overflow-wrap: anywhere;
 }
 
+/* "Subir" (ui/runs.ts): confirmação com PIN, barra de etapas e avisos. */
+.ui-ship,
+.ui-ship__box,
+.ui-ship__path {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  min-width: 0;
+}
+
+.ui-ship__box {
+  padding: 8px;
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--ui-bg-soft);
+}
+
+.ui-ship__box--danger {
+  border-color: var(--ui-danger, #f85149);
+}
+
+.ui-ship__warn {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--st-waiting, #d29922);
+  border-radius: var(--radius-sm);
+  color: var(--ui-text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ui-ship__box--danger .ui-ship__warn {
+  border-color: var(--ui-danger, #f85149);
+  color: var(--ui-danger, #f85149);
+}
+
+.ui-ship__sha {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.ui-ship__stat {
+  margin: 0;
+  max-height: 140px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ui-muted);
+}
+
+.ui-ship__bar {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-ship__step {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--ui-faint);
+}
+
+.ui-ship__dot {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ui-line-strong);
+}
+
+.ui-ship__step.is-done {
+  color: var(--ui-muted);
+}
+
+.ui-ship__step.is-done .ui-ship__dot {
+  background: var(--st-working, #3fb950);
+}
+
+.ui-ship__step.is-current {
+  color: var(--ui-text);
+}
+
+.ui-ship__step.is-current .ui-ship__dot {
+  background: var(--ui-accent);
+  animation: ui-ship-pulse 1.6s ease-in-out infinite;
+}
+
+.ui-ship__step.is-failed {
+  color: var(--ui-danger, #f85149);
+}
+
+.ui-ship__step.is-failed .ui-ship__dot {
+  background: var(--ui-danger, #f85149);
+}
+
+@keyframes ui-ship-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-ship__step.is-current .ui-ship__dot {
+    animation: none;
+  }
+}
+
 .ui-runs__comment {
   grid-column: 2;
   justify-self: start;
