@@ -203,6 +203,25 @@ describe('serviço', () => {
     expect(updates[3].summary).toContain('rodada 2');
   });
 
+  it('reopen limpa a etapa e o PR da rodada anterior', async () => {
+    const { svc, calls, setAgents, setReply } = setup({ chat: true, outcome: 'review' });
+    await svc.poll();
+    svc.stop();
+    await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web' });
+    setReply('Branch: agentic/lista-1');
+    setAgents([mainAgent({ id: 'chat:1', chat: true, status: 'idle' })]);
+    await svc.check();
+    await flush();
+    expect(svc.settle('c1:s1', { state: 'review', stage: 'pr', prUrl: 'https://github.com/o/r/pull/1' })).toBe(true);
+    await flush();
+    expect(svc.reopen('chat:1')).toBe(true);
+    await flush();
+    const last = calls.filter((c) => c.url.endsWith('/update')).map((c) => JSON.parse(String(c.init.body))).at(-1);
+    expect(last.status).toBe('running');
+    expect(last).not.toHaveProperty('stage');
+    expect(last).not.toHaveProperty('prUrl');
+  });
+
   it('com o chat: o pedido editado na janela vale no lugar do texto da tarefa', async () => {
     const { svc, open } = setup({ chat: true });
     await svc.poll();

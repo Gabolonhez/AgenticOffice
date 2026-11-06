@@ -938,6 +938,9 @@ export class VBoardsService {
     l.state = 'running';
     l.summary = undefined;
     l.retryAt = undefined;
+    // A etapa e o PR da rodada anterior não valem mais (a próxima settle traz os novos).
+    l.stage = undefined;
+    l.prUrl = undefined;
     this.save();
     void this.report();
     return true;
