@@ -9,10 +9,14 @@ import { randomBytes } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tr } from '../../shared/i18n';
-import { parseCopyList } from '../vboards/vboards';
+import { parseFolderConfig } from '../vboards/vboards';
 import type { WorktreeOps } from './types';
 
-type Git = (args: string[], cwd: string) => Promise<{ code: number; out: string }>;
+type Git = (args: string[], cwd: string, opts?: { env?: Record<string, string>; timeout?: number }) => Promise<{ code: number; out: string }>;
+
+/** git fetch sem nunca pedir senha (nem o terminal, nem o Git Credential Manager), com prazo. */
+export const FETCH_ENV = { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' };
+export const FETCH_TIMEOUT_MS = 60_000;
 
 /**
  * Trava de push para qualquer provedor (best effort): pushInsteadOf com prefixo vazio reescreve todo endereço de push
@@ -24,9 +28,9 @@ export function noPushEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return { GIT_CONFIG_COUNT: String(n + 1), [`GIT_CONFIG_KEY_${n}`]: 'url.habblaud-no-push://.pushInsteadOf', [`GIT_CONFIG_VALUE_${n}`]: '' };
 }
 
-const realGit: Git = (args, cwd) =>
+const realGit: Git = (args, cwd, opts) =>
   new Promise((ok) => {
-    execFile('git', args, { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile('git', args, { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024, ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}), ...(opts?.timeout ? { timeout: opts.timeout } : {}) }, (err, stdout, stderr) => {
       const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? ((err as { code: number }).code) : 1) : 0;
       ok({ code, out: `${stdout}${err ? stderr : ''}`.trim() });
     });
@@ -66,21 +70,37 @@ function slug(label: string): string {
   return s || 'agente';
 }
 
+/** `git fetch <remote> <base>` sem prompt e com prazo; devolve `<remote>/<base>` (base vazia = o HEAD do remoto, senão main). */
+async function remoteBase(git: Git, repo: string, remote: string, base: string | undefined): Promise<string | { error: string }> {
+  let b = base;
+  if (!b) {
+    const sym = await git(['symbolic-ref', '--short', `refs/remotes/${remote}/HEAD`], repo);
+    b = sym.code === 0 && sym.out.startsWith(`${remote}/`) ? sym.out.slice(remote.length + 1) : 'main';
+  }
+  const f = await git(['fetch', '--no-tags', remote, b], repo, { env: FETCH_ENV, timeout: FETCH_TIMEOUT_MS });
+  if (f.code !== 0) return { error: tr('vboards.ship ligado, mas o git fetch {0} {1} falhou: {2}', [remote, b, f.out || tr('sem resposta')]) };
+  return `${remote}/${b}`;
+}
+
 export function createWorktreeOps(dataDir: string, git: Git = realGit): WorktreeOps {
   return {
     async create(repo, agentId, label) {
       if ((await git(['rev-parse', '--show-toplevel'], repo)).code !== 0) return { error: tr('A pasta não é um repositório git.') };
-      const head = await git(['rev-parse', 'HEAD'], repo);
+      const cfg = parseFolderConfig((await git(['config', '--get-regexp', '^vboards\\.'], repo)).out);
+      // vboards.ship ligado: a cópia nasce do remoto atualizado (a base do PR), não do HEAD local.
+      const start = cfg.ship === 'off' ? 'HEAD' : await remoteBase(git, repo, cfg.remote ?? 'origin', cfg.base);
+      if (typeof start !== 'string') return start;
+      const head = await git(['rev-parse', '--verify', `${start}^{commit}`], repo);
       if (head.code !== 0) return { error: tr('O repositório ainda não tem nenhum commit.') };
       const tag = randomBytes(3).toString('hex');
       const branch = `agentic/${slug(label)}-${tag}`;
       const root = join(dataDir, 'chat', 'worktrees');
       mkdirSync(root, { recursive: true });
       const path = join(root, `${agentId.replace(/[^a-zA-Z0-9_-]/g, '_')}-${tag}`);
-      const add = await git(['worktree', 'add', '-b', branch, path, 'HEAD'], repo);
+      // --no-track: o branch do agente nunca segue a base do remoto (um push não cai nela).
+      const add = await git(['worktree', 'add', '--no-track', '-b', branch, path, head.out], repo);
       if (add.code !== 0) return { error: tr('Não deu para criar a cópia isolada: {0}', [add.out]) };
-      const listed = await git(['config', '--get', 'vboards.copy'], repo);
-      const { copied, missing } = copyListed(repo, path, parseCopyList(listed.code === 0 ? listed.out : ''));
+      const { copied, missing } = copyListed(repo, path, cfg.copy);
       return { path, branch, base: head.out, ...(copied.length ? { copied } : {}), ...(missing.length ? { missing } : {}) };
     },
 

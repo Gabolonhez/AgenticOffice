@@ -15,8 +15,13 @@ interface NotifyView {
   url?: string;
   wa?: { url: string; sessionId: string; ownerJid: string; apiKeySet?: boolean } | null;
   briefing?: { time: string; days: number[] };
+  closing?: { time: string; days: number[] };
+  weekly?: { time: string; days: number[] };
   editable?: boolean;
 }
+
+const ROUTINES = ['briefing', 'closing', 'weekly'] as const;
+const routineLabel = (k: (typeof ROUTINES)[number]): string => (k === 'closing' ? tr('Horário do fechamento do dia') : k === 'weekly' ? tr('Horário do resumo semanal') : tr('Horário do briefing'));
 
 interface FolderConfig { card?: string; auto: boolean; provider: string; budget: number; check?: string; reviewer: string; reviewerModel?: string; copy?: string }
 
@@ -39,8 +44,13 @@ export class VBoardsConfigGroup {
   private readonly waSession = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 80, placeholder: 'pessoal' } });
   private readonly waOwner = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 60, placeholder: '5511999999999@s.whatsapp.net' } });
   private readonly waKey = h('input', { class: 'ui-rename__input', type: 'password', attrs: { maxlength: 200, autocomplete: 'off' } });
-  private readonly briefTime = h('input', { class: 'ui-rename__input', type: 'time' });
-  private readonly briefDays = [tr('dom'), tr('seg'), tr('ter'), tr('qua'), tr('qui'), tr('sex'), tr('sáb')].map((label) => ({ label, box: h('input', { type: 'checkbox' }) as HTMLInputElement }));
+  /** As rotinas do Jarvis com horário (server/vboards/ntfy.ts ROUTINES): briefing, fechamento do dia e semanal. */
+  private readonly routines = ROUTINES.map((key) => ({
+    key,
+    label: routineLabel(key),
+    time: h('input', { class: 'ui-rename__input', type: 'time' }) as HTMLInputElement,
+    days: [tr('dom'), tr('seg'), tr('ter'), tr('qua'), tr('qui'), tr('sex'), tr('sáb')].map((d) => ({ label: d, box: h('input', { type: 'checkbox' }) as HTMLInputElement })),
+  }));
   private readonly ntfySave = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar avisos'), on: { click: () => void this.storeNtfy() } });
   private readonly ntfyStatus = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
   private readonly ntfyGroup = h(
@@ -56,8 +66,8 @@ export class VBoardsConfigGroup {
     row(tr('Chave do WA-AKG (x-api-key)'), this.waKey),
     row(tr('Avisos por'), this.channel),
     h('p', { class: 'ui-set__hint', text: tr('Briefing do Jarvis: um resumo no horário escolhido (vazio = desligado), na conversa dele, no ntfy (a manchete) e no WhatsApp (inteiro).') }),
-    row(tr('Horário do briefing'), this.briefTime),
-    h('div', { class: 'ui-chat__row' }, ...this.briefDays.map((d) => h('label', { class: 'ui-spawn__check' }, d.box, h('span', { text: d.label })))),
+    h('p', { class: 'ui-set__hint', text: tr('O fechamento do dia (feito, travado, o que fica para amanhã) e o resumo semanal (por projeto, com o custo) saem pelos mesmos canais; vêm desligados.') }),
+    ...this.routines.flatMap((r) => [row(r.label, r.time), h('div', { class: 'ui-chat__row' }, ...r.days.map((d) => h('label', { class: 'ui-spawn__check' }, d.box, h('span', { text: d.label }))))]),
     this.ntfySave,
     this.ntfyStatus,
   );
@@ -111,9 +121,11 @@ export class VBoardsConfigGroup {
     this.waKey.value = '';
     this.waKey.placeholder = b.wa?.apiKeySet ? tr('guardada (deixe vazio para manter)') : '';
     this.channel.value = b.channel ?? 'ntfy';
-    this.briefTime.value = b.briefing?.time ?? '';
-    this.briefDays.forEach((d, i) => (d.box.checked = !!b.briefing?.days.includes(i)));
-    for (const f of [this.ntfy, this.waUrl, this.waSession, this.waOwner, this.waKey, this.channel, this.briefTime, ...this.briefDays.map((d) => d.box)]) f.disabled = !editable;
+    for (const r of this.routines) {
+      r.time.value = b[r.key]?.time ?? '';
+      r.days.forEach((d, i) => (d.box.checked = !!b[r.key]?.days.includes(i)));
+    }
+    for (const f of [this.ntfy, this.waUrl, this.waSession, this.waOwner, this.waKey, this.channel, ...this.routines.flatMap((r) => [r.time, ...r.days.map((d) => d.box)])]) f.disabled = !editable;
     setHidden(this.ntfySave, !editable);
     if (!editable) {
       const on = [b.configured ? 'ntfy' : '', b.waConfigured ? 'WhatsApp' : ''].filter(Boolean).join(', ');
@@ -124,8 +136,8 @@ export class VBoardsConfigGroup {
   private async storeNtfy(): Promise<void> {
     try {
       const wa = this.waUrl.value.trim() ? { url: this.waUrl.value, sessionId: this.waSession.value, ownerJid: this.waOwner.value, ...(this.waKey.value ? { apiKey: this.waKey.value } : {}) } : { url: '' };
-      const briefing = { time: this.briefTime.value, days: this.briefDays.flatMap((d, i) => (d.box.checked ? [i] : [])) };
-      const res = await fetch('/api/vboards/notify', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: this.ntfy.value, channel: this.channel.value, wa, briefing }) });
+      const schedules = Object.fromEntries(this.routines.map((r) => [r.key, { time: r.time.value, days: r.days.flatMap((d, i) => (d.box.checked ? [i] : [])) }]));
+      const res = await fetch('/api/vboards/notify', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: this.ntfy.value, channel: this.channel.value, wa, ...schedules }) });
       const body = (await res.json().catch(() => ({}))) as NotifyView & { error?: string };
       if (!res.ok) throw new Error(body.error ?? tr('erro {0}', [res.status]));
       this.showNtfy(body);
@@ -185,6 +197,79 @@ export class VBoardsConfigGroup {
       if (!res.ok || !body.config) throw new Error(body.error ?? tr('erro {0}', [res.status]));
       this.show(body.config, body.editable === true);
       this.say(tr('Gravado no git config da pasta.'));
+    } catch (err) {
+      this.say(tr('Não gravou: {0}', [(err as Error).message]), true);
+    }
+  }
+
+  private say(text: string, error = false): void {
+    setText(this.status, text);
+    this.status.classList.toggle('is-error', error);
+  }
+}
+
+interface ProductsView { products?: unknown[]; error?: string; editable?: boolean }
+
+/**
+ * Configurações › Produtos (GET/POST /api/vboards/products): o registro ~/.habblaud/products.json, um produto do VBoards
+ * (o card) com os repositórios dele. Editado como JSON; o servidor valida tudo e devolve a frase do erro. Some com o
+ * VBoards desligado; pela porta do celular é só leitura.
+ */
+export class ProductsConfigGroup {
+  readonly el: HTMLElement;
+  private readonly json = h('textarea', { class: 'ui-rename__input ui-products__json', attrs: { 'aria-label': tr('Produtos (JSON)'), spellcheck: 'false', rows: 10 } });
+  private readonly save = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar os produtos'), on: { click: () => void this.store() } });
+  private readonly status = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
+
+  constructor() {
+    this.el = h(
+      'div',
+      { class: 'ui-set-group', hidden: true },
+      h('h3', { text: tr('Produtos e repositórios') }),
+      h('p', {
+        class: 'ui-set__hint',
+        text: tr('Um produto do VBoards pode ter vários repositórios. A subtarefa diz qual no começo do texto, ex.: "[server] corrigir o login" (o papel ou o nome da pasta); produto com um repositório só usa ele, e sem dizer num produto com vários nada abre sozinho. Cards sem produto seguem pelo nome da pasta ou vboards.card.'),
+      }),
+      h('p', { class: 'ui-set__hint', text: '[{"id": "peptpro", "name": "PeptPro", "cardName": "PeptPro", "repos": [{"path": "D:\\\\Projects\\\\peptpro\\\\helix-server", "role": "server", "deploy": "none"}, {"path": "...", "role": "app", "store": "ota"}]}]' }),
+      this.json,
+      this.save,
+      this.status,
+    );
+    void this.load();
+  }
+
+  private async load(): Promise<void> {
+    try {
+      const res = await fetch('/api/vboards/products', { credentials: 'same-origin', cache: 'no-store' });
+      if (!res.ok) return;
+      this.show((await res.json()) as ProductsView);
+      setHidden(this.el, false);
+    } catch {
+      // sem VBoards: fica escondido
+    }
+  }
+
+  private show(v: ProductsView): void {
+    this.json.value = JSON.stringify(v.products ?? [], null, 2);
+    const editable = v.editable !== false;
+    this.json.readOnly = !editable;
+    setHidden(this.save, !editable);
+    this.say(v.error ? tr('O arquivo atual não vale: {0}', [v.error]) : editable ? '' : tr('Só muda pelo próprio computador.'), !!v.error);
+  }
+
+  private async store(): Promise<void> {
+    let products: unknown;
+    try {
+      products = JSON.parse(this.json.value || '[]');
+    } catch (err) {
+      return this.say(tr('JSON inválido: {0}', [(err as Error).message]), true);
+    }
+    try {
+      const res = await fetch('/api/vboards/products', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ products }) });
+      const body = (await res.json().catch(() => ({}))) as ProductsView;
+      if (!res.ok) throw new Error(body.error ?? tr('erro {0}', [res.status]));
+      this.show(body);
+      this.say(tr('Gravado.'));
     } catch (err) {
       this.say(tr('Não gravou: {0}', [(err as Error).message]), true);
     }

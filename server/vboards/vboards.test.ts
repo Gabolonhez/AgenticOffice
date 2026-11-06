@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentInfo } from '../../shared/types';
 import { setQuiet } from '../log';
-import { baseFromUrl, decideCompletion, matchFolders, parseFolderConfig, parseRefineOutput, parseRefines, refinePrompt, REFINE_LIMITS, readFolderConfig, resolveConfig, validateFolderConfig, writeFolderConfig, REVIEW_SUMMARY_MAX, SUMMARY_MAX, TodoTracker, TODOS_QUIET_MS, VBoardsService, type FolderConfig } from './vboards';
+import { baseFromUrl, decideCompletion, matchFolders, parseFolderConfig, reportKey, taskFolders, parseRefineOutput, parseRefines, refinePrompt, REFINE_LIMITS, readFolderConfig, resolveConfig, validateFolderConfig, writeFolderConfig, REVIEW_SUMMARY_MAX, SUMMARY_MAX, TodoTracker, TODOS_QUIET_MS, VBoardsService, type FolderConfig } from './vboards';
 
 setQuiet(true);
 const flush = () => new Promise((ok) => setTimeout(ok, 0));
@@ -403,10 +403,10 @@ describe('VBoards e o resultado do chat', () => {
 
 describe('configuração da pasta (git config --local vboards.*)', () => {
   it('padrões: desligado, claude, US$ 2, revisor claude com sonnet; agy é o Antigravity', () => {
-    expect(parseFolderConfig(undefined)).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'sonnet', copy: [] });
+    expect(parseFolderConfig(undefined)).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off' });
     const out = 'vboards.card PostsBuilder\nvboards.auto TRUE\nvboards.provider agy\nvboards.budget 0.75\nvboards.check npm ci && npm test\nvboards.reviewer codex\nvboards.copy .env, config/local.json, ../fora, /etc/passwd';
-    expect(parseFolderConfig(out)).toEqual({ card: 'PostsBuilder', auto: true, provider: 'antigravity', budget: 0.75, check: 'npm ci && npm test', reviewer: 'codex', copy: ['.env', 'config/local.json'] });
-    expect(parseFolderConfig('vboards.auto yes\nvboards.budget -1\nvboards.provider gpt\nvboards.reviewermodel opus')).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'opus', copy: [] });
+    expect(parseFolderConfig(out)).toEqual({ card: 'PostsBuilder', auto: true, provider: 'antigravity', budget: 0.75, check: 'npm ci && npm test', reviewer: 'codex', copy: ['.env', 'config/local.json'], ship: 'off' });
+    expect(parseFolderConfig('vboards.auto yes\nvboards.budget -1\nvboards.provider gpt\nvboards.reviewermodel opus')).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'opus', copy: [], ship: 'off' });
   });
 });
 
@@ -417,7 +417,7 @@ describe('abertura automática (opt-in)', () => {
     { cardId: 'c2', subtaskId: 's1', text: 'X', cardTitle: 'outro' },
     { cardId: 'c3', subtaskId: 's1', text: 'Y', cardTitle: 'Agentic Office' },
   ];
-  const cfg = (auto: boolean): FolderConfig => ({ auto, provider: 'codex', budget: 1, reviewer: 'claude', reviewerModel: 'sonnet', copy: [] });
+  const cfg = (auto: boolean): FolderConfig => ({ auto, provider: 'codex', budget: 1, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off' });
   function setup(withAuto = true) {
     const fetchMock = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify(String(url).includes('/api/agent-tasks?') ? { tasks } : { ok: true }), { status: 200 }));
     const auto = vi.fn();
@@ -563,7 +563,7 @@ describe('Refinar (plano só de leitura)', () => {
       folders: async () => o.folders ?? ['/p/payposts-web', '/p/outro'],
       cardOf: async (f) => (f.endsWith('payposts-web') ? 'PostsBuilder' : undefined),
       chat: { open: () => ({ agentId: 'chat:1' }) },
-      folderConfig: async () => ({ auto: false, provider: 'codex', budget: 1, reviewer: 'claude', copy: [] }),
+      folderConfig: async () => ({ auto: false, provider: 'codex', budget: 1, reviewer: 'claude', copy: [], ship: 'off' }),
       refine,
       notify,
       fetch: fetchMock as unknown as typeof fetch,
@@ -674,5 +674,89 @@ describe('VBoards: token vb_ recusado na fila', () => {
     expect(svc.problem()).toBe('O token do VBoards precisa do escopo agent.');
     expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe('https://vb.dev/api/agent-tasks');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('produto com vários repos (products.json)', () => {
+  const product = { id: 'posts', name: 'Posts Builder', cardName: 'Posts Builder', repos: [{ path: '/p/posts-server', role: 'server' as const }, { path: '/p/posts-web', role: 'web' as const }] };
+  function setup(text: string, repo?: string) {
+    const calls: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith('/update')) calls.push(JSON.parse(String(init?.body)));
+      const body = String(url).includes('/api/agent-tasks?') ? { tasks: [{ cardId: 'c1', subtaskId: 's1', text, cardTitle: 'Posts Builder', ...(repo ? { repo } : {}) }] } : { ok: true };
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const open = vi.fn(() => ({ agentId: 'chat:1' }));
+    const svc = new VBoardsService({
+      config: { base: 'https://vb.dev', token: 't', email: 'eu@x' },
+      agents: () => [],
+      roomPath: () => undefined,
+      folders: async () => ['/p/outro'],
+      cardOf: async () => undefined,
+      chat: { open },
+      products: () => [product],
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+    return { svc, calls, open };
+  }
+
+  it('sem dizer o repo: não escolhe; a página vê os repos e a frase, e o Iniciar sem pasta falha com ela', async () => {
+    const { svc, open } = setup('Corrigir o login');
+    await svc.poll();
+    svc.stop();
+    const [view] = await svc.list();
+    expect(view.folder).toBeUndefined();
+    expect(view.candidates.map((c) => c.path)).toEqual(['/p/posts-server', '/p/posts-web']);
+    expect(view.problem).toMatch(/2 repositórios/);
+    expect(await svc.begin({ id: 'c1:s1' })).toEqual({ status: 400, error: view.problem });
+    expect(open).not.toHaveBeenCalled();
+    // A pessoa escolhe: vale.
+    expect(await svc.begin({ id: 'c1:s1', folder: '/p/posts-web' })).toEqual({ agentId: 'chat:1' });
+  });
+
+  it('a etiqueta [server] do texto ou o campo repo da fila escolhem o repo', async () => {
+    const a = setup('[server] Corrigir o login');
+    await a.svc.poll();
+    a.svc.stop();
+    expect((await a.svc.list())[0]).toMatchObject({ folder: '/p/posts-server' });
+    const b = setup('Corrigir o login', 'posts-web');
+    await b.svc.poll();
+    b.svc.stop();
+    expect((await b.svc.list())[0]).toMatchObject({ folder: '/p/posts-web' });
+    expect(await b.svc.begin({ id: 'c1:s1' })).toEqual({ agentId: 'chat:1' });
+    expect(b.open).toHaveBeenCalledWith(expect.objectContaining({ folder: '/p/posts-web' }));
+  });
+
+  it('settle: Juntar manda done com a etapa; Descartar manda failed com o motivo; ligação que não existe = false', async () => {
+    const { svc, calls } = setup('[web] X');
+    await svc.poll();
+    svc.stop();
+    await svc.begin({ id: 'c1:s1' });
+    await flush();
+    expect(svc.settle('c9:s9', { state: 'done' })).toBe(false);
+    expect(svc.settle('c1:s1', { state: 'done', stage: 'merged' })).toBe(true);
+    await flush();
+    expect(svc.settle('c1:s1', { state: 'failed', stage: 'discarded', summary: 'Descartado' })).toBe(true);
+    await flush();
+    expect(calls.map((c) => [c.status, c.stage, c.summary])).toEqual([['running', undefined, undefined], ['done', 'merged', undefined], ['failed', 'discarded', 'Descartado']]);
+  });
+});
+
+describe('taskFolders e as chaves novas da pasta', () => {
+  it('sem produto do card: o casamento antigo por nome / vboards.card', () => {
+    expect(taskFolders({ cardTitle: 'Posts Builder' }, [{ path: '/p/x', card: 'PostsBuilder' }], [])).toEqual({ paths: ['/p/x'] });
+  });
+
+  it('vboards.ship/base/remote: valida e lê, padrão off', () => {
+    expect(validateFolderConfig({ ship: 'pr', base: 'develop', remote: 'upstream' })).toEqual({ values: { ship: 'pr', base: 'develop', remote: 'upstream' } });
+    for (const bad of [{ ship: 'push' }, { base: '-x' }, { base: 'a..b' }, { remote: 'a b' }]) expect(validateFolderConfig(bad)).toHaveProperty('error');
+    expect(parseFolderConfig('vboards.ship MERGE\nvboards.base release/1\nvboards.remote origin')).toMatchObject({ ship: 'merge', base: 'release/1', remote: 'origin' });
+    expect(parseFolderConfig('vboards.ship sim\nvboards.base --upload-pack=x')).toMatchObject({ ship: 'off' });
+    expect(parseFolderConfig('vboards.base --upload-pack=x').base).toBeUndefined();
+  });
+
+  it('reportKey: ligação antiga (só o status) não reenvia; etapa nova reenvia', () => {
+    expect(reportKey({ state: 'done' })).toBe('done');
+    expect(reportKey({ state: 'done', stage: 'merged', prUrl: 'https://x/pr/1' })).toBe('done+merged+https://x/pr/1');
   });
 });

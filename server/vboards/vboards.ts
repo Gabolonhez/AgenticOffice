@@ -28,6 +28,7 @@ import type { TerminalParser } from '../sources/terminal';
 import { sessionName, type SpawnInfo, type SpawnSubmit } from '../spawn/spawn';
 import { apiErrorText } from './api';
 import type { NotifyEvent } from './ntfy';
+import { pickRepo, productForCard, repoHint, type Product } from './products';
 
 export const POLL_MS = 10_000;
 export const POLL_MAX_MS = 5 * 60_000;
@@ -59,6 +60,8 @@ export interface AgentTask {
   text: string;
   cardTitle: string;
   date?: string;
+  /** Repo da subtarefa (papel ou nome da pasta), se o VBoards mandar; senão vale a etiqueta "[repo]" do texto. */
+  repo?: string;
 }
 
 /** O que a página vê: a subtarefa, a pasta escolhida (se só uma combina) e as pastas para escolher. */
@@ -69,6 +72,8 @@ export interface VBoardsTaskView {
   date?: string;
   folder?: string;
   candidates: Array<{ path: string; name: string }>;
+  /** Produto com vários repos e a subtarefa não diz qual (products.ts pickRepo): a frase para a pessoa. */
+  problem?: string;
   /** Conversas abertas (qualquer provedor) nas pastas da subtarefa, para "Ligar a uma conversa aberta". */
   agents: Array<{ id: string; name: string; title?: string; provider: string; folder: string }>;
 }
@@ -94,11 +99,17 @@ export interface TaskLink {
   /** O agente já esteve trabalhando. */
   worked?: boolean;
   state: TaskStatus;
+  /** Etapa do journal (server/chat/journal.ts) que vai junto do status: merged, discarded, pr... */
+  stage?: string;
+  prUrl?: string;
   summary?: string;
-  /** Último status aceito pelo VBoards. */
-  reported?: TaskStatus;
+  /** Último status+etapa aceito pelo VBoards (reportKey). */
+  reported?: string;
   retryAt?: number;
 }
+
+/** O que já foi aceito pelo VBoards: só o status (igual às ligações antigas) ou status+etapa+PR. */
+export const reportKey = (l: Pick<TaskLink, 'state' | 'stage' | 'prUrl'>): string => [l.state, l.stage, l.prUrl].filter(Boolean).join('+');
 
 /** Pedido de "Refinar" um card (GET /api/agent-tasks → `refines`). */
 export interface RefineRequest {
@@ -182,6 +193,21 @@ export function matchFolders(cardTitle: string, folders: readonly Folder[]): str
   return folders.filter((f) => norm(baseName(f.path)) === want || (!!f.card && norm(f.card) === want)).map((f) => f.path);
 }
 
+/**
+ * Pastas de uma subtarefa (ou de um card, sem `text`): com o produto do card no registro (products.ts), o repo dela;
+ * produto ambíguo = os repos dele como opções e `error` (a pessoa escolhe; nada abre sozinho). Sem produto, o
+ * casamento antigo (matchFolders).
+ */
+export function taskFolders(t: { cardTitle: string; text?: string; repo?: string }, folders: readonly Folder[], products: readonly Product[] = []): { paths: string[]; error?: string } {
+  const p = productForCard(t.cardTitle, products);
+  if (!p) return { paths: matchFolders(t.cardTitle, folders) };
+  const r = pickRepo(p, t.repo?.trim() || (t.text ? repoHint(t.text) : undefined));
+  return 'error' in r ? { paths: p.repos.map((x) => x.path), error: r.error } : { paths: [r.path] };
+}
+
+/** A pasta, se for uma só e sem ambiguidade. */
+const single = (m: { paths: string[]; error?: string }): string | undefined => (!m.error && m.paths.length === 1 ? m.paths[0] : undefined);
+
 /** Configuração de uma pasta no `git config --local` dela (a única fonte; a tela do escritório lê e grava lá). */
 export interface FolderConfig {
   card?: string;
@@ -196,9 +222,17 @@ export interface FolderConfig {
   reviewerModel?: string;
   /** vboards.copy: arquivos (caminhos relativos, separados por vírgula) copiados da pasta para cada cópia isolada (ex.: .env). */
   copy: string[];
+  /** vboards.ship: off (padrão) | pr | merge. Fora de off, a cópia isolada nasce de <remote>/<base> depois de um fetch. */
+  ship: ShipMode;
+  /** vboards.base: o branch base (padrão: o HEAD do remoto, senão main). */
+  base?: string;
+  /** vboards.remote: padrão origin. */
+  remote?: string;
 }
 
-export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'reviewer', 'reviewerModel', 'copy'] as const;
+export const SHIP_MODES = ['off', 'pr', 'merge'] as const;
+export type ShipMode = (typeof SHIP_MODES)[number];
+export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'reviewer', 'reviewerModel', 'copy', 'ship', 'base', 'remote'] as const;
 export type FolderKey = (typeof FOLDER_KEYS)[number];
 export const DEFAULT_BUDGET_USD = 2;
 /** Prazo de cada rodada de um item da lista automática. */
@@ -227,8 +261,15 @@ export function parseFolderConfig(out: string | undefined): FolderConfig {
     reviewer,
     ...((raw.get('reviewermodel') || DEFAULT_REVIEWER_MODEL[reviewer]) ? { reviewerModel: raw.get('reviewermodel') || DEFAULT_REVIEWER_MODEL[reviewer] } : {}),
     copy: parseCopyList(raw.get('copy')),
+    ship: (SHIP_MODES as readonly string[]).includes(raw.get('ship')?.toLowerCase() ?? '') ? (raw.get('ship')!.toLowerCase() as ShipMode) : 'off',
+    ...(validRef(raw.get('base')) ? { base: raw.get('base') } : {}),
+    ...(validRemote(raw.get('remote')) ? { remote: raw.get('remote') } : {}),
   };
 }
+
+/** Branch seguro como argumento do git: sem `-` no começo, sem `..`, sem espaço. */
+export const validRef = (s: string | undefined): s is string => !!s && /^\w[\w./-]{0,99}$/.test(s) && !s.includes('..') && !s.endsWith('/') && !s.endsWith('.lock');
+export const validRemote = (s: string | undefined): s is string => !!s && /^\w[\w.-]{0,59}$/.test(s);
 
 /** Caminho do vboards.copy: relativo, sem `..`, sem unidade nem barra no começo, sem quebra de linha. */
 export const validCopyPath = (p: string): boolean => !!p && p.length <= 200 && !/[\r\n\0]/.test(p) && !/^([\\/]|[A-Za-z]:)/.test(p) && !p.split(/[\\/]/).includes('..');
@@ -268,6 +309,9 @@ export function validateFolderConfig(raw: unknown): { values: Partial<Record<Fol
       : key === 'reviewerModel' ? /^[\w.:/[\]-]{1,60}$/.test(s)
       : key === 'card' ? s.length <= 100
       : key === 'copy' ? s.length <= 500 && s.split(',').every((x) => validCopyPath(x.trim()))
+      : key === 'ship' ? (SHIP_MODES as readonly string[]).includes(s)
+      : key === 'base' ? validRef(s)
+      : key === 'remote' ? validRemote(s)
       : s.length <= 500; // check
     if (!ok) return { error: tr('Valor inválido em vboards.{0}.', [key]) };
     values[key] = s;
@@ -492,6 +536,8 @@ export interface VBoardsServiceOptions {
   refine?: (folder: string, prompt: string, config: FolderConfig) => Promise<string>;
   /** Aviso no celular (vboards/ntfy.ts): só o título do card e o que aconteceu. */
   notify?: (cardTitle: string, event: NotifyEvent) => void;
+  /** Registro de produtos (products.ts); ausente = só o casamento por nome da pasta / vboards.card. */
+  products?: () => Product[];
   file?: string;
   fetch?: typeof fetch;
   now?: () => number;
@@ -565,7 +611,7 @@ export class VBoardsService {
       this.tasks = list.flatMap((x) => {
         const t = x as Record<string, unknown>;
         const s = (v: unknown) => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
-        return s(t.cardId) && s(t.subtaskId) && s(t.text) ? [{ cardId: s(t.cardId), subtaskId: s(t.subtaskId), text: s(t.text), cardTitle: s(t.cardTitle), date: s(t.date) || undefined }] : [];
+        return s(t.cardId) && s(t.subtaskId) && s(t.text) ? [{ cardId: s(t.cardId), subtaskId: s(t.subtaskId), text: s(t.text), cardTitle: s(t.cardTitle), date: s(t.date) || undefined, ...(s(t.repo) ? { repo: s(t.repo) } : {}) }] : [];
       });
       this.delay = POLL_MS;
       this.lastError = undefined;
@@ -593,9 +639,10 @@ export class VBoardsService {
     if (!queued.length) return;
     const folders = await this.knownFolders();
     const byFolder = new Map<string, AgentTask[]>();
+    const products = this.products();
     for (const t of queued) {
-      const m = matchFolders(t.cardTitle, folders);
-      if (m.length === 1) byFolder.set(m[0], [...(byFolder.get(m[0]) ?? []), t]);
+      const one = single(taskFolders(t, folders, products));
+      if (one) byFolder.set(one, [...(byFolder.get(one) ?? []), t]);
     }
     for (const [folder, tasks] of byFolder) {
       const config = await (this.opts.folderConfig ?? readFolderConfig)(folder);
@@ -623,9 +670,12 @@ export class VBoardsService {
   }
 
   private async refine(r: RefineRequest, run: NonNullable<VBoardsServiceOptions['refine']>): Promise<void> {
-    const matches = matchFolders(r.cardTitle, await this.knownFolders());
-    if (matches.length !== 1) {
-      const error = matches.length
+    const m = taskFolders(r, await this.knownFolders(), this.products());
+    const matches = m.paths;
+    if (m.error || matches.length !== 1) {
+      const error = m.error
+        ? m.error
+        : matches.length
         ? tr('várias pastas combinam com o card {0} ({1}): deixe vboards.card em só uma', [r.cardTitle, matches.map(baseName).join(', ')])
         : tr('nenhuma pasta com vboards.card = {0} (nem com esse nome) neste computador', [r.cardTitle]);
       return void (await this.postRefine(r, { status: 'failed', error }));
@@ -685,16 +735,20 @@ export class VBoardsService {
     const pending = this.tasks.filter((t) => !started.has(taskId(t)));
     if (!pending.length) return [];
     const folders = await this.knownFolders();
+    const products = this.products();
     return pending.map((t) => {
-      const matches = matchFolders(t.cardTitle, folders);
-      const pool = matches.length > 1 ? folders.filter((f) => matches.includes(f.path)) : folders;
+      const m = taskFolders(t, folders, products);
+      const matches = m.paths;
+      const one = single(m);
+      const pool = matches.length > 1 ? folders.filter((f) => matches.some((p) => samePath(p, f.path))) : folders;
       return {
         id: taskId(t),
         cardTitle: t.cardTitle,
         text: t.text,
         ...(t.date ? { date: t.date } : {}),
-        ...(matches.length === 1 ? { folder: matches[0] } : {}),
+        ...(one ? { folder: one } : {}),
         candidates: pool.map((f) => ({ path: f.path, name: baseName(f.path) })),
+        ...(m.error ? { problem: m.error } : {}),
         agents: this.attachable(matches.length ? matches : folders.map((f) => f.path)).map(({ agent: a, folder }) => ({ id: a.id, name: a.name, ...(a.title ? { title: a.title } : {}), provider: a.provider ?? 'claude', folder })),
       };
     });
@@ -733,7 +787,7 @@ export class VBoardsService {
     if (!task) return { status: 404, error: tr('tarefa do VBoards desconhecida: atualize a lista') };
     if (this.links.some((l) => l.id === body.id)) return { status: 409, error: tr('esta tarefa já foi iniciada') };
     const folders = await this.knownFolders();
-    const matches = matchFolders(task.cardTitle, folders);
+    const matches = taskFolders(task, folders, this.products()).paths;
     const hit = this.attachable(matches.length ? matches : folders.map((f) => f.path)).find((x) => x.agent.id === body.agentId);
     if (!hit) return { status: 400, error: tr('conversa não encontrada na pasta do projeto: atualize a lista') };
     // Duas requisições durante a espera acima: só a primeira liga.
@@ -755,9 +809,9 @@ export class VBoardsService {
     if (!task) return { status: 404, error: tr('tarefa do VBoards desconhecida: atualize a lista') };
     if (this.links.some((l) => l.id === body.id)) return { status: 409, error: tr('esta tarefa já foi iniciada') };
     const folders = await this.knownFolders();
-    const matches = matchFolders(task.cardTitle, folders);
-    const picked = typeof body.folder === 'string' && body.folder ? folders.find((f) => f.path === body.folder)?.path : matches.length === 1 ? matches[0] : undefined;
-    if (!picked) return { status: 400, error: tr('escolha a pasta do projeto (uma das sugeridas)') };
+    const m = taskFolders(task, folders, this.products());
+    const picked = typeof body.folder === 'string' && body.folder ? folders.find((f) => f.path === body.folder)?.path : single(m);
+    if (!picked) return { status: 400, error: m.error ?? tr('escolha a pasta do projeto (uma das sugeridas)') };
     // Dois cliques durante a espera acima: só o primeiro abre.
     if (this.links.some((l) => l.id === body.id)) return { status: 409, error: tr('esta tarefa já foi iniciada') };
     const prompt = taskPrompt(task);
@@ -894,11 +948,12 @@ export class VBoardsService {
   private async reportAll(): Promise<void> {
     const now = this.now();
     for (const l of this.links) {
-      if (l.reported === l.state || (l.retryAt && now < l.retryAt)) continue;
-      const state = l.state;
+      const key = reportKey(l);
+      if (l.reported === key || (l.retryAt && now < l.retryAt)) continue;
       try {
-        await this.call('/api/agent-tasks/update', { email: this.opts.config.email || undefined, cardId: l.cardId, subtaskId: l.subtaskId, status: state, ...(l.summary ? { summary: l.summary } : {}) });
-        l.reported = state;
+        // stage e prUrl são campos novos: um VBoards antigo ignora.
+        await this.call('/api/agent-tasks/update', { email: this.opts.config.email || undefined, cardId: l.cardId, subtaskId: l.subtaskId, status: l.state, ...(l.stage ? { stage: l.stage } : {}), ...(l.prUrl ? { prUrl: l.prUrl } : {}), ...(l.summary ? { summary: l.summary } : {}) });
+        l.reported = key;
         l.retryAt = undefined;
       } catch (err) {
         l.retryAt = now + RETRY_MS;
@@ -937,8 +992,30 @@ export class VBoardsService {
     }
   }
 
+  private products(): Product[] {
+    return this.opts.products?.() ?? [];
+  }
+
+  /**
+   * Juntar ou Descartar a cópia (chat/runs.ts closeCopy), ou outra etapa depois do portão: a subtarefa ligada vira
+   * `state` com a etapa (e o motivo no resumo) e vai ao VBoards. Sem ligação (já saiu, KEEP_DONE_MS) = false.
+   */
+  settle(id: string, s: { state: 'done' | 'failed'; stage?: string; summary?: string; prUrl?: string }): boolean {
+    const l = this.links.find((x) => x.id === id);
+    if (!l) return false;
+    l.state = s.state;
+    l.stage = s.stage;
+    l.prUrl = s.prUrl;
+    if (s.summary !== undefined) l.summary = summaryText(s.summary, REVIEW_SUMMARY_MAX);
+    l.retryAt = undefined;
+    this.save();
+    void this.report();
+    return true;
+  }
+
   private async knownFolders(): Promise<Folder[]> {
-    const paths = [...(await this.opts.folders().catch(() => []))];
+    // Os repos do registro de produtos também são pastas conhecidas (configuração e "Iniciar").
+    const paths = [...(await this.opts.folders().catch(() => [])), ...this.products().flatMap((p) => p.repos.map((r) => r.path))];
     for (const a of this.opts.agents()) {
       const p = this.opts.roomPath(a.roomId);
       if (p && /^(\/|[A-Za-z]:[\\/])/.test(p)) paths.push(p);

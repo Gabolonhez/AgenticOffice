@@ -66,11 +66,15 @@ export interface BriefingSettings { time: string; days: number[] }
 /** Texto livre (notify_send do Jarvis, manchete do briefing) no ntfy: mascarado e cortado. */
 export const NTFY_FREE_MAX = 200;
 
-interface Stored {
+/** As rotinas do Jarvis com horário (jarvis/briefing.ts ReportKind): briefing, fechamento do dia e semanal; desligadas por padrão. */
+export const ROUTINES = ['briefing', 'closing', 'weekly'] as const;
+export type Routine = (typeof ROUTINES)[number];
+const OFF: BriefingSettings = { time: '', days: [] };
+
+interface Stored extends Record<Routine, BriefingSettings> {
   ntfyUrl: string;
   channel: NotifyChannel;
   wa?: WaSettings;
-  briefing: BriefingSettings;
   jarvis: JarvisSettings;
 }
 
@@ -101,7 +105,7 @@ const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` 
  * computador (http/app.ts e server/jarvis/http.ts); a página remota vê só "ligado"; a chave nunca sai.
  */
 export class NotifySettings {
-  private s: Stored = { ntfyUrl: '', channel: 'ntfy', briefing: { time: '', days: [] }, jarvis: { ...JARVIS_DEFAULT } };
+  private s: Stored = { ntfyUrl: '', channel: 'ntfy', briefing: OFF, closing: OFF, weekly: OFF, jarvis: { ...JARVIS_DEFAULT } };
 
   constructor(
     private readonly file: string,
@@ -115,7 +119,9 @@ export class NotifySettings {
         ntfyUrl: 'url' in u ? u.url : '',
         channel: CHANNELS.includes(raw?.channel as NotifyChannel) ? (raw.channel as NotifyChannel) : 'ntfy',
         ...('wa' in wa && wa.wa ? { wa: wa.wa } : {}),
-        briefing: parseBriefing(raw?.briefing) ?? { time: '', days: [] },
+        briefing: parseBriefing(raw?.briefing) ?? OFF,
+        closing: parseBriefing(raw?.closing) ?? OFF,
+        weekly: parseBriefing(raw?.weekly) ?? OFF,
         jarvis: parseJarvis(raw?.jarvis),
       };
     } catch {
@@ -136,8 +142,9 @@ export class NotifySettings {
     return this.s.channel;
   }
 
-  briefing(): BriefingSettings {
-    return this.s.briefing;
+  /** Horário de uma rotina (padrão: o briefing da manhã). */
+  briefing(kind: Routine = 'briefing'): BriefingSettings {
+    return this.s[kind];
   }
 
   jarvis(): JarvisSettings {
@@ -172,10 +179,11 @@ export class NotifySettings {
       if (w.wa) next.wa = w.wa;
       else delete next.wa;
     }
-    if (b.briefing !== undefined) {
-      const br = parseBriefing(b.briefing);
+    for (const k of ROUTINES) {
+      if (b[k] === undefined) continue;
+      const br = parseBriefing(b[k]);
       if (!br) return tr('Horário do briefing inválido (use HH:MM e dias de 0 a 6).');
-      next.briefing = br;
+      next[k] = br;
     }
     return this.write(next);
   }
@@ -188,6 +196,8 @@ export class NotifySettings {
       waConfigured: !!wa,
       channel: this.s.channel,
       briefing: this.s.briefing,
+      closing: this.s.closing,
+      weekly: this.s.weekly,
       ...(editable ? { url: ntfyUrl, wa: wa ? { url: wa.url, sessionId: wa.sessionId, ownerJid: wa.ownerJid, apiKeySet: true } : null } : {}),
       editable,
     };
@@ -233,13 +243,13 @@ export class NotifySettings {
   private write(next: Stored): string | undefined {
     try {
       mkdirSync(dirname(this.file), { recursive: true });
-      const { ntfyUrl, channel, wa, briefing, jarvis } = next;
+      const { ntfyUrl, channel, wa, jarvis } = next;
       // Só o que difere do padrão: um notify.json antigo (só o tópico) continua igual.
       const out = {
         ntfyUrl,
         ...(channel !== 'ntfy' ? { channel } : {}),
         ...(wa ? { wa } : {}),
-        ...(briefing.time || briefing.days.length ? { briefing } : {}),
+        ...Object.fromEntries(ROUTINES.filter((k) => next[k].time || next[k].days.length).map((k) => [k, next[k]])),
         ...(jarvis.provider !== JARVIS_DEFAULT.provider || jarvis.model !== JARVIS_DEFAULT.model ? { jarvis } : {}),
       };
       writeFileSync(`${this.file}.tmp`, JSON.stringify(out), { mode: 0o600 });

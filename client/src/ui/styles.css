@@ -2716,6 +2716,18 @@
   color: var(--ui-muted);
 }
 
+.ui-set__hint.is-error {
+  color: #ff9b8f;
+}
+
+/* Configurações › Produtos: o registro em JSON (products.json). */
+.ui-products__json {
+  min-height: 180px;
+  resize: vertical;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre;
+}
+
 /* Sobre: versão em uso, estado da verificação no GitHub e a versão nova (com o jeito de atualizar). */
 .ui-about {
   scroll-margin: 8px;

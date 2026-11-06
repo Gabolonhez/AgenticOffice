@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatRun } from '../../shared/runs';
-import { feedbackMessage, METRICS_KEEP_MS, METRICS_TRIM_BYTES, parseComments, readMetrics, RunService, trimMetrics, type RunDeps } from './runs';
+import { readJournal } from './journal';
+import { feedbackMessage, itemTitle, mergeMessage, METRICS_KEEP_MS, METRICS_TRIM_BYTES, parseComments, readMetrics, RunService, trimMetrics, type RunDeps } from './runs';
 
 const PROJ = 'C:\\proj';
 const options = { folder: PROJ, provider: 'claude', permission: 'auto', limits: {} };
@@ -561,5 +562,55 @@ describe('chat: métricas das listas (run-metrics.jsonl)', () => {
     writeFileSync(small, `${JSON.stringify(old)}\n`);
     trimMetrics(small, now);
     expect(readMetrics(small)).toHaveLength(1);
+  });
+});
+
+describe('chat: lista, registro por projeto e o fim no VBoards', () => {
+  it('mensagem do Juntar: as tarefas que terminaram, sem o prefixo do VBoards', () => {
+    expect(mergeMessage([{ text: 'Corrigir o login\ncom detalhes', state: 'done' }])).toBe('Corrigir o login');
+    const m = mergeMessage([
+      { text: 'Tarefa do VBoards (card Posts Builder): Tela de perfil', vboardsTaskId: 'c:1', state: 'review' },
+      { text: 'Testes', state: 'done' },
+      { text: 'Falhou', state: 'failed' },
+    ]);
+    expect(m).toBe('Tela de perfil (e mais 1)\n\n- Tela de perfil\n- Testes');
+    expect(itemTitle({ text: 'Tarefa do VBoards (card X): [server] Y', vboardsTaskId: 'c:1' })).toBe('[server] Y');
+  });
+
+  it('grava as etapas no journal e, no Juntar/Descartar, avisa o VBoards', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hb-runs-j-'));
+    const journalFile = join(dir, 'journal.jsonl');
+    const merge = vi.fn(async (_r: string, _w: unknown, _m: string) => ({ ok: true as const }));
+    const worktrees = { create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge, discard: vi.fn(async () => ({ ok: true as const })), summary: vi.fn(), diff: vi.fn() };
+    const settle = vi.fn(() => true);
+    const vboards = { begin: vi.fn(async () => ({ agentId: 'chat:1' })), settle };
+    const { svc, end } = setup({ worktrees, vboards, journalFile, productOf: () => 'posts' });
+    await svc.create({ items: [{ text: 'Tarefa do VBoards (card P): Login', vboardsTaskId: 'c1:s1' }], options, isolated: true });
+    await flush();
+    await flush();
+    end('chat:1', 'done');
+    expect(await svc.merge('r1')).toEqual({ ok: true });
+    expect(merge.mock.calls[0][2]).toBe('Login');
+    expect(settle).toHaveBeenCalledWith('c1:s1', { state: 'done', stage: 'merged' });
+    expect(readJournal(journalFile).map((e) => [e.stage, e.product, e.cardId, e.subtaskId, e.title, e.ref])).toEqual([
+      ['queued', 'posts', 'c1', 's1', 'Login', 'r1#0'],
+      ['running', 'posts', 'c1', 's1', 'Login', 'r1#0'],
+      ['review', 'posts', 'c1', 's1', 'Login', 'r1#0'],
+      ['merged', 'posts', 'c1', 's1', 'Login', 'r1#0'],
+    ]);
+  });
+
+  it('Descartar: failed com o motivo no VBoards e discarded no journal', async () => {
+    const journalFile = join(mkdtempSync(join(tmpdir(), 'hb-runs-j-')), 'journal.jsonl');
+    const worktrees = { create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(), discard: vi.fn(async () => ({ ok: true as const })), summary: vi.fn(), diff: vi.fn() };
+    const settle = vi.fn(() => true);
+    const { svc, end } = setup({ worktrees, vboards: { begin: vi.fn(async () => ({ agentId: 'chat:1' })), settle }, journalFile });
+    await svc.create({ items: [{ text: 'X', vboardsTaskId: 'c1:s1' }], options, isolated: true });
+    await flush();
+    await flush();
+    end('chat:1', 'done');
+    await svc.discard('r1');
+    expect(settle).toHaveBeenCalledWith('c1:s1', { state: 'failed', stage: 'discarded', summary: expect.stringContaining('Descartado') });
+    expect(readJournal(journalFile).at(-1)).toMatchObject({ stage: 'discarded', folder: PROJ });
   });
 });

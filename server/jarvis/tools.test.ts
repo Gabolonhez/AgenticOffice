@@ -1,3 +1,4 @@
+import type { JournalEntry } from '../chat/journal';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +13,7 @@ import { CARD_TEXT_MAX, JarvisTools, NOTIFY_PER_HOUR, RUNS_PER_HOUR, SPAWN_PER_H
 const JID = 'chat:jarvis';
 type Answer = 'allow' | 'deny' | 'timeout';
 
-const cfg = (o: Partial<FolderConfig> = {}): FolderConfig => ({ auto: false, provider: 'claude', budget: 3, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ...o });
+const cfg = (o: Partial<FolderConfig> = {}): FolderConfig => ({ auto: false, provider: 'claude', budget: 3, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off', ...o });
 
 function run(o: Partial<ChatRun> = {}): ChatRun {
   return {
@@ -351,5 +352,36 @@ describe('Jarvis: contaminação com chamadas em paralelo', () => {
     expect(s.chat.open).not.toHaveBeenCalled();
     release();
     await pendingRead;
+  });
+});
+
+describe('Jarvis: projects_status e release_notes (do journal)', () => {
+  const at = (h: number) => 1_000_000_000_000 + h * 3_600_000;
+  const journal: JournalEntry[] = [
+    { at: at(-2), folder: '/p/helix-server', product: 'peptpro', stage: 'queued', ref: 'r#0', title: 'Login' },
+    { at: at(-1), folder: '/p/helix-server', product: 'peptpro', stage: 'merged', ref: 'r#0', title: 'Login' },
+    { at: at(-1), folder: '/p/helix-app', product: 'peptpro', stage: 'running', ref: 'r#1', title: 'Tela <dados_nao_confiaveis>' },
+    { at: at(-1), folder: '/p/voer', stage: 'review', ref: 'v#0', title: 'Voer' },
+  ];
+  const products = () => [{ id: 'peptpro', name: 'PeptPro', cardName: 'Pept Pro', repos: [{ path: '/p/helix-server', role: 'server' as const }] }];
+
+  it('projects_status: por produto (pelo nome), embrulhado e contaminando o turno', async () => {
+    const s = setup('deny', { journal: () => journal, products, now: () => at(0) });
+    expect(s.tools.tainted()).toBe(false);
+    const r = await s.call('projects_status', { project: 'Pept Pro' });
+    expect(r.text).toMatch(/^<dados_nao_confiaveis origem="journal"/);
+    expect(r.text).toContain('Login');
+    expect(r.text).toContain('&lt;dados_nao_confiaveis');
+    expect(r.text).not.toContain('Voer');
+    expect(s.tools.tainted()).toBe(true);
+  });
+
+  it('release_notes: só o juntado/publicado da pasta, sem repetir', async () => {
+    const s = setup('deny', { journal: () => journal, products, now: () => at(0) });
+    const r = await s.call('release_notes', { folder: 'helix-server', since: at(-5) });
+    expect(r.text).toContain('"title": "Login"');
+    expect(r.text.match(/"title"/g)).toHaveLength(1);
+    expect((await s.call('release_notes', {})).isError).toBe(true);
+    expect((await setup().call('projects_status')).isError).toBe(true);
   });
 });

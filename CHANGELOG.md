@@ -30,6 +30,24 @@ do meio (0.**3**.0).
 - **Segurança:** pedido por voz conta como de fora (o microfone ouve o ambiente): ações pedem cartão com PIN, e o que
   parece PIN ou senha falado não chega ao Jarvis. O modelo de voz só tem uma ferramenta, perguntar ao Jarvis.
 - A leitura em voz alta das respostas na gaveta segue a língua da página (antes, sempre pt-BR).
+### Escritório autônomo: fundação
+
+- **Produtos com vários repositórios:** em **Configurações › Produtos e repositórios** (`~/.habblaud/products.json`), um
+  produto do VBoards lista os repos dele (app, server, web, com remoto, deploy e loja). A subtarefa diz o repo no
+  começo do texto (`[server] corrigir o login`) ou pelo campo `repo` da fila; produto com um repo só usa ele; ambíguo
+  não abre sozinho e mostra a frase pedindo o repo. Cards sem produto seguem como antes (nome da pasta ou
+  `vboards.card`).
+- **Cópia isolada a partir do remoto (`vboards.ship`):** com `vboards.ship` em `pr` ou `merge` (padrão `off`), a cópia
+  isolada nasce de `<vboards.remote>/<vboards.base>` (padrões `origin` e o branch padrão do remoto) depois de um
+  `git fetch` que nunca pede senha e tem prazo, em vez do HEAD local.
+- **Registro por projeto:** cada item de lista grava as etapas (na fila, rodando, revisão, juntado, descartado,
+  falhou) em `~/.habblaud/chat/journal.jsonl`.
+- **VBoards acompanha o fim:** Juntar marca a subtarefa como feita e Descartar como falha, com o motivo; o status vai
+  com a etapa (`stage`) e, quando houver, o link do PR (`prUrl`). O commit do Juntar leva os títulos das tarefas, em vez
+  de "Lista de N itens".
+- **Relatórios do Jarvis:** o briefing ganha uma seção por projeto (feito, fazendo, a fazer, travado). Duas rotinas
+  novas, desligadas por padrão, com horário nas mesmas Configurações: o fechamento do dia e o resumo semanal. Novas
+  ferramentas `projects_status` e `release_notes`, que tratam o resultado como dado de fora.
 
 ### Chat com agentes (AgenticOffice)
 

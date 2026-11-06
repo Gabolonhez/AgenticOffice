@@ -22,6 +22,8 @@ export interface VBoardsTask {
   date?: string;
   folder?: string;
   candidates: Array<{ path: string; name: string }>;
+  /** Produto com vários repos e a subtarefa não diz qual: a frase do servidor (escolha a pasta ou ponha [repo] no texto). */
+  problem?: string;
   agents?: Array<{ id: string; name: string; title?: string; provider: string; folder: string }>;
 }
 
@@ -230,6 +232,7 @@ export class VBoardsPanel implements UiComponent {
       access().chat ? h('label', { class: 'ui-spawn__check' }, mark, h('span', { text: tr('Marcar para rodar como lista') })) : null,
       h('span', { class: 'ui-spawn__folder-name', text: t.cardTitle || tr('(card sem título)') }),
       h('p', { class: 'ui-vboards__text', text: t.text }),
+      t.problem && !folder ? h('p', { class: 'ui-set__hint is-error', text: t.problem }) : null,
       select,
       h('div', { class: 'ui-vboards__actions' }, go, skip),
       open.length ? convo : null,

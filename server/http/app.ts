@@ -123,6 +123,11 @@ export interface ApiDeps {
    * ligado (o tópico e a chave não saem); gravar, só pelo próprio computador.
    */
   ntfy?: { view(editable: boolean): Record<string, unknown>; update(raw: unknown): string | undefined };
+  /**
+   * Registro de produtos (vboards/products.ts), GET/POST /api/vboards/products {products}: produto -> repos. Pela porta
+   * remota só leitura, como a configuração das pastas.
+   */
+  products?: { load(): { products: unknown[]; error?: string }; save(raw: unknown): { products: unknown[] } | { error: string } };
 }
 
 /** Corpo do POST /api/assets3d/import: o zip (~10 MB) em base64. */
@@ -628,11 +633,12 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       // A configuração das pastas pode ser LIDA pela porta remota (com login); gravar, nunca: vboards.check é um comando
       // de shell e vboards.auto abre agentes sozinho.
       const vb = deps.vboards;
-      const remoteConfigRead = (path === '/api/vboards/config' || path === '/api/vboards/notify') && isRead && isRemote(req);
+      const configPath = path === '/api/vboards/config' || path === '/api/vboards/notify' || path === '/api/vboards/products';
+      const remoteConfigRead = configPath && isRead && isRemote(req);
       const problem = remoteConfigRead
         ? undefined
         : isRemote(req)
-          ? path === '/api/vboards/config' || path === '/api/vboards/notify'
+          ? configPath
             ? tr('a configuração do VBoards só muda pelo próprio computador: pela porta remota ela é só leitura')
             : tr('o VBoards só é usado pelo próprio computador (http://localhost)')
           : ptyRequestProblem(req);
@@ -679,6 +685,18 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
             .then((body) => {
               const err = ntfy.update(body);
               sendJson(res, err ? 400 : 200, err ? { error: err } : view());
+            })
+            .catch((err) => fail(res, err));
+        } else methodNotAllowed(res, 'GET, POST');
+      } else if (path === '/api/vboards/products' && deps.products) {
+        const reg = deps.products;
+        const editable = !isRemote(req);
+        if (isRead) sendJson(res, 200, { ...reg.load(), editable });
+        else if (method === 'POST') {
+          readJson(req)
+            .then((body) => {
+              const r = reg.save(body);
+              sendJson(res, 'error' in r ? 400 : 200, 'error' in r ? r : { ...r, editable });
             })
             .catch((err) => fail(res, err));
         } else methodNotAllowed(res, 'GET, POST');
