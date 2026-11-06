@@ -12,8 +12,22 @@ import { JARVIS_DEFAULT, type JarvisSettings } from '../jarvis/service';
 import { errMsg, log } from '../log';
 import { isLocalHost, sendWhatsApp, validateWa, type WaSettings } from './whatsapp';
 
-/** 'quota': uma lista pausou pela cota da conta (chat/runs.ts); o título é o nome da pasta. */
-export type NotifyEvent = 'review' | 'ready' | 'failed' | 'quota';
+/**
+ * 'quota': uma lista pausou pela cota da conta (chat/runs.ts); o título é o nome da pasta. 'pr', 'ci_failed', 'no_ci' e
+ * 'deployed': o "Subir" (chat/ship.ts), com o nome da pasta.
+ */
+export type NotifyEvent = 'review' | 'ready' | 'failed' | 'quota' | 'pr' | 'ci_failed' | 'no_ci' | 'deployed';
+
+const EVENT_TEXT: Record<NotifyEvent, () => string> = {
+  review: () => tr('aguardando revisão'),
+  ready: () => tr('plano pronto'),
+  quota: () => tr('lista pausada: cota da conta no limite'),
+  failed: () => tr('falhou'),
+  pr: () => tr('PR aberto'),
+  ci_failed: () => tr('CI do PR falhou'),
+  no_ci: () => tr('repo sem CI de PR: o merge espera a sua aprovação com PIN'),
+  deployed: () => tr('no ar (deployed)'),
+};
 
 const TITLE_MAX = 100;
 const URL_MAX = 300;
@@ -41,7 +55,7 @@ export function validateNtfyUrl(raw: unknown): { url: string } | { error: string
 export function ntfyMessage(cardTitle: string, event: NotifyEvent): { title: string; text: string } {
   const t = maskSecrets(cardTitle).replace(/\s+/g, ' ').trim() || tr('(card sem título)');
   const title = t.length > TITLE_MAX ? `${t.slice(0, TITLE_MAX - 1)}…` : t;
-  return { title, text: event === 'review' ? tr('aguardando revisão') : event === 'ready' ? tr('plano pronto') : event === 'quota' ? tr('lista pausada: cota da conta no limite') : tr('falhou') };
+  return { title, text: EVENT_TEXT[event]() };
 }
 
 /** POST no tópico; o título vai como RFC 2047 (o fetch não aceita cabeçalho fora do latin1). Erro só vira log. */

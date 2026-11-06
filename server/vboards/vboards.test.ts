@@ -405,10 +405,10 @@ describe('configuração da pasta (git config --local vboards.*)', () => {
   it('padrões: desligado, claude, US$ 2, revisor claude com sonnet; agy é o Antigravity', () => {
     expect(parseFolderConfig('vboards.qa npx playwright test')).toMatchObject({ qa: 'npx playwright test' });
     expect(validateFolderConfig({ qa: 'npx playwright test' })).toEqual({ values: { qa: 'npx playwright test' } });
-    expect(parseFolderConfig(undefined)).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off' });
+    expect(parseFolderConfig(undefined)).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off', ciMinutes: 30 });
     const out = 'vboards.card PostsBuilder\nvboards.auto TRUE\nvboards.provider agy\nvboards.budget 0.75\nvboards.check npm ci && npm test\nvboards.reviewer codex\nvboards.copy .env, config/local.json, ../fora, /etc/passwd';
-    expect(parseFolderConfig(out)).toEqual({ card: 'PostsBuilder', auto: true, provider: 'antigravity', budget: 0.75, check: 'npm ci && npm test', reviewer: 'codex', copy: ['.env', 'config/local.json'], ship: 'off' });
-    expect(parseFolderConfig('vboards.auto yes\nvboards.budget -1\nvboards.provider gpt\nvboards.reviewermodel opus')).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'opus', copy: [], ship: 'off' });
+    expect(parseFolderConfig(out)).toEqual({ card: 'PostsBuilder', auto: true, provider: 'antigravity', budget: 0.75, check: 'npm ci && npm test', reviewer: 'codex', copy: ['.env', 'config/local.json'], ship: 'off', ciMinutes: 30 });
+    expect(parseFolderConfig('vboards.auto yes\nvboards.budget -1\nvboards.provider gpt\nvboards.reviewermodel opus')).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'opus', copy: [], ship: 'off', ciMinutes: 30 });
   });
 });
 
@@ -419,7 +419,7 @@ describe('abertura automática (opt-in)', () => {
     { cardId: 'c2', subtaskId: 's1', text: 'X', cardTitle: 'outro' },
     { cardId: 'c3', subtaskId: 's1', text: 'Y', cardTitle: 'Agentic Office' },
   ];
-  const cfg = (auto: boolean): FolderConfig => ({ auto, provider: 'codex', budget: 1, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off' });
+  const cfg = (auto: boolean): FolderConfig => ({ auto, provider: 'codex', budget: 1, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off', ciMinutes: 30 });
   function setup(withAuto = true) {
     const fetchMock = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify(String(url).includes('/api/agent-tasks?') ? { tasks } : { ok: true }), { status: 200 }));
     const auto = vi.fn();
@@ -565,7 +565,7 @@ describe('Refinar (plano só de leitura)', () => {
       folders: async () => o.folders ?? ['/p/payposts-web', '/p/outro'],
       cardOf: async (f) => (f.endsWith('payposts-web') ? 'PostsBuilder' : undefined),
       chat: { open: () => ({ agentId: 'chat:1' }) },
-      folderConfig: async () => ({ auto: false, provider: 'codex', budget: 1, reviewer: 'claude', copy: [], ship: 'off' }),
+      folderConfig: async () => ({ auto: false, provider: 'codex', budget: 1, reviewer: 'claude', copy: [], ship: 'off', ciMinutes: 30 }),
       refine,
       notify,
       fetch: fetchMock as unknown as typeof fetch,

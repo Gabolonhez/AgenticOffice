@@ -230,13 +230,20 @@ export interface FolderConfig {
   base?: string;
   /** vboards.remote: padrão origin. */
   remote?: string;
+  /** vboards.deploy: `none` (o merge conta como deployed) ou `workflow:<arquivo.yml>` (espera esse workflow na base). */
+  deploy?: string;
+  /** vboards.ciMinutes: prazo do CI e do deploy no "Subir" (padrão 30). */
+  ciMinutes: number;
 }
 
 export const SHIP_MODES = ['off', 'pr', 'merge'] as const;
 export type ShipMode = (typeof SHIP_MODES)[number];
-export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'qa', 'reviewer', 'reviewerModel', 'copy', 'ship', 'base', 'remote'] as const;
+export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'qa', 'reviewer', 'reviewerModel', 'copy', 'ship', 'base', 'remote', 'deploy', 'ciMinutes'] as const;
 export type FolderKey = (typeof FOLDER_KEYS)[number];
 export const DEFAULT_BUDGET_USD = 2;
+export const DEFAULT_CI_MINUTES = 30;
+export const validDeploy = (s: string | undefined): s is string => !!s && /^(none|workflow:[\w.-]{1,100}\.ya?ml)$/.test(s);
+const validCiMinutes = (s: string | undefined): boolean => !!s && /^\d{1,3}$/.test(s) && Number(s) >= 1 && Number(s) <= 240;
 /** Prazo de cada rodada de um item da lista automática. */
 export const AUTO_TURN_MINUTES = 30;
 /** No git config o Antigravity é `agy` (o nome da CLI). */
@@ -267,6 +274,8 @@ export function parseFolderConfig(out: string | undefined): FolderConfig {
     ship: (SHIP_MODES as readonly string[]).includes(raw.get('ship')?.toLowerCase() ?? '') ? (raw.get('ship')!.toLowerCase() as ShipMode) : 'off',
     ...(validRef(raw.get('base')) ? { base: raw.get('base') } : {}),
     ...(validRemote(raw.get('remote')) ? { remote: raw.get('remote') } : {}),
+    ...(validDeploy(raw.get('deploy')) ? { deploy: raw.get('deploy') } : {}),
+    ciMinutes: validCiMinutes(raw.get('ciminutes')) ? Number(raw.get('ciminutes')) : DEFAULT_CI_MINUTES,
   };
 }
 
@@ -315,6 +324,8 @@ export function validateFolderConfig(raw: unknown): { values: Partial<Record<Fol
       : key === 'ship' ? (SHIP_MODES as readonly string[]).includes(s)
       : key === 'base' ? validRef(s)
       : key === 'remote' ? validRemote(s)
+      : key === 'deploy' ? validDeploy(s)
+      : key === 'ciMinutes' ? validCiMinutes(s)
       : s.length <= 500; // check, qa
     if (!ok) return { error: tr('Valor inválido em vboards.{0}.', [key]) };
     values[key] = s;
@@ -1006,7 +1017,7 @@ export class VBoardsService {
    * Juntar ou Descartar a cópia (chat/runs.ts closeCopy), ou outra etapa depois do portão: a subtarefa ligada vira
    * `state` com a etapa (e o motivo no resumo) e vai ao VBoards. Sem ligação (já saiu, KEEP_DONE_MS) = false.
    */
-  settle(id: string, s: { state: 'done' | 'failed'; stage?: string; summary?: string; prUrl?: string }): boolean {
+  settle(id: string, s: { state: 'done' | 'failed' | 'review'; stage?: string; summary?: string; prUrl?: string }): boolean {
     const l = this.links.find((x) => x.id === id);
     if (!l) return false;
     l.state = s.state;

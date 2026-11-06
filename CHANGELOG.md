@@ -10,6 +10,26 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Subir: do PR ao deploy
+
+- **Botão "Subir" nas listas:** a cópia isolada de uma lista vira um PR no GitHub, com um cartão que mostra pasta,
+  repositório, base, branch, o SHA exato, o diffstat, o resultado do portão e, em destaque, mudanças em `.husky/`,
+  `.githooks/` e `.github/workflows/`. Só sobe com o PIN de aprovação, e o push e o merge ficam presos àquele SHA.
+- **Push seguro:** só branches `agentic/*`, nunca a base, sem force; o token vai só no ambiente do git (nunca na linha de
+  comando), sem hooks e sem janela de senha. Uma varredura recusa `.env`, chaves privadas, `*adminsdk*.json` e tokens
+  (`ghp_`, `github_pat_`, `sk-`, `AKIA`, `xox`) no diff.
+- **CI, merge e deploy:** com `vboards.ship=merge`, o Habblaud acompanha o CI a cada minuto (prazo em
+  `vboards.ciMinutes`, padrão 30), faz o merge pelo SHA aprovado só com CI verde e espera o workflow de
+  `vboards.deploy=workflow:<arquivo.yml>` (ou `none`). Repo sem CI de PR nunca conta como verde: o merge pede uma
+  aprovação extra com PIN ("merge = deploy em produção"). Tudo sobrevive a um reinício. Produto com vários repos sobe na
+  ordem server → web → app. Depois do deploy, a cópia é descartada e o checkout local avança se estiver limpo e na base.
+- **Progresso e avisos:** barra de etapas (push, PR, CI, merge, deploy) com o link do PR; etapa e link vão para o VBoards
+  e para o registro por projeto; avisos no celular de PR aberto, CI falho, repo sem CI e deployed. Juntar e Subir são
+  exclusivos por lista. O Jarvis ganhou `runs_ship` (sempre cartão com PIN) e `runs_ship_status`.
+- **Configurações:** campos `ship`, `base`, `remote`, `deploy` e `ciMinutes` por pasta e a tela **Token do GitHub**
+  (fine-grained; fica só neste computador, em `~/.habblaud/github.json` com permissão 600, ou em `HABBLAUD_GITHUB_TOKEN`).
+- **Abrir no VS Code:** abre a cópia isolada de uma lista no VS Code; sem o comando `code`, mostra o caminho para copiar.
+
 ### Triagem, perguntas e pesquisa do VBoards
 
 - **Triagem das ideias:** cada ideia nova do VBoards passa por uma rodada só de leitura que diz se ela é válida, duplicada

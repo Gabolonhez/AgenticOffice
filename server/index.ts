@@ -75,6 +75,9 @@ import { ChatService, chatOffReason } from './chat/service';
 import { createWorktreeOps } from './chat/worktree';
 import { quotaBlock } from './chat/quota';
 import { readMetrics, RunService } from './chat/runs';
+import { ShipService } from './chat/ship';
+import { GitHub, GitHubTokenStore } from './chat/github';
+import { openInVsCode } from './chat/bins';
 import { refinerFor, reviewDiff, runChecks, runQa } from './chat/gate';
 import { NotifySettings } from './vboards/ntfy';
 import { loadProducts, productOfFolder, saveProducts, type Product } from './vboards/products';
@@ -511,6 +514,22 @@ const runs = chat
     })
   : undefined;
 late.runs = runs;
+// "Subir" (chat/ship.ts): push do branch agentic/*, PR, CI, merge e deploy pelo GitHub, sempre com o PIN. Token em
+// HABBLAUD_GITHUB_TOKEN ou <dataDir>/github.json (600, gravado só pelo próprio computador).
+const githubToken = new GitHubTokenStore(join(config.dataDir, 'github.json'));
+const ship = runs
+  ? new ShipService({
+      runs,
+      worktrees: createWorktreeOps(config.dataDir),
+      token: () => githubToken.get(),
+      github: (token) => new GitHub(token),
+      folderConfig: (f) => readFolderConfig(f),
+      products,
+      vboards,
+      notify: (title, event) => ntfy.notify(title, event),
+      restoreCwd: (id) => chat?.restoreCwd(id),
+    })
+  : undefined;
 // Gatilhos (chat/triggers.ts): todo disparo vira um cartão de aprovação; sem o registro de permissões, não existem.
 const triggers =
   chat && permissions
@@ -587,6 +606,7 @@ const jarvisTools =
         registry: permissions,
         runs,
         worktrees: createWorktreeOps(config.dataDir),
+        ship,
         folders: () => chatFolders,
         folderConfig: (f) => readFolderConfig(f),
         writeFolderConfig: (f, v) => writeFolderConfig(f, v),
@@ -665,6 +685,10 @@ const chatRoutes = chat
       worktrees: createWorktreeOps(config.dataDir),
       delegation,
       runs,
+      ship,
+      pin: approvalPin,
+      github: githubToken,
+      openEditor: (path) => openInVsCode(path),
       triggers,
       summary: daySummary,
       extraTools: (id) => (jarvisTools && chat.record(id)?.system === 'jarvis' ? jarvisTools.tools() : []),
@@ -675,6 +699,7 @@ if (chat) {
   chat.start();
   runs?.load();
   runs?.start();
+  ship?.start();
   triggers?.load();
   triggers?.start();
   if (process.env.HABBLAUD_TRIAGE !== '0') setInterval(() => void triage?.scan().catch((err) => log.warnOnce(`triage:scan:${errMsg(err)}`, tr('Triagem: falha na varredura das ideias ({0}).', [errMsg(err)]))), 2 * 60_000).unref();
