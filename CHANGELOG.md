@@ -10,6 +10,16 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Escritório 3D
+
+- **Escritório 3D:** o botão **3D** da barra do topo troca o escritório 2D por um escritório em 3D, onde cada agente vira um
+  funcionário sentado no posto do projeto dele (acena quando precisa de você, apresenta quando termina, digita quando
+  trabalha). Clicar no funcionário abre o agente, como no 2D. Escolha do escritório pelo número de projetos (ou à mão),
+  seletor de andar e câmera orbital. Não convive com a cidade do Habblaud World: abrir uma fecha a outra.
+- **Importar pacote 3D:** o pacote 3D (escritórios, móveis e funcionários) tem licença própria e não vem no Habblaud. Baixe o
+  zip em https://iacom.com.br/buildoffice e importe em **Configurações › Escritório 3D**; ele é extraído só neste
+  computador, em `~/.habblaud/assets/3d`.
+
 ### Chat com agentes (AgenticOffice)
 
 - **Chat com agentes:** o "Novo agente" abre Claude Code, Codex ou Antigravity sem tela e a conversa acontece no painel
