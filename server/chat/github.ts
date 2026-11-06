@@ -51,6 +51,8 @@ export interface WorkflowRun {
   status: string;
   conclusion: string | null;
   url?: string;
+  /** ISO; só nas execuções de workflow_dispatch (dispatchRuns). */
+  createdAt?: string;
 }
 
 /** Deploy por workflow: sem execução ainda = pending (o prazo é de quem chama). */
@@ -177,6 +179,19 @@ export class GitHub {
     return (j.workflow_runs ?? [])
       .filter((w) => w.head_sha === undefined || w.head_sha === sha)
       .map((w) => ({ status: String(w.status ?? ''), conclusion: typeof w.conclusion === 'string' ? w.conclusion : null, ...(typeof w.html_url === 'string' ? { url: w.html_url } : {}) }));
+  }
+
+  /** workflow_dispatch (precisa de Actions write): o GitHub responde 204 sem corpo. */
+  async dispatchWorkflow(r: GhRepo, file: string, ref: string, inputs: Record<string, string>): Promise<void> {
+    await this.call('POST', `/repos/${enc(r.owner)}/${enc(r.repo)}/actions/workflows/${enc(file)}/dispatches`, { ref, inputs });
+  }
+
+  /** Execuções disparadas à mão (workflow_dispatch) no branch desde `sinceIso`, da mais antiga para a mais nova. */
+  async dispatchRuns(r: GhRepo, file: string, branch: string, sinceIso: string): Promise<WorkflowRun[]> {
+    const j = await this.call<{ workflow_runs?: Array<Record<string, unknown>> }>('GET', `/repos/${enc(r.owner)}/${enc(r.repo)}/actions/workflows/${enc(file)}/runs?event=workflow_dispatch&branch=${enc(branch)}&created=${enc(`>=${sinceIso}`)}&per_page=20`);
+    return (j.workflow_runs ?? [])
+      .map((w) => ({ status: String(w.status ?? ''), conclusion: typeof w.conclusion === 'string' ? w.conclusion : null, createdAt: String(w.created_at ?? ''), ...(typeof w.html_url === 'string' ? { url: w.html_url } : {}) }))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 }
 

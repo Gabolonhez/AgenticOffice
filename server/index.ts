@@ -79,6 +79,7 @@ import { createWorktreeOps } from './chat/worktree';
 import { quotaBlock } from './chat/quota';
 import { readMetrics, RunService } from './chat/runs';
 import { ShipService } from './chat/ship';
+import { parseTranslation, readAppVersion, StoreService, translatePrompt } from './chat/lojas';
 import { GitHub, GitHubTokenStore } from './chat/github';
 import { openInVsCode } from './chat/bins';
 import { refinerFor, reviewDiff, runChecks, runQa } from './chat/gate';
@@ -522,8 +523,22 @@ late.runs = runs;
 // "Subir" (chat/ship.ts): push do branch agentic/*, PR, CI, merge e deploy pelo GitHub, sempre com o PIN. Token em
 // HABBLAUD_GITHUB_TOKEN ou <dataDir>/github.json (600, gravado só pelo próprio computador).
 const githubToken = new GitHubTokenStore(join(config.dataDir, 'github.json'));
+// Lojas (chat/lojas.ts): depois do deployed de um app, dispara o workflow de OTA/build/submit do próprio repo.
+const lojas = new StoreService({
+  folderConfig: (f) => readFolderConfig(f),
+  products,
+  token: () => githubToken.get(),
+  github: (token) => new GitHub(token),
+  remoteInfo: (f, r) => createWorktreeOps(config.dataDir).remoteInfo(f, r),
+  journal: { append: (e) => appendJournal(journalFile, e), read: (since) => readJournal(journalFile, since) },
+  notify: (title, event) => ntfy.notify(title, event),
+  appVersion: readAppVersion,
+  translate: async (lines) => parseTranslation((await claudeRunner(summaryCwd(config.dataDir))(translatePrompt(lines))).text, lines.length),
+  file: join(config.dataDir, 'chat', 'lojas.json'),
+});
 const ship = runs
   ? new ShipService({
+      onDeployed: (folder) => void lojas.afterDeployed(folder),
       runs,
       worktrees: createWorktreeOps(config.dataDir),
       token: () => githubToken.get(),
@@ -635,6 +650,7 @@ const jarvisTools =
         runs,
         worktrees: createWorktreeOps(config.dataDir),
         ship,
+        lojas,
         folders: () => chatFolders,
         folderConfig: (f) => readFolderConfig(f),
         writeFolderConfig: (f, v) => writeFolderConfig(f, v),
@@ -680,7 +696,11 @@ const routine = (kind: ReportKind) =>
         ...(triggers?.history() ?? []).filter((f) => f.outcome === 'failed' && f.at >= since).map((f) => tr('gatilho "{0}": {1}', [f.ruleName, f.note ?? ''])),
       ];
       const ledger = projectLedger(readJournal(journalFile, since - LEDGER_OPEN_MS), since);
-      return { since, summary, summaryError, metrics: readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since), quota: quotaLines(), failures, ledger, waiting: triage?.waiting().map((w) => ({ cardId: w.cardId, title: w.title, questions: w.questions })) };
+      const versions =
+        kind === 'weekly'
+          ? (await Promise.all(products().flatMap((p) => p.repos.filter((r) => r.role === 'app').map((r) => ({ app: p.name, folder: r.path }))).map(async (a) => ({ app: a.app, cut: await lojas.cut(a.folder, false).catch(() => undefined) })))).flatMap((x) => (x.cut?.items.length ? [{ app: x.app, version: x.cut.version, count: x.cut.items.length }] : []))
+          : undefined;
+      return { since, versions, summary, summaryError, metrics: readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since), quota: quotaLines(), failures, ledger, waiting: triage?.waiting().map((w) => ({ cardId: w.cardId, title: w.title, questions: w.questions })) };
     },
     post: (text) => void chat!.post(jarvis!.ensure(), text),
     notify: (text, headline) => ntfy.sendText(text, { title: reportTitle(kind), headline }),
@@ -715,6 +735,7 @@ const chatRoutes = chat
       delegation,
       runs,
       ship,
+      lojas,
       pin: approvalPin,
       github: githubToken,
       openEditor: (path) => openInVsCode(path),
@@ -729,6 +750,7 @@ if (chat) {
   runs?.load();
   runs?.start();
   ship?.start();
+  lojas.start();
   triggers?.load();
   triggers?.start();
   if (process.env.HABBLAUD_TRIAGE !== '0') setInterval(() => void triage?.scan().catch((err) => log.warnOnce(`triage:scan:${errMsg(err)}`, tr('Triagem: falha na varredura das ideias ({0}).', [errMsg(err)]))), 2 * 60_000).unref();

@@ -6,6 +6,7 @@
 // provedor e o modelo do Jarvis (GET/POST /api/chat/jarvis/settings), só para quem pode ser o Jarvis.
 import { tr } from '../../../shared/i18n';
 import { h, setHidden, setText } from './dom';
+import { LojaPanel } from './loja-panel';
 import { shortPath } from './spawn';
 
 interface NotifyView {
@@ -23,7 +24,7 @@ interface NotifyView {
 const ROUTINES = ['briefing', 'closing', 'weekly'] as const;
 const routineLabel = (k: (typeof ROUTINES)[number]): string => (k === 'closing' ? tr('Horário do fechamento do dia') : k === 'weekly' ? tr('Horário do resumo semanal') : tr('Horário do briefing'));
 
-interface FolderConfig { card?: string; auto: boolean; provider: string; budget: number; check?: string; qa?: string; reviewer: string; reviewerModel?: string; copy?: string; ship?: string; base?: string; remote?: string; deploy?: string; ciMinutes?: number }
+interface FolderConfig { card?: string; auto: boolean; provider: string; budget: number; check?: string; qa?: string; reviewer: string; reviewerModel?: string; copy?: string; ship?: string; base?: string; remote?: string; deploy?: string; ciMinutes?: number; store?: string; storeWorkflow?: string; otaChannel?: string; versionBump?: string }
 
 const PROVIDERS = ['claude', 'codex', 'agy'];
 
@@ -44,6 +45,11 @@ export class VBoardsConfigGroup {
   private readonly remote = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 100, placeholder: 'origin' } });
   private readonly deploy = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 200, placeholder: tr('none ou workflow:deploy.yml') } });
   private readonly ciMinutes = h('input', { class: 'ui-rename__input', type: 'number', attrs: { min: '1', max: '240', step: '1' } });
+  private readonly storeMode = h('select', { class: 'ui-rename__input' }, h('option', { attrs: { value: 'off' }, text: tr('off: sem loja') }), h('option', { attrs: { value: 'ota' }, text: tr('ota: atualização OTA depois do deploy') }), h('option', { attrs: { value: 'ota+build' }, text: tr('ota+build: também build e envio à loja') }));
+  private readonly storeWorkflow = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 100, placeholder: 'store.yml' } });
+  private readonly otaChannel = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 40, placeholder: 'preview' } });
+  private readonly versionBump = select(['auto', 'patch', 'minor', 'major']);
+  private readonly loja = new LojaPanel();
   private readonly ntfy = h('input', { class: 'ui-rename__input', type: 'url', attrs: { maxlength: 300, placeholder: 'https://ntfy.sh/<tópico>' } });
   private readonly channel = h('select', { class: 'ui-rename__input' }, h('option', { attrs: { value: 'ntfy' }, text: 'ntfy' }), h('option', { attrs: { value: 'whatsapp' }, text: 'WhatsApp' }), h('option', { attrs: { value: 'both' }, text: tr('os dois') }));
   private readonly waUrl = h('input', { class: 'ui-rename__input', type: 'url', attrs: { maxlength: 300, placeholder: 'https://wa.exemplo.com' } });
@@ -79,7 +85,7 @@ export class VBoardsConfigGroup {
   );
   private readonly save = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar na pasta'), on: { click: () => void this.store() } });
   private readonly status = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
-  private readonly fields = [this.card, this.auto, this.provider, this.budget, this.check, this.qa, this.reviewer, this.reviewerModel, this.copy, this.ship, this.base, this.remote, this.deploy, this.ciMinutes];
+  private readonly fields = [this.card, this.auto, this.provider, this.budget, this.check, this.qa, this.reviewer, this.reviewerModel, this.copy, this.ship, this.base, this.remote, this.deploy, this.ciMinutes, this.storeMode, this.storeWorkflow, this.otaChannel, this.versionBump];
 
   constructor() {
     this.folder.addEventListener('change', () => void this.load());
@@ -104,6 +110,12 @@ export class VBoardsConfigGroup {
       row(tr('Remoto (vboards.remote)'), this.remote),
       row(tr('Deploy (vboards.deploy)'), this.deploy),
       row(tr('Minutos de espera do CI (vboards.ciMinutes)'), this.ciMinutes),
+      row(tr('Loja (vboards.store)'), this.storeMode),
+      h('p', { class: 'ui-set__hint', text: tr('Só para apps Expo. Depois do deploy, o Habblaud dispara o workflow do repo (o CI roda o eas): OTA em canal que não é production sai sozinho; OTA em production, build e envio à loja pedem o PIN.') }),
+      row(tr('Workflow da loja (vboards.storeWorkflow)'), this.storeWorkflow),
+      row(tr('Canal do OTA automático (vboards.otaChannel)'), this.otaChannel),
+      row(tr('Versão nova (vboards.versionBump)'), this.versionBump),
+      this.loja.el,
       this.save,
       this.status,
       this.ntfyGroup,
@@ -203,13 +215,18 @@ export class VBoardsConfigGroup {
     this.remote.value = c.remote ?? '';
     this.deploy.value = c.deploy ?? '';
     this.ciMinutes.value = String(c.ciMinutes ?? 30);
+    this.storeMode.value = c.store ?? 'off';
+    this.storeWorkflow.value = c.storeWorkflow ?? '';
+    this.otaChannel.value = c.otaChannel === 'preview' ? '' : (c.otaChannel ?? '');
+    this.versionBump.value = c.versionBump ?? 'auto';
+    void this.loja.setFolder(this.folder.value, !!c.store && c.store !== 'off');
     for (const f of this.fields) f.disabled = !editable;
     setHidden(this.save, !editable);
     this.say(editable ? '' : tr('Só leitura pela porta do celular: mude no próprio computador.'));
   }
 
   private async store(): Promise<void> {
-    const config = { card: this.card.value, auto: this.auto.checked, provider: this.provider.value, budget: this.budget.value, check: this.check.value, qa: this.qa.value, reviewer: this.reviewer.value, reviewerModel: this.reviewerModel.value, copy: this.copy.value, ship: this.ship.value, base: this.base.value, remote: this.remote.value, deploy: this.deploy.value, ciMinutes: this.ciMinutes.value };
+    const config = { card: this.card.value, auto: this.auto.checked, provider: this.provider.value, budget: this.budget.value, check: this.check.value, qa: this.qa.value, reviewer: this.reviewer.value, reviewerModel: this.reviewerModel.value, copy: this.copy.value, ship: this.ship.value, base: this.base.value, remote: this.remote.value, deploy: this.deploy.value, ciMinutes: this.ciMinutes.value, store: this.storeMode.value === 'off' ? '' : this.storeMode.value, storeWorkflow: this.storeWorkflow.value, otaChannel: this.otaChannel.value, versionBump: this.versionBump.value === 'auto' ? '' : this.versionBump.value };
     try {
       const res = await fetch('/api/vboards/config', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: this.folder.value, config }) });
       const body = (await res.json().catch(() => ({}))) as { config?: FolderConfig; editable?: boolean; error?: string };

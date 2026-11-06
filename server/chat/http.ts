@@ -18,6 +18,7 @@ import type { RunService } from './runs';
 import type { ShipService } from './ship';
 import type { ChatService } from './service';
 import type { TriggerService } from './triggers';
+import { STORE_KINDS, pinRequired, type StoreKind, type StoreService } from './lojas';
 import type { WorktreeOps } from './types';
 
 export interface ChatRouteDeps {
@@ -36,6 +37,8 @@ export interface ChatRouteDeps {
   pin?: Pick<ApprovalPin, 'check' | 'triesLeft'>;
   /** Token do GitHub do "Subir" (github.ts GitHubTokenStore): GET /api/chat/github; PUT só pelo próprio computador. */
   github?: { view(editable: boolean): unknown; save(raw: unknown): string | undefined };
+  /** Lojas (lojas.ts): status, pacote de versão e as etapas; OTA em production, build e submit pedem o PIN. */
+  lojas?: Pick<StoreService, 'list' | 'lastByKind' | 'cut' | 'request' | 'approve'>;
   /** "Abrir no VS Code" a cópia de uma lista (`code <caminho>` sem shell): false = sem `code`, a página mostra o caminho. */
   openEditor?: (path: string) => Promise<boolean>;
   /** Gatilhos (triggers.ts); sem eles, 404. */
@@ -303,6 +306,46 @@ export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
       const body = ((await readJson(req)) ?? {}) as { token?: unknown };
       const err = d.github.save(body.token);
       return err ? sendJson(res, 400, { error: err }) : sendJson(res, 200, d.github.view(true));
+    }
+
+    if (path === '/api/chat/lojas' || path.startsWith('/api/chat/lojas/')) {
+      const l = d.lojas;
+      if (!l) return sendJson(res, 404, { error: tr('rota desconhecida') });
+      const known = (f: unknown) => (typeof f === 'string' ? d.folders().find((x) => x.path === f)?.path : undefined);
+      if (path === '/api/chat/lojas') {
+        if (method !== 'GET') return notAllowed(res, 'GET');
+        const folder = known(url.searchParams.get('folder'));
+        return folder ? sendJson(res, 200, { last: l.lastByKind(folder), events: l.list(folder).slice(0, 10) }) : sendJson(res, 404, { error: tr('pasta desconhecida') });
+      }
+      if (method !== 'POST') return notAllowed(res, 'POST');
+      const body = ((await readJson(req)) ?? {}) as { folder?: unknown; kind?: unknown; channel?: unknown; version?: unknown; id?: unknown; pin?: unknown };
+      const pinned = async (needed: boolean): Promise<boolean> => {
+        if (!needed) return true;
+        const c = d.pin ? await d.pin.check(body.pin) : 'unset';
+        if (c !== 'ok') {
+          const e = pinError(c, d.pin?.triesLeft() ?? 0);
+          sendJson(res, e.status, { error: e.error, pin: c });
+        }
+        return c === 'ok';
+      };
+      if (path === '/api/chat/lojas/cut') {
+        const folder = known(body.folder);
+        return folder ? sendJson(res, 200, await l.cut(folder)) : sendJson(res, 404, { error: tr('pasta desconhecida') });
+      }
+      if (path === '/api/chat/lojas/request') {
+        const folder = known(body.folder);
+        if (!folder || !STORE_KINDS.includes(body.kind as StoreKind)) return sendJson(res, 400, { error: tr('Mande a pasta e o tipo (ota, build ou submit).') });
+        const channel = typeof body.channel === 'string' ? body.channel : undefined;
+        if (!(await pinned(pinRequired(body.kind as StoreKind, channel ?? 'production')))) return;
+        const r = await l.request(folder, { kind: body.kind as StoreKind, ...(channel ? { channel } : {}), ...(typeof body.version === 'string' ? { version: body.version } : {}) }, true);
+        return 'event' in r ? sendJson(res, 200, r.event) : sendJson(res, r.status, { error: r.error });
+      }
+      if (path === '/api/chat/lojas/approve') {
+        if (!(await pinned(true))) return;
+        const r = await l.approve(String(body.id ?? ''));
+        return 'event' in r ? sendJson(res, 200, r.event) : sendJson(res, r.status, { error: r.error });
+      }
+      return sendJson(res, 404, { error: tr('rota desconhecida') });
     }
 
     // Gatilhos: "Testar agora" só cria o cartão de aprovação, como qualquer disparo.
