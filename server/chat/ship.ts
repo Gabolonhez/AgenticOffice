@@ -11,7 +11,7 @@
 //   checkout local se ele estiver limpo e na base (senão só avisa).
 import { basename } from 'node:path';
 import { tr } from '../../shared/i18n';
-import { shipActive, type ChatRun, type RunShip, type ShipPreview, type ShipStep } from '../../shared/runs';
+import { sameApproval, shipActive, shipApprovalOf, type ChatRun, type RunShip, type ShipApproval, type ShipPreview, type ShipStep } from '../../shared/runs';
 import { errMsg } from '../log';
 import { productOfFolder, type Product, type RepoRole } from '../vboards/products';
 import type { FolderConfig } from '../vboards/vboards';
@@ -19,7 +19,7 @@ import { ciVerdict, deployVerdict, GitHubError, parseRemote, type GitHub } from 
 import type { JournalStage } from './journal';
 import { mergeMessage, type RunService } from './runs';
 import type { ShipWorktreeOps } from './types';
-import { findSecrets, riskyFiles } from './worktree';
+import { riskyFiles } from './worktree';
 
 export const SHIP_POLL_MS = 60_000;
 /** Logo depois do PR o GitHub ainda não registrou os checks: vazio só vira 'no-ci' passado este tempo. */
@@ -56,8 +56,13 @@ export class ShipService {
     this.now = deps.now ?? Date.now;
   }
 
-  /** Depois do runs.load(): retoma o que estava subindo e olha o GitHub a cada SHIP_POLL_MS. */
+  /**
+   * Depois do runs.load(): retoma o que estava subindo e olha o GitHub a cada SHIP_POLL_MS. runs.json não prova
+   * aprovação (um agente com o mesmo usuário consegue escrever nele): só segue sozinho o que é leitura de algo já
+   * juntado (o deploy); o que ainda vai fazer push ou merge volta a esperar o PIN ('reapprove').
+   */
   start(pollMs = SHIP_POLL_MS): void {
+    this.afterRestart();
     clearInterval(this.timer);
     this.timer = setInterval(() => void this.tick(), pollMs);
     this.timer.unref?.();
@@ -68,9 +73,23 @@ export class ShipService {
     clearInterval(this.timer);
   }
 
+  /** O que vinha antes do merge passa a esperar o PIN de novo. */
+  afterRestart(): void {
+    let changed = false;
+    for (const run of this.deps.runs.list()) {
+      const s = run.ship;
+      if (!shipActive(s) || s!.step === 'deploying' || s!.needs === 'reapprove') continue;
+      s!.needs = 'reapprove';
+      delete s!.noCiApproved;
+      s!.note = tr('O Habblaud reiniciou antes do merge: aprove de novo com o PIN para continuar.');
+      changed = true;
+    }
+    if (changed) this.deps.runs.persist();
+  }
+
   /** Uma volta em cada subida em andamento (os testes chamam direto). */
   async tick(): Promise<void> {
-    await Promise.all(this.deps.runs.list().filter((r) => shipActive(r.ship)).map((r) => this.advance(r)));
+    await Promise.all(this.deps.runs.list().filter((r) => shipActive(r.ship) && !r.ship!.needs).map((r) => this.advance(r)));
   }
 
   status(id: string): RunShip | undefined {
@@ -87,10 +106,10 @@ export class ShipService {
     const w = run.isolated;
     if (!w || w.merged || w.discarded) return { status: 409, error: tr('Esta lista não tem cópia isolada aberta.') };
     if (run.state === 'running') return { status: 409, error: tr('Pare a lista ou espere ela terminar antes.') };
-    if (shipActive(run.ship)) return { status: 409, error: tr('O "Subir" desta lista já está em andamento.') };
+    if (shipActive(run.ship) && run.ship!.needs !== 'reapprove') return { status: 409, error: tr('O "Subir" desta lista já está em andamento.') };
     const cfg = await this.deps.folderConfig(run.options.folder);
     if (cfg.ship === 'off') return { status: 409, error: tr('O "Subir" está desligado nesta pasta (vboards.ship=off): ligue em Configurações > VBoards.') };
-    if (!this.deps.token()) return { status: 409, error: tr('Sem token do GitHub: defina em Configurações > Token do GitHub.') };
+    if (!this.deps.token()) return { status: 409, error: tr('Sem token do GitHub fine-grained (github_pat_...): defina em Configurações > Token do GitHub.') };
     const repoCfg = productOfFolder(run.options.folder, this.deps.products?.() ?? [])?.repos.find((r) => samePath(r.path, run.options.folder));
     const remote = cfg.remote ?? repoCfg?.remote ?? 'origin';
     const info = await this.deps.worktrees.remoteInfo(run.options.folder, remote);
@@ -99,9 +118,11 @@ export class ShipService {
     const base = cfg.base ?? info.head ?? 'main';
     const c = await this.deps.worktrees.commit(w, mergeMessage(run.items));
     if (!c.ok) return { status: 409, error: c.reason };
-    const files = await this.deps.worktrees.changedFiles(w, c.sha);
+    const scan = await this.deps.worktrees.scan(w, c.sha);
+    if ('error' in scan) return { status: 409, error: scan.error };
+    const files = scan.names;
     if (!files.length) return { status: 409, error: tr('Nada para subir: a cópia não mudou nada desde a base.') };
-    const secrets = findSecrets(files, await this.deps.worktrees.diff(w));
+    const secrets = scan.secrets;
     if (secrets.length) return { status: 409, error: tr('Não sobe: o diff tem o que parece segredo: {0}. Tire do commit (e troque a chave, se for real).', [secrets.slice(0, 10).join(', ')]) };
     const sum = await this.deps.worktrees.summary(w);
     const gate = run.items.some((i) => i.gate === 'fail') ? 'fail' : run.items.some((i) => i.gate === 'pass') ? 'pass' : 'none';
@@ -109,16 +130,19 @@ export class ShipService {
   }
 
   /**
-   * Aprovado (PIN já conferido por quem chama): começa a subida do `sha` do cartão. Com `noCi`, é a aprovação extra do
-   * merge num repo sem CI de PR (a subida já parada em needs='no-ci', no mesmo SHA).
+   * Aprovado (PIN já conferido por quem chama). `b` é o conjunto inteiro que o cartão mostrou (repo, base, remoto, modo,
+   * deploy, hooks/CI mudados, SHA, noCi): qualquer diferença do que vale agora recusa. Sem subida: começa. Com
+   * needs='no-ci' e `noCi`: a aprovação extra do merge. Com needs='reapprove' (reinício): confere de novo contra a
+   * cópia e a pasta e continua de onde parou.
    */
-  async approve(id: string, b: { sha: string; noCi?: boolean }): Promise<{ run: ChatRun } | Fail> {
+  async approve(id: string, b: ShipApproval): Promise<{ run: ChatRun } | Fail> {
     const run = this.deps.runs.get(id);
     if (!run) return { status: 404, error: tr('lista não encontrada') };
-    if (b.noCi) {
-      const s = run.ship;
-      if (!s || s.needs !== 'no-ci' || s.step !== 'ci') return { status: 409, error: tr('Esta subida não espera a aprovação de merge sem CI.') };
-      if (s.sha !== b.sha) return { status: 409, error: tr('O SHA aprovado não é o desta subida.') };
+    const changed = (): Fail => ({ status: 409, error: tr('O que o cartão mostrou mudou (repositório, base, remoto, modo, deploy, hooks/CI ou SHA): prepare e aprove de novo.') });
+    const s = run.ship;
+    if (s?.needs === 'no-ci' || b.noCi) {
+      if (!s || s.needs !== 'no-ci' || s.step !== 'ci' || !b.noCi) return { status: 409, error: tr('Esta subida não espera a aprovação de merge sem CI.') };
+      if (!sameApproval(shipApprovalOf(s, true), b)) return changed();
       s.noCiApproved = true;
       delete s.needs;
       s.note = tr('Merge sem CI aprovado com PIN.');
@@ -128,9 +152,19 @@ export class ShipService {
     }
     const p = await this.prepare(id);
     if ('error' in p) return p;
-    if (p.sha !== b.sha) return { status: 409, error: tr('A cópia mudou depois do cartão (SHA {0}, aprovado {1}): prepare e aprove de novo.', [p.sha.slice(0, 12), String(b.sha).slice(0, 12)]) };
+    if (!sameApproval(shipApprovalOf(p), b)) return changed();
+    if (s?.needs === 'reapprove') {
+      // Retomada: a cópia e a pasta de agora têm de bater com o que estava subindo (e com o cartão).
+      if (!sameApproval(shipApprovalOf(s), b) || s.branch !== p.branch) return changed();
+      delete s.needs;
+      s.note = tr('Aprovado de novo com PIN depois do reinício.');
+      this.deps.runs.persist();
+      void this.advance(run);
+      return { run };
+    }
     const now = this.now();
-    run.ship = { step: 'waiting', mode: p.mode === 'merge' ? 'merge' : 'pr', sha: p.sha, owner: p.owner, repo: p.repo, remote: p.remote, base: p.base, branch: p.branch, deploy: p.deploy, ciMinutes: p.ciMinutes, startedAt: now, stepAt: now };
+    const parentSha = run.ship?.branch === p.branch ? run.ship.pushedSha : undefined;
+    run.ship = { step: 'waiting', mode: p.mode === 'merge' ? 'merge' : 'pr', sha: p.sha, owner: p.owner, repo: p.repo, remote: p.remote, base: p.base, branch: p.branch, deploy: p.deploy, risky: [...p.risky], ciMinutes: p.ciMinutes, startedAt: now, stepAt: now, ...(parentSha ? { parentSha } : {}) };
     this.deps.runs.persist();
     void this.advance(run);
     return { run };
@@ -141,7 +175,7 @@ export class ShipService {
     if (this.busy.has(run.id)) return;
     this.busy.add(run.id);
     try {
-      for (let guard = 0; guard < 10 && shipActive(run.ship); guard++) {
+      for (let guard = 0; guard < 10 && shipActive(run.ship) && !run.ship!.needs; guard++) {
         const s = run.ship!;
         let out: Outcome;
         try {
@@ -189,8 +223,9 @@ export class ShipService {
         const w = run.isolated;
         if (!token) return this.fail(run, s, tr('Sem token do GitHub: defina em Configurações > Token do GitHub.'));
         if (!w || w.discarded || w.merged) return this.fail(run, s, tr('A cópia isolada não existe mais.'));
-        const r = await this.deps.worktrees.push(w, { url: `https://github.com/${s.owner}/${s.repo}.git`, sha: s.sha, token, baseBranch: s.base });
+        const r = await this.deps.worktrees.push(w, { url: `https://github.com/${s.owner}/${s.repo}.git`, sha: s.sha, token, baseBranch: s.base, message: mergeMessage(run.items), ...(s.parentSha ? { parent: s.parentSha } : {}) });
         if (!r.ok) return this.fail(run, s, r.reason);
+        s.pushedSha = r.pushed;
         return this.go(s, 'pr');
       }
       case 'pr': {
@@ -213,9 +248,17 @@ export class ShipService {
       case 'ci': {
         const gh = this.gh();
         if (!gh) return this.fail(run, s, tr('Sem token do GitHub: defina em Configurações > Token do GitHub.'));
-        const v = ciVerdict(await gh.checks(repo, s.sha));
+        const head = s.pushedSha ?? s.sha;
+        const v = ciVerdict(await gh.checks(repo, head));
         s.ci = v;
         const waited = this.now() - s.stepAt;
+        // O diff muda o próprio CI ou hooks: verde não prova nada; o merge pede a mesma confirmação do repo sem CI.
+        if (v === 'pass' && s.risky?.length && !s.noCiApproved) {
+          s.needs = 'no-ci';
+          s.note = tr('O diff muda workflows ou hooks ({0}): CI verde não basta; merge = deploy em produção. O merge espera a sua aprovação com PIN.', [s.risky.join(', ')]);
+          this.notify(run, s, 'no_ci');
+          return 'wait';
+        }
         if (v === 'pass') return this.go(s, 'merging');
         if (v === 'fail') return this.fail(run, s, tr('O CI do PR falhou: corrija na cópia (comentários ao agente) e suba de novo.'), 'ci_fail');
         if (v === 'no-ci' && waited >= NO_CI_GRACE_MS) {
@@ -232,12 +275,13 @@ export class ShipService {
         const gh = this.gh();
         if (!gh || !s.prNumber) return this.fail(run, s, tr('Sem token do GitHub: defina em Configurações > Token do GitHub.'));
         // A trava: merge só com CI verde ou o no-ci aprovado com PIN, e só do SHA aprovado.
-        if (s.mode !== 'merge' || (s.ci !== 'pass' && !s.noCiApproved)) return this.fail(run, s, tr('Merge recusado: sem CI verde nem aprovação de merge sem CI.'));
+        if (s.mode !== 'merge' || (s.ci !== 'pass' && !s.noCiApproved) || (s.risky?.length && !s.noCiApproved)) return this.fail(run, s, tr('Merge recusado: sem CI verde nem aprovação de merge sem CI.'));
         const pr = await gh.pr(repo, s.prNumber);
         if (pr.merged) s.mergeSha = pr.mergeSha;
         else {
-          if (pr.headSha && pr.headSha !== s.sha) return this.fail(run, s, tr('O PR mudou depois da aprovação (head {0}, aprovado {1}): merge recusado.', [pr.headSha.slice(0, 12), s.sha.slice(0, 12)]));
-          s.mergeSha = await gh.mergePr(repo, s.prNumber, s.sha);
+          const head = s.pushedSha ?? s.sha;
+          if (pr.headSha !== head) return this.fail(run, s, tr('O PR mudou depois da aprovação (head {0}, aprovado {1}): merge recusado.', [(pr.headSha ?? '?').slice(0, 12), head.slice(0, 12)]));
+          s.mergeSha = await gh.mergePr(repo, s.prNumber, head);
         }
         this.deps.runs.journalShipped(run, 'merged');
         this.settle(run, 'review', 'merged');

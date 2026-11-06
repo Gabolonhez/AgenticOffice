@@ -16,7 +16,7 @@ import { basename, dirname } from 'node:path';
 import { maskSecrets } from '../../shared/activity';
 import { CHAT_TEXT_MAX } from '../../shared/chat';
 import { tr } from '../../shared/i18n';
-import type { ChatRun, RunMetric } from '../../shared/runs';
+import { shipApprovalOf, type ChatRun, type RunMetric } from '../../shared/runs';
 import type { TriggerRule } from '../../shared/triggers';
 import type { Provider } from '../../shared/types';
 import { askHuman, type HumanAnswer, type McpTool } from '../chat/permission';
@@ -510,28 +510,33 @@ export class JarvisTools {
         tr('SHA: {0}', [s.sha]),
         ...(s.prUrl ? [tr('PR: {0}', [s.prUrl])] : []),
       ];
-      const refused = await this.gate('runs_ship', { id: run.id, sha: s.sha, noCi: true }, facts, a.reason);
+      const approval = shipApprovalOf(s, true);
+      if (s.risky?.length) facts.push(tr('ATENÇÃO: o diff muda workflows/hooks ({0}); CI verde não prova nada.', [s.risky.join(', ')]));
+      facts.push(tr('Remoto: {0} · modo: {1} · deploy: {2}', [s.remote, s.mode, s.deploy]));
+      const refused = await this.gate('runs_ship', { id: run.id, ...approval }, facts, a.reason);
       if (refused) return fail(refused);
-      const r = await ship.approve(run.id, { sha: s.sha, noCi: true });
+      const r = await ship.approve(run.id, approval);
       return 'run' in r ? ok(tr('Merge sem CI aprovado: segue para o merge.')) : fail(r.error);
     }
     const p = await ship.prepare(run.id);
     if ('error' in p) return fail(p.error);
     const facts = [
+      ...(s?.needs === 'reapprove' ? [tr('RETOMADA depois de um reinício: o push/merge desta lista só segue com o PIN de novo.')] : []),
       tr('SUBIR a lista {0}: push do branch e PR ({1})', [run.id, p.mode === 'merge' ? tr('com CI verde, merge automático e deploy') : tr('só o PR')]),
       tr('Pasta: {0}', [p.folder]),
       tr('Repositório: {0}/{1}', [p.owner, p.repo]),
       tr('Base: {0}', [p.base]),
       tr('Branch: {0}', [p.branch]),
       tr('SHA: {0}', [p.sha]),
-      tr('Deploy: {0}', [p.deploy]),
+      tr('Remoto: {0} · modo: {1} · deploy: {2}', [p.remote, p.mode, p.deploy]),
       tr('Portão: {0}', [p.gate]),
       ...(p.risky.length ? [tr('ATENÇÃO: muda hooks/CI que rodam com a credencial do dono: {0}', [p.risky.join(', ')])] : []),
       tr('Diff: {0}', [clip(p.stat, 600) || tr('(vazio)')]),
     ];
-    const refused = await this.gate('runs_ship', { id: run.id, sha: p.sha, repo: `${p.owner}/${p.repo}` }, facts, a.reason);
+    const approval = shipApprovalOf(p);
+    const refused = await this.gate('runs_ship', { id: run.id, ...approval }, facts, a.reason);
     if (refused) return fail(refused);
-    const r = await ship.approve(run.id, { sha: p.sha });
+    const r = await ship.approve(run.id, approval);
     return 'run' in r ? ok(tr('Subindo: {0} → {1}/{2} ({3}). Acompanhe com runs_ship_status.', [p.branch, p.owner, p.repo, p.base])) : fail(r.error);
   }
 
