@@ -65,6 +65,7 @@ import { VBoardsApi } from './vboards/api';
 import { JarvisInbox, JarvisService, JARVIS_ID } from './jarvis/service';
 import { JarvisTools } from './jarvis/tools';
 import { createJarvisRoutes } from './jarvis/http';
+import { VoiceService, VoiceStore } from './jarvis/voice';
 import { Briefing } from './jarvis/briefing';
 import { Delegation } from './chat/delegation';
 import { createChatRoutes } from './chat/http';
@@ -528,6 +529,17 @@ const jarvis =
       })
     : undefined;
 late.jarvis = jarvis;
+// Voz do Jarvis (tela cheia): <dataDir>/voice.json (600) com o motor e as chaves; o navegador só recebe token efêmero.
+const jarvisVoice = jarvis ? new VoiceService({ store: new VoiceStore(join(config.dataDir, 'voice.json')), say: (text, origin, ref) => jarvis.say(text, origin, ref) }) : undefined;
+// Evento SSE "jarvis": item novo ou fim de rodada na conversa dele (só o seq; o texto vem pela rota do chat).
+if (chat && jarvis) {
+  chat.onItem((id, item) => {
+    if (id === jarvis.id()) hub.broadcast('jarvis', { agentId: id, seq: item.seq, kind: item.kind });
+  });
+  chat.onTurnEnd((id) => {
+    if (id === jarvis.id()) hub.broadcast('jarvis', { agentId: id, idle: true });
+  });
+}
 const jarvisTools =
   chat && permissions && jarvis
     ? new JarvisTools({
@@ -610,7 +622,7 @@ const chatRoutes = chat
       triggers,
       summary: daySummary,
       extraTools: (id) => (jarvisTools && chat.record(id)?.system === 'jarvis' ? jarvisTools.tools() : []),
-      jarvis: jarvis ? createJarvisRoutes({ jarvis, settings: () => ntfy.jarvis(), saveSettings: (s) => ntfy.setJarvis(s), briefing }) : undefined,
+      jarvis: jarvis ? createJarvisRoutes({ jarvis, settings: () => ntfy.jarvis(), saveSettings: (s) => ntfy.setJarvis(s), briefing, voice: jarvisVoice }) : undefined,
     })
   : undefined;
 if (chat) {

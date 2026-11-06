@@ -25,8 +25,11 @@ export const MEMORY_MAX = 16 * 1024;
 /** Prazo de cada rodada do Jarvis: uma rodada presa não segura a fila (WhatsApp, agendamentos) para sempre. */
 export const JARVIS_TURN_MINUTES = 30;
 
-/** De onde veio o pedido do turno: 'ui' = o dono pela página; o resto entra embrulhado e deixa o turno contaminado. */
-export type JarvisOrigin = 'ui' | 'whatsapp' | 'vboards' | 'schedule' | 'agent';
+/**
+ * De onde veio o pedido do turno: 'ui' = o dono pela página; o resto entra embrulhado e deixa o turno contaminado.
+ * 'voice' = a tela cheia por voz: o microfone ouve o ambiente (pode ser outra pessoa falando), então nunca vale como o dono.
+ */
+export type JarvisOrigin = 'ui' | 'whatsapp' | 'vboards' | 'schedule' | 'agent' | 'voice';
 /** O turno atual do Jarvis: a origem e o seq do item do pedido (a mancha de contaminação vale até o próximo pedido). */
 export interface JarvisTurn { origin: JarvisOrigin; seq: number }
 export interface JarvisSettings { provider: Provider; model?: string }
@@ -69,7 +72,7 @@ export function validateJarvisSettings(raw: unknown, providers: ReturnType<typeo
   return { settings: { provider: p.id, ...(model ? { model } : {}) } };
 }
 
-export const originLabel = (o: JarvisOrigin): string => (o === 'whatsapp' ? 'WhatsApp' : o === 'vboards' ? 'VBoards' : o === 'schedule' ? tr('agendamento') : o === 'agent' ? tr('outro agente') : tr('página'));
+export const originLabel = (o: JarvisOrigin): string => (o === 'voice' ? tr('voz') : o === 'whatsapp' ? 'WhatsApp' : o === 'vboards' ? 'VBoards' : o === 'schedule' ? tr('agendamento') : o === 'agent' ? tr('outro agente') : tr('página'));
 
 /**
  * O turno atual: a última mensagem da conversa (o `from` do item). 'ui' só para o que a página manda (POST
@@ -81,7 +84,7 @@ export function turnOf(rec: Pick<ChatRecord, 'items'> | undefined): JarvisTurn {
     const it = items[i];
     if (it.kind !== 'user') continue;
     const who = it.from?.agentId;
-    const origin: JarvisOrigin = who === undefined || who === 'ui' ? 'ui' : who === 'whatsapp' || who === 'vboards' || who === 'schedule' ? who : who.startsWith('trigger:') ? 'schedule' : 'agent';
+    const origin: JarvisOrigin = who === undefined || who === 'ui' ? 'ui' : who === 'whatsapp' || who === 'vboards' || who === 'schedule' || who === 'voice' ? who : who.startsWith('trigger:') ? 'schedule' : 'agent';
     return { origin, seq: it.seq };
   }
   return { origin: 'ui', seq: 0 };
