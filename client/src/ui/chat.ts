@@ -3,19 +3,22 @@
 // Ditado (o mesmo botão da caixa de mensagem) em qualquer agente. No Jarvis (view.system): a mensagem vai por
 // POST /api/chat/jarvis, não fecha, tem "Conversa nova", "Briefing agora" e a leitura em voz alta das respostas novas.
 import type { ChatItem, ChatState, ChatView } from '../../../shared/chat';
-import { tr } from '../../../shared/i18n';
+import { getLocale, tr } from '../../../shared/i18n';
 import type { AgentInfo } from '../../../shared/types';
 import { afterSeq, canSendChat, chatStatusText, mergeItems, newReplies, pollDelayChat, toolLine, usageText } from './chat-model';
 import { enterSends } from './composer-model';
+import { pickVoice, speakable, speechLang } from './jarvis-model';
 import type { UiContext } from './context';
 import { DictationButton, dictationAvailable, insertDictation } from './dictation';
 import { h, KeyedList, setHidden, setText } from './dom';
 
-/** Lê em voz alta (pt-BR) pelo navegador; sem speechSynthesis, nada. */
+/** Lê em voz alta pelo navegador, na língua da página; sem speechSynthesis, nada. */
 function speak(text: string): void {
   try {
-    const u = new SpeechSynthesisUtterance(text.replace(/[*_#`>]+/g, ' ').slice(0, 1500));
-    u.lang = 'pt-BR';
+    const u = new SpeechSynthesisUtterance(speakable(text));
+    u.lang = speechLang(getLocale());
+    const v = pickVoice(speechSynthesis.getVoices(), u.lang);
+    if (v) u.voice = v;
     speechSynthesis.speak(u);
   } catch {
     // navegador sem voz

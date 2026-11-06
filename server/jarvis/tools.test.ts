@@ -288,6 +288,12 @@ describe('Jarvis: turno contaminado', () => {
     });
   }
 
+  it('pedido por voz (tela cheia) já começa contaminado: o microfone ouve o ambiente', () => {
+    const s = setup('deny');
+    s.setTurn({ origin: 'voice', seq: 1 });
+    expect(s.tools.tainted()).toBe(true);
+  });
+
   it('turno da página fica limpo até uma ferramenta devolver dado embrulhado; o próximo pedido começa limpo', async () => {
     const memory = { read: () => 'nota', write: vi.fn(() => undefined) };
     const s = setup('deny', { memory });

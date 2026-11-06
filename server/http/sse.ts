@@ -1,5 +1,6 @@
 // Transmissão em tempo real (Server-Sent Events) em GET /api/stream.
-// Eventos nomeados: snapshot | feed | notice (o `data` é o JSON do protocolo em shared/types.ts).
+// Eventos nomeados: snapshot | feed | notice (o `data` é o JSON do protocolo em shared/types.ts) | jarvis (só o seq do
+// item novo da conversa do Jarvis: o texto vem pela rota do chat, que tem a trava dele).
 // Snapshots saem com throttle (~200 ms); feed e avisos vão em lote logo depois do snapshot.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { OfficeSnapshot } from '../../shared/types';
@@ -112,6 +113,11 @@ export class Hub {
   /** Snapshot atual (depois de transmitir o que estiver pendente), com `serverTime` de agora. */
   current(): OfficeSnapshot {
     return { ...this.flush(), serverTime: Date.now() };
+  }
+
+  /** Um evento avulso para todas as páginas (ex.: "jarvis": item novo na conversa dele, sem o conteúdo). */
+  broadcast(event: string, data: unknown): void {
+    this.writeAll(frame(event, data));
   }
 
   private schedule(): void {

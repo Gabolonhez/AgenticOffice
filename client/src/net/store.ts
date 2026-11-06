@@ -18,6 +18,8 @@ export interface StoreEvents {
   connection: ConnectionState;
   /** O servidor está servindo outro build do cliente: esta página está desatualizada. Emitido uma vez. */
   update: { build: string; current: string };
+  /** Item novo (ou fim de rodada) na conversa do Jarvis: só o seq; o texto vem por GET /api/chat/agents/:id. */
+  jarvis: { agentId: string; seq?: number; kind?: string; idle?: boolean };
 }
 
 /**
@@ -468,6 +470,11 @@ export class OfficeStore {
       if (!current()) return;
       const n = this.parse<Notice>(ev, 'aviso');
       if (n) this.emit('notice', n);
+    });
+    es.addEventListener('jarvis', (ev) => {
+      if (!current()) return;
+      const j = this.parse<StoreEvents['jarvis']>(ev, 'jarvis');
+      if (j) this.emit('jarvis', j);
     });
   }
 

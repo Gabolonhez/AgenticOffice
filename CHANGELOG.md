@@ -19,6 +19,17 @@ do meio (0.**3**.0).
 - **Importar pacote 3D:** o pacote 3D (escritórios, móveis e funcionários) tem licença própria e não vem no Habblaud. Baixe o
   zip em https://iacom.com.br/buildoffice e importe em **Configurações › Escritório 3D**; ele é extraído só neste
   computador, em `~/.habblaud/assets/3d`.
+### Jarvis em tela cheia, por voz
+
+- **Tela cheia do Jarvis** (botão do Jarvis ou tecla J): orb em pixel que reage ao microfone e à fala, o que está sendo
+  ouvido ao vivo, as últimas falas e os cartões de aprovação ali mesmo. Esc fecha, Espaço interrompe. A conversa chega
+  por um evento novo do stream (sem polling).
+- **Motores de voz** em Configurações › Voz do Jarvis: Realtime (OpenAI, conversa natural; padrão quando há chave),
+  Navegador (grátis, na língua da página) e Local (Whisper do computador + um TTS por HTTP, OpenAI-compatível). A chave
+  fica em `~/.habblaud/voice.json` e o navegador só recebe um token de 2 minutos, com limite por hora.
+- **Segurança:** pedido por voz conta como de fora (o microfone ouve o ambiente): ações pedem cartão com PIN, e o que
+  parece PIN ou senha falado não chega ao Jarvis. O modelo de voz só tem uma ferramenta, perguntar ao Jarvis.
+- A leitura em voz alta das respostas na gaveta segue a língua da página (antes, sempre pt-BR).
 
 ### Chat com agentes (AgenticOffice)
 

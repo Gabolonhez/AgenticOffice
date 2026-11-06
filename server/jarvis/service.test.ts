@@ -115,6 +115,7 @@ describe('Jarvis: JarvisService', () => {
     expect(turnOf({ items: [{ seq: 5, at: 0, kind: 'user', text: 'x', from: { agentId: 'ui', name: 'página' } }] })).toEqual({ origin: 'ui', seq: 5 });
     expect(originOf({ items: [{ seq: 1, at: 0, kind: 'user', text: 'x', from: { agentId: 'chat:123', name: 'Ana' } }] })).toBe('agent');
     expect(originOf({ items: [{ seq: 1, at: 0, kind: 'user', text: 'x', from: { agentId: 'qualquer', name: 'Q' } }] })).toBe('agent');
+    expect(turnOf({ items: [{ seq: 6, at: 0, kind: 'user', text: 'x', from: { agentId: 'voice', name: 'voz' } }] })).toEqual({ origin: 'voice', seq: 6 });
   });
 
   it('trocar de provedor começa conversa nova (com a configuração nova); igual não mexe', () => {
