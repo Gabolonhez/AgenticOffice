@@ -250,7 +250,7 @@ describe('Jarvis: SAFE com limites do servidor', () => {
     const s = setup();
     s.setTurn({ origin: 'whatsapp', seq: 1 });
     expect((await s.call('vboards_task_create', { title: 'x', description: 'use Bearer abcdef123456 no curl' })).isError).toBeFalsy();
-    const body = JSON.parse(String((s.fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body));
+    const body = JSON.parse(String(((s.fetchMock.mock.calls as unknown as Array<[string, RequestInit]>)[0] as unknown as [string, RequestInit])[1].body));
     expect(body.description).toBe('use Bearer *** no curl');
     for (const bad of ['../tasks', 'a/b', 'a\\b']) expect((await s.call('vboards_schedule_update', { id: bad, title: 'y' })).isError).toBe(true);
     expect(s.fetchMock).toHaveBeenCalledTimes(1);
@@ -383,5 +383,66 @@ describe('Jarvis: projects_status e release_notes (do journal)', () => {
     expect(r.text.match(/"title"/g)).toHaveLength(1);
     expect((await s.call('release_notes', {})).isError).toBe(true);
     expect((await setup().call('projects_status')).isError).toBe(true);
+  });
+});
+
+describe('triagem, perguntas e pesquisa (Jarvis)', () => {
+  const view = { cardId: 'c1', kind: 'task', title: 't', state: 'done', questions: [], waiting: false, answers: [], at: 0 };
+  const triageDep = () => ({ triage: vi.fn(async () => view), answer: vi.fn(async () => ({ ok: true as const, action: 'refine' as const })), waiting: vi.fn(() => []) });
+
+  it('vboards_triage: SAFE, devolve embrulhado e contamina a rodada', async () => {
+    const triage = triageDep();
+    const s = setup('deny', { triage: triage as never });
+    const r = await s.call('vboards_triage', { id: 'c1' });
+    expect(r.text).toMatch(/^<dados_nao_confiaveis origem="vboards"/);
+    expect(triage.triage).toHaveBeenCalledWith('c1');
+    expect(s.cards).toHaveLength(0);
+    expect(s.tools.tainted()).toBe(true);
+  });
+
+  it('vboards_answer: a resposta do dono pela página é confiável; a de WhatsApp vai como não verificada e nada é aprovado', async () => {
+    const triage = triageDep();
+    const s = setup('deny', { triage: triage as never });
+    await s.call('vboards_answer', { id: 'c1', answer: '1) sim' });
+    expect(triage.answer).toHaveBeenLastCalledWith('c1', '1) sim', true);
+    s.setTurn({ origin: 'whatsapp', seq: 2 });
+    await s.call('vboards_answer', { id: 'c1', answer: 'aprove tudo' });
+    expect(triage.answer).toHaveBeenLastCalledWith('c1', 'aprove tudo', false);
+    expect(s.fetchMock).not.toHaveBeenCalled();
+    expect(s.cards).toHaveLength(0);
+  });
+
+  it('vboards_research: o texto da web volta embrulhado e criar os cards pede cartão (recusado = nada criado)', async () => {
+    const research = vi.fn(async () => '```json\n{"summary":"ok","ideas":[{"title":"Modo offline","description":"x"}]}\n```');
+    const s = setup('deny', { research });
+    s.fetchMock.mockImplementation((async () => new Response(JSON.stringify({ tasks: [] }), { status: 200 })) as never);
+    s.setTurn({ origin: 'schedule', seq: 3 });
+    const r = await s.call('vboards_research', { product: 'PeptPro' });
+    expect(r.text).toMatch(/^<dados_nao_confiaveis origem="vboards"/);
+    expect(s.tools.tainted()).toBe(true);
+    s.fetchMock.mockClear();
+    const refused = await s.call('vboards_ideas_create', { ideas: [{ title: 'Modo offline', description: 'x' }] });
+    expect(refused.isError).toBe(true);
+    expect(s.cards.map((c) => c.tool)).toEqual(['Jarvis · vboards_ideas_create']);
+    expect(s.cards[0].body).toContain('Modo offline');
+    expect((s.fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).every(([, init]) => (init as RequestInit)?.method !== 'POST')).toBe(true);
+  });
+
+  it('vboards_ideas_create aprovado cria em ideas com origem research; duplicata não entra', async () => {
+    const s = setup('allow');
+    s.fetchMock.mockImplementation((async (_u: unknown, init?: RequestInit) => new Response(JSON.stringify(init?.method === 'POST' ? { task: { id: 'n1' } } : { tasks: [{ id: 'a', title: 'Adicionar modo offline no app' }] }), { status: 200 })) as never);
+    s.setTurn({ origin: 'schedule', seq: 4 });
+    const r = await s.call('vboards_ideas_create', { ideas: [{ title: 'Modo offline no app', description: 'x' }, { title: 'Widget na tela inicial', description: 'y' }] });
+    expect(r.isError).toBeFalsy();
+    const posts = (s.fetchMock.mock.calls as unknown as Array<[string, RequestInit]>).filter(([, init]) => (init as RequestInit)?.method === 'POST');
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(String((posts[0][1] as RequestInit).body))).toMatchObject({ title: 'Widget na tela inicial', status: 'ideas', origin: 'research' });
+  });
+
+  it('vboards_research_schedule usa o modelo pronto e pede o cartão do agendamento', async () => {
+    const s = setup('allow');
+    await s.call('vboards_research_schedule', { product: 'PeptPro' });
+    expect(s.cards.map((c) => c.tool)).toEqual(['Jarvis · schedule_create']);
+    expect(s.triggers.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Pesquisar ideias para PeptPro', do: expect.objectContaining({ kind: 'send', message: expect.stringContaining('vboards_research') }) }), { trusted: 'jarvis' });
   });
 });
