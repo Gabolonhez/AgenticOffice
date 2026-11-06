@@ -163,7 +163,113 @@ O molde é `D:\Projects\app-base` (`base-app`, `base-server`, `base-web`, `PLAYB
   - revisão → `apresentando`.
 - `server/http/static.ts`: MIME `.glb` → `model/gltf-binary`.
 
-## Ordem sugerida
+## Revisão 1: correções obrigatórias (revisão adversarial contra o código)
+
+### 1. Produto ≠ repositório
+
+`D:\Projects\peptpro` contém 3 repos (`helix-app`, `helix-server`, `peptpro-web`), e o MenoPro também. Hoje `matchFolders` exige casamento único (`vboards.ts` ~597, ~627).
+
+**Correção:** registro de produto (`~/.habblaud/products.json`).
+- Cada produto lista os repos, com papel (`app`, `server`, `web`), `deploy` e `store`.
+- A subtarefa leva o repo.
+- Cada repo tem a sua lista e o seu PR.
+- Ordem de subida: server → web → app.
+
+### 2. Base do PR
+
+A cópia nasce do HEAD local (`worktree.ts` ~73).
+
+**Correção:** com `ship≠off`, `git fetch` e worktree a partir de `<remote>/<base>`.
+
+### 3. CI vazio não é CI verde
+
+Os workflows dos servers rodam em `push: main` e fazem deploy por SSH. Não há checks em PR.
+
+**Correção:** checks vazios = `no-ci`.
+- Bloqueia o merge automático.
+- Exige PIN com aviso explícito ("merge = deploy em produção").
+- Fase 0 nos repos-alvo, com o dono: workflow de teste em `pull_request` e staging quando houver.
+
+### 4. Voz realtime
+
+O modelo realtime **não** chama as ferramentas do Jarvis direto. Expõe só `ask_jarvis(texto)`.
+- Origem nova `voice`, que conta como contaminada, porque o áudio ambiente pode ser de terceiros.
+- O PIN é sempre digitado, nunca falado.
+
+### 5. Chave da voz
+
+O navegador nunca recebe a chave. O servidor emite um token efêmero (OpenAI client_secrets / Gemini ephemeral):
+- por rota autenticada;
+- com limite por hora;
+- valendo também pela porta remota.
+
+### 6. Push seguro
+
+- **Checagem:** a mesma do Juntar, contra arquivo copiado commitado, mais uma varredura de segredos no diff (`.env`, chaves privadas, `*adminsdk*.json`, tokens).
+- **Credencial:**
+  - token fine-grained via env `GIT_CONFIG_*` (extraheader), nunca em argv;
+  - `GCM_INTERACTIVE=never`.
+- **Escopos do token:** Actions **write**, porque o A6 dispara workflows.
+
+### 7. Juntar × Subir
+
+São mutuamente exclusivos por lista. Depois do deploy, fast-forward do checkout local se estiver limpo.
+
+### 8. Status no VBoards
+
+- `reported` passa a ser `state+stage`.
+- O `prUrl` vai para todos os links da lista.
+- O commit leva mensagem em pt-BR gerada das tarefas, não "Lista de N itens".
+
+### 9. OTA
+
+`expo-updates` e `runtimeVersion` ainda não existem nos apps.
+- OTA vai primeiro para o canal `preview`.
+- Produção com cartão.
+- A Fase 0 de cada app instala o expo-updates e faz um build novo.
+
+### 10. Merge automático (A4)
+
+Exige `approvedAt` vindo do VBoards. Sem esse campo → bloqueado.
+
+### 11. Lacunas que entram no plano
+
+- **Triagem:** válida? duplicada? qual produto/repo?
+- **Laço de perguntas:** `questions` do Refinar → dono (Jarvis/WhatsApp) → resposta → re-refino.
+- **Pesquisa agendada:** modelo de gatilho.
+- **QA visual:** prints do Playwright/emulador no cartão.
+- **"Abrir no VS Code"** por cópia.
+- **Relatórios** de fechamento e semanal.
+
+### 12. 3D
+
+- O dono **importa o zip** do pacote, que ele mesmo baixou, por um botão nas Configurações.
+- Leitor de zip próprio com proteção contra zip-slip, extraindo para `~/.habblaud/assets/3d`.
+- Rota própria com contenção de caminho.
+- Terceiro estado de cena: 2D, 3D, cidade.
+
+### 13. A3
+
+O `whisper-cli` não está instalado. A mensagem precisa ensinar a instalar no Windows, e o prazo cresce com a duração do áudio.
+
+## Ordem de execução (revisada)
+
+- **Onda 1 (paralelo):** Fundação, B1 voz segura, B2 3D.
+  - A Fundação cobre:
+    - registro de produto;
+    - base do `origin`;
+    - journal;
+    - `stage`/`settle`;
+    - commit em pt-BR;
+    - relatórios.
+- **Onda 2 (paralelo):** A1 Subir (com os itens 3, 6 e 7 desta revisão), A3 áudio, triagem e perguntas e pesquisa.
+- **Onda 3 (paralelo):** A4 risco, A6 lojas, A7 projeto novo.
+- **Fora do Habblaud, com o dono:**
+  - Fase 0 nos repos (CI de PR, staging, expo-updates);
+  - mudanças no VBoards;
+  - A5 (AppsBrain).
+
+## Ordem sugerida (original)
 
 As trilhas A e B rodam em paralelo, em worktrees separadas: A1a → A1b → A2 → A3 → A4, e B1 → B2. A5 fica por último.
 
