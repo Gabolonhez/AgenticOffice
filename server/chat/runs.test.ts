@@ -613,4 +613,21 @@ describe('chat: lista, registro por projeto e o fim no VBoards', () => {
     expect(settle).toHaveBeenCalledWith('c1:s1', { state: 'failed', stage: 'discarded', summary: expect.stringContaining('Descartado') });
     expect(readJournal(journalFile).at(-1)).toMatchObject({ stage: 'discarded', folder: PROJ });
   });
+
+  it('Juntar × Subir: subida em andamento trava Juntar e Descartar; depois do PR, Juntar não cabe', async () => {
+    const worktrees = { create: vi.fn(async () => ({ path: 'C:\\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(async () => ({ ok: true as const })), discard: vi.fn(async () => ({ ok: true as const })), summary: vi.fn(), diff: vi.fn() };
+    const { svc, end } = setup({ worktrees, vboards: { begin: vi.fn(async () => ({ agentId: 'chat:1' })) } });
+    await svc.create({ items: [{ text: 'X', vboardsTaskId: 'c1:s1' }], options, isolated: true });
+    await flush();
+    await flush();
+    end('chat:1', 'done');
+    const run = svc.get('r1')!;
+    run.ship = { step: 'ci', mode: 'merge', sha: 'a'.repeat(40), owner: 'o', repo: 'r', remote: 'origin', base: 'main', branch: 'agentic/lista-1', deploy: 'none', ciMinutes: 30, startedAt: 0, stepAt: 0, prUrl: 'u' };
+    expect(await svc.merge('r1')).toMatchObject({ status: 409, error: expect.stringMatching(/Subir/) });
+    expect(await svc.discard('r1')).toMatchObject({ status: 409 });
+    run.ship = { ...run.ship, mode: 'pr', step: 'pr' };
+    expect(await svc.merge('r1')).toMatchObject({ status: 409, error: expect.stringMatching(/já subiu/) });
+    expect(worktrees.merge).not.toHaveBeenCalled();
+    expect(await svc.discard('r1')).toEqual({ ok: true });
+  });
 });

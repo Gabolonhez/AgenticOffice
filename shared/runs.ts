@@ -120,8 +120,8 @@ export interface RunShip {
   note?: string;
 }
 
-/** O "Subir" está andando (Juntar e Descartar esperam). Com ship=pr, 'pr' já é o fim. */
-export const shipActive = (s: RunShip | undefined): boolean => !!s && s.step !== 'deployed' && s.step !== 'failed' && !(s.mode === 'pr' && s.step === 'pr');
+/** O "Subir" está andando (Juntar e Descartar esperam). Com ship=pr, o PR aberto ('pr' com prUrl) já é o fim. */
+export const shipActive = (s: RunShip | undefined): boolean => !!s && s.step !== 'deployed' && s.step !== 'failed' && !(s.mode === 'pr' && s.step === 'pr' && !!s.prUrl);
 
 /** O que o cartão do "Subir" mostra antes do PIN (POST /api/chat/runs/:id/ship/prepare). */
 export interface ShipPreview {

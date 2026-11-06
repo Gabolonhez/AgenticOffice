@@ -22,6 +22,7 @@ import type { Provider } from '../../shared/types';
 import { askHuman, type HumanAnswer, type McpTool } from '../chat/permission';
 import { LEDGER_OPEN_MS, projectLedger, type JournalEntry } from '../chat/journal';
 import type { RunService } from '../chat/runs';
+import type { ShipService } from '../chat/ship';
 import type { Product } from '../vboards/products';
 import type { ChatService } from '../chat/service';
 import type { TriggerService } from '../chat/triggers';
@@ -45,7 +46,7 @@ export const NOTIFY_NTFY_MAX = 200;
 export const NOTIFY_WA_MAX = 3000;
 const HOUR = 60 * 60_000;
 /** Ferramentas de leitura que devolvem texto de fora (embrulhado): contaminam o turno desde o início da chamada. */
-const UNTRUSTED_READS: ReadonlySet<string> = new Set(['projects_status', 'release_notes', 'memory_read','agents_list', 'agents_read', 'runs_get', 'vboards_me', 'vboards_projects', 'vboards_tasks_list', 'vboards_schedule_list', 'vboards_summary']);
+const UNTRUSTED_READS: ReadonlySet<string> = new Set(['projects_status', 'release_notes', 'memory_read','agents_list', 'agents_read', 'runs_get', 'runs_ship_status', 'vboards_me', 'vboards_projects', 'vboards_tasks_list', 'vboards_schedule_list', 'vboards_summary']);
 const READ_ITEMS = 30;
 const READ_TEXT = 600;
 const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'antigravity'];
@@ -101,6 +102,8 @@ export interface JarvisToolsDeps {
   registry: Pick<PermissionRegistry, 'registerChat' | 'wait'>;
   runs?: Pick<RunService, 'list' | 'get' | 'create' | 'stop' | 'continue' | 'merge' | 'discard'>;
   worktrees?: Pick<WorktreeOps, 'summary'>;
+  /** "Subir" (chat/ship.ts): runs_ship sempre com cartão crítico (PIN), runs_ship_status SAFE. */
+  ship?: Pick<ShipService, 'prepare' | 'approve' | 'status'>;
   folders: () => Array<{ path: string; name?: string }>;
   folderConfig: (folder: string) => Promise<FolderConfig>;
   writeFolderConfig: (folder: string, values: Partial<Record<FolderKey, string>>) => Promise<string | undefined>;
@@ -222,6 +225,13 @@ export class JarvisTools {
       ),
       t('runs_merge', 'GATED. Merges the run isolated copy into the project.', obj({ id: S(), ...REASON }, ['id']), async (a) => this.runsClose(a, 'merge')),
       t('runs_discard', 'GATED. Discards the run isolated copy and branch.', obj({ id: S(), ...REASON }, ['id']), async (a) => this.runsClose(a, 'discard')),
+      t(
+        'runs_ship',
+        'GATED, always (critical card with PIN, even in a clean turn). Ships the run isolated copy: commit, push of its agentic/* branch, PR and, with vboards.ship=merge, merge on green CI and deploy. Also the extra approval of a merge on a repo without PR CI.',
+        obj({ id: S(), ...REASON }, ['id']),
+        async (a) => this.runsShip(a),
+      ),
+      t('runs_ship_status', 'SAFE. Ship progress of a run (step, PR link, CI verdict, note). Note wrapped as untrusted data.', obj({ id: S() }, ['id']), async (a) => this.runsShipStatus(a)),
       // --- projetos
       t('projects_list', 'SAFE. Known project folders and their VBoards settings.', obj({}), async () => ok(await this.projectsList())),
       t('projects_config_get', 'SAFE. Settings of a folder (git config vboards.*; the check command masked).', obj({ folder: S() }, ['folder']), async (a) => this.projectsConfigGet(a)),
@@ -478,6 +488,54 @@ export class JarvisTools {
     if (refused) return fail(refused);
     const r = how === 'merge' ? await runs.merge(run.id) : await runs.discard(run.id);
     return 'ok' in r ? ok(how === 'merge' ? tr('Cópia juntada ao projeto.') : tr('Cópia descartada.')) : fail(r.error);
+  }
+
+  private async runsShip(a: Record<string, unknown>): Promise<Result> {
+    const ship = this.deps.ship;
+    const run = this.need('runs')?.get(str(a.id));
+    if (!ship || !run) return fail(tr('lista não encontrada'));
+    const s = run.ship;
+    // Repo sem CI de PR: a aprovação extra do merge (merge = deploy em produção), no mesmo SHA.
+    if (s?.needs === 'no-ci') {
+      const facts = [
+        tr('MERGE SEM CI da lista {0}: este repo não tem CI de PR; merge = deploy em produção.', [run.id]),
+        tr('Repositório: {0}/{1}', [s.owner, s.repo]),
+        tr('Base: {0}', [s.base]),
+        tr('Branch: {0}', [s.branch]),
+        tr('SHA: {0}', [s.sha]),
+        ...(s.prUrl ? [tr('PR: {0}', [s.prUrl])] : []),
+      ];
+      const refused = await this.gate('runs_ship', { id: run.id, sha: s.sha, noCi: true }, facts, a.reason);
+      if (refused) return fail(refused);
+      const r = await ship.approve(run.id, { sha: s.sha, noCi: true });
+      return 'run' in r ? ok(tr('Merge sem CI aprovado: segue para o merge.')) : fail(r.error);
+    }
+    const p = await ship.prepare(run.id);
+    if ('error' in p) return fail(p.error);
+    const facts = [
+      tr('SUBIR a lista {0}: push do branch e PR ({1})', [run.id, p.mode === 'merge' ? tr('com CI verde, merge automático e deploy') : tr('só o PR')]),
+      tr('Pasta: {0}', [p.folder]),
+      tr('Repositório: {0}/{1}', [p.owner, p.repo]),
+      tr('Base: {0}', [p.base]),
+      tr('Branch: {0}', [p.branch]),
+      tr('SHA: {0}', [p.sha]),
+      tr('Deploy: {0}', [p.deploy]),
+      tr('Portão: {0}', [p.gate]),
+      ...(p.risky.length ? [tr('ATENÇÃO: muda hooks/CI que rodam com a credencial do dono: {0}', [p.risky.join(', ')])] : []),
+      tr('Diff: {0}', [clip(p.stat, 600) || tr('(vazio)')]),
+    ];
+    const refused = await this.gate('runs_ship', { id: run.id, sha: p.sha, repo: `${p.owner}/${p.repo}` }, facts, a.reason);
+    if (refused) return fail(refused);
+    const r = await ship.approve(run.id, { sha: p.sha });
+    return 'run' in r ? ok(tr('Subindo: {0} → {1}/{2} ({3}). Acompanhe com runs_ship_status.', [p.branch, p.owner, p.repo, p.base])) : fail(r.error);
+  }
+
+  private async runsShipStatus(a: Record<string, unknown>): Promise<Result> {
+    const id = str(a.id);
+    const s = this.deps.ship?.status(id);
+    if (!s) return fail(tr('Esta lista não está subindo.'));
+    const { note, notified: _n, ...rest } = s;
+    return ok({ id, ...rest, ...(note ? { note: wrapUntrusted('ship', id, note) } : {}) });
   }
 
   // ------------------------------------------------------------------ projetos

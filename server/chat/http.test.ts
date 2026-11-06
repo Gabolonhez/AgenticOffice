@@ -193,3 +193,85 @@ describe('chat: rotas HTTP', () => {
     expect((await raw(port, '/api/chat/triggers/history', { method: 'POST' })).status).toBe(405);
   });
 });
+
+describe('chat: rotas do "Subir"', () => {
+  const SHA = 'a'.repeat(40);
+  async function startShip(o: { pinSet?: boolean; remote?: { is: boolean; trusted: boolean } } = {}) {
+    const approvals: unknown[] = [];
+    const saved: unknown[] = [];
+    const opened: string[] = [];
+    const run = { id: 'r1', isolated: { branch: 'agentic/x', path: 'C:\\data\\wt\\r1', base: 'b' } };
+    const runs = { get: (id: string) => (id === 'r1' ? run : undefined), list: () => [run] } as unknown as ChatRouteDeps['runs'];
+    const ship = {
+      prepare: async (id: string) => (id === 'r1' ? { sha: SHA, owner: 'acme', repo: 'api' } : { status: 404, error: 'lista não encontrada' }),
+      approve: async (id: string, b: unknown) => (approvals.push({ id, ...(b as object) }), { run }),
+    } as unknown as ChatRouteDeps['ship'];
+    const pin = {
+      check: async (p: unknown) => (!o.pinSet ? 'unset' : p === undefined ? 'missing' : p === '123456' ? 'ok' : 'wrong'),
+      triesLeft: () => 4,
+    } as unknown as ChatRouteDeps['pin'];
+    const github = { view: (editable: boolean) => ({ set: false, source: null, editable }), save: (raw: unknown) => (saved.push(raw), undefined) };
+    const routes = createChatRoutes({ chat: {} as ChatRouteDeps['chat'], folders: () => [], accounts: () => [], runs, ship, pin, github, openEditor: async (p) => (opened.push(p), false) });
+    const remote = o.remote ? { is: () => o.remote!.is, trusted: () => o.remote!.trusted } : undefined;
+    const server = http.createServer((req, res) => routes(req, res, new URL(req.url ?? '/', 'http://x'), remote));
+    servers.push(server);
+    await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
+    return { port: (server.address() as AddressInfo).port, approvals, saved, opened };
+  }
+  const post = (port: number, path: string, body: unknown) => raw(port, path, { method: 'POST', headers: json, body: JSON.stringify(body) });
+
+  it('sem PIN definido = 403; nada sobe', async () => {
+    const { port, approvals } = await startShip();
+    const r = await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456' });
+    expect(r.status).toBe(403);
+    expect(JSON.parse(r.body)).toMatchObject({ pin: 'unset', error: expect.stringMatching(/defina um PIN/) });
+    expect(approvals).toEqual([]);
+  });
+
+  it('PIN faltando ou errado = 403; certo sobe o SHA do cartão (e o noCi só quando pedido)', async () => {
+    const { port, approvals } = await startShip({ pinSet: true });
+    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA })).status).toBe(403);
+    const wrong = await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '000000' });
+    expect(wrong.status).toBe(403);
+    expect(JSON.parse(wrong.body).pin).toBe('wrong');
+    expect(approvals).toEqual([]);
+    expect((await post(port, '/api/chat/runs/r1/ship', { sha: 'curto', pin: '123456' })).status).toBe(400);
+    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456' })).status).toBe(200);
+    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456', noCi: true })).status).toBe(200);
+    expect(approvals).toEqual([{ id: 'r1', sha: SHA }, { id: 'r1', sha: SHA, noCi: true }]);
+  });
+
+  it('prepare não pede PIN (só commita e mostra o cartão)', async () => {
+    const { port } = await startShip();
+    const r = await post(port, '/api/chat/runs/r1/ship/prepare', {});
+    expect(r.status).toBe(200);
+    expect(JSON.parse(r.body).sha).toBe(SHA);
+    expect((await post(port, '/api/chat/runs/zz/ship/prepare', {})).status).toBe(404);
+  });
+
+  it('porta remota sem "chat" liberado: 403 no ship e no prepare', async () => {
+    const { port, approvals } = await startShip({ pinSet: true, remote: { is: true, trusted: false } });
+    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456' })).status).toBe(403);
+    expect((await post(port, '/api/chat/runs/r1/ship/prepare', {})).status).toBe(403);
+    expect(approvals).toEqual([]);
+  });
+
+  it('token do GitHub: GET diz só se existe; PUT só pelo próprio computador', async () => {
+    const local = await startShip();
+    expect(JSON.parse((await raw(local.port, '/api/chat/github')).body)).toEqual({ set: false, source: null, editable: true });
+    expect((await raw(local.port, '/api/chat/github', { method: 'PUT', headers: json, body: '{"token":"github_pat_x"}' })).status).toBe(200);
+    expect(local.saved).toEqual(['github_pat_x']);
+    const remote = await startShip({ remote: { is: true, trusted: true } });
+    expect(JSON.parse((await raw(remote.port, '/api/chat/github')).body).editable).toBe(false);
+    expect((await raw(remote.port, '/api/chat/github', { method: 'PUT', headers: json, body: '{"token":"github_pat_x"}' })).status).toBe(403);
+    expect(remote.saved).toEqual([]);
+  });
+
+  it('Abrir no VS Code: só a cópia da lista (o caminho vem do servidor)', async () => {
+    const { port, opened } = await startShip();
+    const r = await post(port, '/api/chat/runs/r1/vscode', { path: 'C:\\Windows' });
+    expect(JSON.parse(r.body)).toEqual({ opened: false, path: 'C:\\data\\wt\\r1' });
+    expect(opened).toEqual(['C:\\data\\wt\\r1']);
+    expect((await post(port, '/api/chat/runs/zz/vscode', {})).status).toBe(404);
+  });
+});
