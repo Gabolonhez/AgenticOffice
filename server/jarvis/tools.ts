@@ -23,6 +23,7 @@ import { askHuman, type HumanAnswer, type McpTool } from '../chat/permission';
 import { LEDGER_OPEN_MS, projectLedger, type JournalEntry } from '../chat/journal';
 import type { RunService } from '../chat/runs';
 import type { Product } from '../vboards/products';
+import { parseOptions, type ProjectsService } from '../projects/create';
 import type { ChatService } from '../chat/service';
 import type { TriggerService } from '../chat/triggers';
 import type { WorktreeOps } from '../chat/types';
@@ -109,6 +110,8 @@ export interface JarvisToolsDeps {
   /** Registro por projeto (chat/journal.ts) desde `since`, e o registro de produtos (projects_status, release_notes). */
   journal?: (since: number) => JournalEntry[];
   products?: () => Product[];
+  /** Projeto novo a partir do molde (projects_draft, projects_create). */
+  projects?: Pick<ProjectsService, 'draft' | 'plan' | 'facts' | 'start' | 'get'>;
   notify?: (text: string, channel: NotifyChannel) => Promise<{ ntfy?: boolean; whatsapp?: boolean; error?: string }>;
   triggers?: Pick<TriggerService, 'list' | 'create' | 'update' | 'remove' | 'test'>;
   vboards?: VBoardsApi;
@@ -227,6 +230,18 @@ export class JarvisTools {
       t('projects_config_get', 'SAFE. Settings of a folder (git config vboards.*; the check command masked).', obj({ folder: S() }, ['folder']), async (a) => this.projectsConfigGet(a)),
       t('projects_status', 'SAFE. Per project (product or folder; empty = all), from the journal: done and stuck in the last 7 days, doing, to do. Wrapped as untrusted data.', obj({ project: S('Product id/name or folder (path or name)') }), async (a) => this.projectsStatus(a)),
       t('release_notes', 'SAFE. What was merged or deployed in a folder or product since `since` (ms epoch; default 7 days): titles for release notes. Wrapped as untrusted data.', obj({ folder: S('Folder (path or name) or product'), since: { type: 'number' } }, ['folder']), async (a) => this.releaseNotes(a)),
+      t(
+        'projects_draft',
+        'SAFE. Briefing of a NEW product from the app-base template: pass what you know (idea, name, audience, monetization, parts app/server/web, bundleId, primaryColor #RRGGBB, secondaryColor, notes). Returns the questions still missing (ask the owner, then call again with everything) or saves spec.md + plan and returns the slug for projects_create.',
+        obj({ idea: S(), name: S(), audience: S(), monetization: S(), parts: { type: 'array', items: { type: 'string', enum: ['app', 'server', 'web'] } }, bundleId: S(), primaryColor: S(), secondaryColor: S(), notes: S() }, ['idea']),
+        async (a) => this.projectsDraft(a),
+      ),
+      t(
+        'projects_create',
+        'GATED, ALWAYS (owner card with PIN, even in a clean turn). Creates the product drafted by projects_draft: copies the template, personalizes, CI workflow, git init + first commit, optional private GitHub repos (github + githubOwner), registry + vboards.* keys, optional VBoards card (vboards) and an agent in the new room (agent). Resumable: call again to retry what is pending. Never pushes.',
+        obj({ slug: S(), github: { type: 'boolean' }, githubOwner: S(), vboards: { type: 'boolean' }, agent: { type: 'boolean' }, ...REASON }, ['slug']),
+        async (a) => this.projectsCreate(a),
+      ),
       t('projects_config_set','GATED. Changes settings of a folder (keys: card, auto, provider, budget, check, reviewer, reviewerModel, copy).', obj({ folder: S(), values: { type: 'object' }, ...REASON }, ['folder', 'values']), async (a) => this.projectsConfigSet(a)),
       // --- uso
       t('usage_accounts', 'SAFE. Accounts and their 5h/week quota.', obj({}), async () => ok(this.deps.accounts?.() ?? [])),
@@ -511,6 +526,31 @@ export class JarvisTools {
     if (refused) return fail(refused);
     const err = await this.deps.writeFolderConfig(f.path, v.values);
     return err ? fail(tr('Não deu para gravar no git config da pasta: {0}', [maskSecrets(err)])) : ok(tr('Gravado no git config da pasta.'));
+  }
+
+  private projectsDraft(a: Record<string, unknown>): Result {
+    if (!this.deps.projects) return fail(tr('Projeto novo indisponível (chat com agentes desligado).'));
+    const r = this.deps.projects.draft(a);
+    if ('slug' in r) return ok({ slug: r.slug, next: tr('Mostre a spec ao dono; com o ok dele, chame projects_create.'), spec: r.spec });
+    return r.errors.length ? fail([...r.errors, ...r.questions.map((q) => q.question)].join('\n')) : ok({ questions: r.questions, next: tr('Pergunte ao dono o que falta e chame de novo com todas as respostas.') });
+  }
+
+  /** projects_create: SEMPRE cartão crítico (PIN), limpo ou contaminado; os fatos vêm do plano, a spec inteira vai junto. */
+  private async projectsCreate(a: Record<string, unknown>): Promise<Result> {
+    const svc = this.deps.projects;
+    if (!svc) return fail(tr('Projeto novo indisponível (chat com agentes desligado).'));
+    const slug = str(a.slug);
+    const options = parseOptions(a);
+    if ('error' in options) return fail(options.error);
+    const plan = svc.plan(slug, options);
+    if ('error' in plan) return fail(plan.error);
+    const spec = svc.get(slug)?.spec ?? '';
+    const refused = await this.gate('projects_create', { slug, ...options }, svc.facts(plan), a.reason, spec || undefined);
+    if (refused) return fail(refused);
+    const r = svc.start(slug, options);
+    if ('error' in r) return fail(r.error);
+    const end = await r.done;
+    return ok({ slug, root: end.root, steps: end.steps.map((s) => ({ id: s.id, status: s.status, ...(s.note ? { note: s.note } : {}) })) });
   }
 
   // ------------------------------------------------------------------ uso

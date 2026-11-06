@@ -28,6 +28,9 @@ import { loadHeadlessScreen } from './pty/screen';
 import { openMainAgent, SessionHistory } from './sources/history';
 import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
+import { defaultProjectsRoot, ProjectsService } from './projects/create';
+import { loadGithubToken } from './projects/github-repo';
+import { createProjectRoutes } from './projects/http';
 import { PermissionRegistry } from './permissions/registry';
 import { ApprovalPin } from './permissions/pin';
 import { codexAccountOf } from './codex/http';
@@ -353,7 +356,9 @@ const knownFolders = async (limit?: number) => {
   const last = new Map<string, number>();
   for (const a of snap.agents) last.set(a.roomId, Math.max(last.get(a.roomId) ?? 0, a.lastEventAt ?? 0));
   const rooms = snap.rooms.filter((r) => !isDemoId(r.id)).map((r) => ({ path: r.path, lastAt: last.get(r.id) ?? 0 }));
-  return recentFolders(history ? await history.list().catch(() => []) : [], rooms, limit);
+  // Repos dos produtos registrados também contam (um projeto novo do molde ainda não teve sessão nenhuma).
+  const repos = products().flatMap((p) => p.repos.map((r) => ({ path: r.path, lastAt: 0 })));
+  return recentFolders(history ? await history.list().catch(() => []) : [], [...rooms, ...repos], limit);
 };
 // Chat com agentes: abre processos com acesso total, então segue a mesma trava do terminal (e HABBLAUD_PTY, fora do Docker).
 const chatOff = chatOffReason({ inDocker: config.inDocker, ptyOptIn, terminal: config.terminal, terminalReason: terminalOffReason(process.env, config.host, config.inDocker) });
@@ -557,6 +562,29 @@ if (chat && jarvis) {
     if (id === jarvis.id()) hub.broadcast('jarvis', { agentId: id, idle: true });
   });
 }
+// Projeto novo a partir do molde (projects/): briefing, spec e criação retomável. Criar sempre passa pelo PIN.
+const projectsRoot = () => process.env.HABBLAUD_PROJECTS_ROOT?.trim() || defaultProjectsRoot(products().flatMap((p) => p.repos.map((r) => r.path)));
+const templateDir = () => process.env.HABBLAUD_TEMPLATE_DIR?.trim() || (projectsRoot() ? join(projectsRoot()!, 'app-base') : undefined);
+const projects = chatOff
+  ? undefined
+  : new ProjectsService({
+      dataDir: config.dataDir,
+      projectsRoot,
+      templateDir,
+      githubToken: () => loadGithubToken(config.dataDir),
+      githubOwner: () => process.env.HABBLAUD_GITHUB_OWNER?.trim() || undefined,
+      products: { load: () => loadProducts(productsFile), save: (raw) => saveProducts(productsFile, raw) },
+      writeFolderConfig: (f, v) => writeFolderConfig(f, v),
+      vboards: vboardsApi,
+      // O agente do projeto (Claude, pedindo aprovação a cada ação) faz a sala nova aparecer no escritório.
+      openAgent: chat
+        ? async (folder, prompt) => {
+            chatFolders = await knownFolders(100);
+            const r = chat.open({ folder, provider: 'claude', permission: 'ask', prompt });
+            return 'agentId' in r ? { agentId: r.agentId } : { reason: r.reason };
+          }
+        : undefined,
+    });
 const jarvisTools =
   chat && permissions && jarvis
     ? new JarvisTools({
@@ -578,6 +606,7 @@ const jarvisTools =
         metrics: (since) => readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since),
         journal: (since) => readJournal(journalFile, since),
         products,
+        projects,
         notify: (text, channel) => ntfy.sendText(text, { channel }),
         triggers,
         vboards: vboardsApi,
@@ -693,6 +722,7 @@ const api = createApiHandler({
   vboards,
   ntfy,
   products: { load: () => loadProducts(productsFile), save: (raw) => saveProducts(productsFile, raw) },
+  projects: projects ? createProjectRoutes(projects, permissions ? approvalPin : undefined, () => ({ githubOwner: process.env.HABBLAUD_GITHUB_OWNER?.trim() || undefined, root: projectsRoot(), template: templateDir() })) : undefined,
   chat: chatRoutes,
   chatOff,
   codexLive,
