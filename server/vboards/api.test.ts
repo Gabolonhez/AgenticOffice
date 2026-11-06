@@ -24,6 +24,20 @@ describe('VBoards API v1', () => {
     expect(JSON.parse(String(calls[2][1].body))).toEqual({ texts: ['a'], queue: true });
   });
 
+  it('inbox: campo audio opcional (VBoards antigo = só texto) e GET do áudio cru', async () => {
+    const f = vi.fn(async (u: string) =>
+      String(u).endsWith('/audio')
+        ? new Response(new Uint8Array([1, 2, 3]))
+        : res(200, { messages: [{ id: 'a1', chatJid: 'c', senderJid: 's', audio: { mime: 'audio/ogg', bytes: 3 }, receivedAt: 1 }, { id: 'a2', text: 'oi', audio: { mime: 5 } }, { id: 'a3' }] }),
+    );
+    const api = new VBoardsApi({ base: 'https://vb.dev', token: 'vb_abc' }, f as unknown as typeof fetch);
+    const list = await api.inbox();
+    expect(list.map((m) => [m.id, m.text, m.audio])).toEqual([['a1', '', { mime: 'audio/ogg', bytes: 3 }], ['a2', 'oi', undefined]]);
+    expect([...(await api.inboxAudio('a 1', 10))]).toEqual([1, 2, 3]);
+    expect(f.mock.calls.at(-1)![0]).toBe('https://vb.dev/api/v1/jarvis/inbox/a%201/audio');
+    await expect(api.inboxAudio('a1', 2)).rejects.toThrow('grande demais');
+  });
+
   it('403 sem escopo e 401 viram frase clara; uma tentativa só', async () => {
     expect(apiErrorText(403, 'missing scope agent')).toBe('O token do VBoards precisa do escopo agent.');
     expect(apiErrorText(401, 'expired')).toBe('Token do VBoards expirado ou inválido.');

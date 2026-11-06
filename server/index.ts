@@ -584,7 +584,7 @@ const jarvisTools =
       })
     : undefined;
 // Caixa do WhatsApp do Jarvis: com o WA-AKG configurado e um token vb_ do VBoards.
-const jarvisInbox = jarvis && vboardsApi ? new JarvisInbox({ api: vboardsApi, wa: () => ntfy.wa(), say: (text, origin, ref) => jarvis.say(text, origin, ref) }) : undefined;
+const jarvisInbox = jarvis && vboardsApi ? new JarvisInbox({ api: vboardsApi, wa: () => ntfy.wa(), whisper: () => findWhisper(), say: (text, origin, ref) => jarvis.say(text, origin, ref) }) : undefined;
 // Rotinas do Jarvis (jarvis/briefing.ts): o briefing (no horário de notify.json, desligado sem hora, ou pelo botão), o
 // fechamento do dia e o semanal (só no horário deles, desligados por padrão). Mesmo material, mesmos canais.
 const routine = (kind: ReportKind) =>

@@ -32,32 +32,55 @@ export interface Transcript {
 
 export type Transcriber = (audio: Buffer, type: string) => Promise<Transcript>;
 
-function onPath(name: string, env: NodeJS.ProcessEnv): string | undefined {
-  for (const dir of (env.PATH ?? '').split(delimiter)) {
+function onPath(names: string[], env: NodeJS.ProcessEnv, exists: (p: string) => boolean): string | undefined {
+  for (const dir of (env.PATH ?? env.Path ?? '').split(delimiter)) {
     if (!dir) continue;
-    const p = join(dir, name);
-    if (existsSync(p)) return p;
+    for (const name of names) {
+      const p = join(dir, name);
+      if (exists(p)) return p;
+    }
   }
   return undefined;
 }
 
+/** Como instalar o que falta: no Windows o brew não existe (winget/scoop, ou o release do whisper.cpp). */
+export function whisperHelp(what: 'whisper' | 'ffmpeg', platform: NodeJS.Platform = process.platform): string {
+  if (platform !== 'win32') return what === 'whisper' ? 'whisper-cli (brew install whisper-cpp)' : 'ffmpeg (brew install ffmpeg)';
+  return what === 'whisper'
+    ? tr('whisper-cli.exe (baixe whisper-bin-x64.zip em github.com/ggml-org/whisper.cpp/releases, extraia e ponha a pasta no PATH ou aponte HABBLAUD_WHISPER_BIN para o whisper-cli.exe; ou scoop install whisper-cpp)')
+    : tr('ffmpeg (winget install Gyan.FFmpeg)');
+}
+
 /** Acha o whisper-cli, o ffmpeg e o melhor modelo multilíngue; undefined (com o motivo) se faltar algum. */
-export function findWhisper(env: NodeJS.ProcessEnv = process.env, exists: (p: string) => boolean = existsSync): WhisperSetup | { missing: string } {
-  const home = env.HOME || homedir();
-  const bin = env.HABBLAUD_WHISPER_BIN?.trim() || ['/opt/homebrew/bin/whisper-cli', '/usr/local/bin/whisper-cli'].find(exists) || onPath('whisper-cli', env);
-  if (!bin || !exists(bin)) return { missing: 'whisper-cli (brew install whisper-cpp)' };
-  const ffmpeg = env.HABBLAUD_FFMPEG_BIN?.trim() || ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg'].find(exists) || onPath('ffmpeg', env);
-  if (!ffmpeg || !exists(ffmpeg)) return { missing: 'ffmpeg (brew install ffmpeg)' };
+export function findWhisper(env: NodeJS.ProcessEnv = process.env, exists: (p: string) => boolean = existsSync, platform: NodeJS.Platform = process.platform): WhisperSetup | { missing: string } {
+  const win = platform === 'win32';
+  const home = env.HOME || env.USERPROFILE || homedir();
+  const ext = win ? '.exe' : '';
+  const local = env.LOCALAPPDATA || join(home, 'AppData', 'Local');
+  const fixed = (names: string[], dirs: string[]) => dirs.flatMap((d) => names.map((n) => join(d, n))).find(exists);
+  const bin =
+    env.HABBLAUD_WHISPER_BIN?.trim() ||
+    (win
+      ? fixed(['whisper-cli.exe', 'whisper.exe'], [join(home, 'scoop', 'shims'), join(home, '.local', 'share', 'whisper'), join(home, '.whisper'), join(local, 'whisper.cpp'), join(local, 'whisper')]) || onPath(['whisper-cli.exe', 'whisper.exe'], env, exists)
+      : ['/opt/homebrew/bin/whisper-cli', '/usr/local/bin/whisper-cli'].find(exists) || onPath(['whisper-cli'], env, exists));
+  if (!bin || !exists(bin)) return { missing: whisperHelp('whisper', platform) };
+  const ffmpeg = env.HABBLAUD_FFMPEG_BIN?.trim() || (win ? undefined : ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg'].find(exists)) || onPath([`ffmpeg${ext}`], env, exists);
+  if (!ffmpeg || !exists(ffmpeg)) return { missing: whisperHelp('ffmpeg', platform) };
   const dirs = [join(home, '.local', 'share', 'whisper'), join(home, '.whisper'), '/opt/homebrew/share/whisper-cpp', '/usr/local/share/whisper-cpp'];
   const model =
     env.HABBLAUD_WHISPER_MODEL?.trim() ||
     MODELS.flatMap((m) => dirs.map((d) => join(d, m))).find(exists);
-  if (!model || !exists(model)) return { missing: tr('um modelo multilíngue do Whisper (ggml-small.bin ou ggml-base.bin em ~/.local/share/whisper)') };
+  if (!model || !exists(model)) return { missing: tr('um modelo multilíngue do Whisper (ggml-small.bin ou ggml-base.bin em ~/.local/share/whisper, ou HABBLAUD_WHISPER_MODEL)') };
   const langs = (env.HABBLAUD_DICTATION_LANGS ?? '')
     .split(',')
     .map((l) => l.trim().toLowerCase())
     .filter((l) => /^[a-z]{2,3}$/.test(l));
   return { bin, ffmpeg, model, langs: langs.length ? langs : [...DEFAULT_LANGS] };
+}
+
+/** Prazo da transcrição proporcional ao áudio: duração estimada pelos bytes (voz do WhatsApp ~2 KB/s; mais bytes = estima mais, só alonga o prazo), 3x em tempo real mais 60 s, até 20 min. */
+export function transcribeTimeoutMs(bytes: number): number {
+  return Math.min(20 * 60_000, Math.max(TRANSCRIBE_TIMEOUT_MS, 60_000 + (bytes / 2000) * 3000));
 }
 
 function run(bin: string, args: string[], timeoutMs: number): Promise<{ ok: true } | { ok: false; error: string }> {

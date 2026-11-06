@@ -13,7 +13,8 @@ export const CARD_STATUSES = ['todo', 'doing', 'done'] as const;
 export const SCHEDULE_SCOPES = ['month', 'week', 'day'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
-export interface InboxMessage { id: string; chatJid: string; senderJid: string; text: string; receivedAt: number }
+/** `audio`: a mensagem é um áudio (a transcrição é do Habblaud, local; o texto pode vir vazio). VBoards antigo: campo ausente = só texto. */
+export interface InboxMessage { id: string; chatJid: string; senderJid: string; text: string; receivedAt: number; audio?: { mime: string; bytes: number } }
 
 /** Erro da API com a frase para quem lê (o Jarvis, a página). */
 export class VBoardsApiError extends Error {
@@ -93,14 +94,33 @@ export class VBoardsApi {
     return list.flatMap((x) => {
       const m = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
       const at = typeof m.receivedAt === 'number' ? m.receivedAt : Date.parse(String(m.receivedAt ?? ''));
-      if (typeof m.id !== 'string' || !m.id || typeof m.text !== 'string') return [];
-      return [{ id: m.id, chatJid: String(m.chatJid ?? ''), senderJid: String(m.senderJid ?? ''), text: m.text, receivedAt: Number.isFinite(at) ? at : 0 }];
+      const a = (m.audio && typeof m.audio === 'object' ? m.audio : undefined) as Record<string, unknown> | undefined;
+      const audio = a && typeof a.mime === 'string' && typeof a.bytes === 'number' && a.bytes >= 0 ? { mime: a.mime.slice(0, 100), bytes: a.bytes } : undefined;
+      if (typeof m.id !== 'string' || !m.id || (typeof m.text !== 'string' && !audio)) return [];
+      return [{ id: m.id, chatJid: String(m.chatJid ?? ''), senderJid: String(m.senderJid ?? ''), text: typeof m.text === 'string' ? m.text : '', receivedAt: Number.isFinite(at) ? at : 0, ...(audio ? { audio } : {}) }];
     });
   }
 
   /** Marca como lida; `reply` fica guardada no VBoards (quem manda ao WhatsApp é o Habblaud). */
   ack(id: string, reply?: string) {
     return this.call<{ ok: boolean }>('POST', `/jarvis/inbox/${encodeURIComponent(id)}/ack`, reply ? { reply: reply.slice(0, 3000) } : {});
+  }
+
+  /** O áudio de uma mensagem da caixa (GET /jarvis/inbox/:id/audio, bytes crus); `max` corta antes de estourar a memória. */
+  async inboxAudio(id: string, max: number): Promise<Buffer> {
+    if (!this.enabled) throw new VBoardsApiError(0, tr('A API do VBoards precisa de um token vb_ (git config --global vboards.token ou HABBLAUD_VBOARDS_TOKEN).'));
+    let res: Response;
+    try {
+      res = await this.fetchImpl(`${this.config.base}/api/v1/jarvis/inbox/${encodeURIComponent(id)}/audio`, { headers: { Authorization: `Bearer ${this.config.token}` }, signal: AbortSignal.timeout(60_000) });
+    } catch (err) {
+      throw new VBoardsApiError(0, tr('VBoards fora do ar ({0}).', [maskSecrets(err instanceof Error ? err.message : String(err))]));
+    }
+    if (!res.ok) throw new VBoardsApiError(res.status, apiErrorText(res.status, ((await res.json().catch(() => ({}))) as Record<string, unknown>).error));
+    const len = Number(res.headers.get('content-length'));
+    if (Number.isFinite(len) && len > max) throw new VBoardsApiError(413, tr('áudio grande demais'));
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length > max) throw new VBoardsApiError(413, tr('áudio grande demais'));
+    return buf;
   }
 
   private async call<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<T> {
