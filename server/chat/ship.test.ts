@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChatRun } from '../../shared/runs';
+import { shipApprovalOf, type ChatRun, type ShipPreview } from '../../shared/runs';
 import type { Product } from '../vboards/products';
 import type { FolderConfig } from '../vboards/vboards';
 import { GitHubError } from './github';
@@ -7,6 +7,7 @@ import { autoShipBlock, NO_CI_GRACE_MS, ShipService, type ShipDeps, type ShipGit
 import type { ShipWorktreeOps } from './types';
 
 const SHA = 'a'.repeat(40);
+const PUSHED = 'p'.repeat(40);
 const MERGE = 'm'.repeat(40);
 const TOKEN = `github_pat_${'T'.repeat(40)}`;
 const MIN = 60_000;
@@ -28,11 +29,11 @@ function makeRun(id: string, folder: string): ChatRun {
 
 /** GitHub falso: o veredito do CI e do deploy muda pelo teste. */
 function fakeGitHub() {
-  const st = { checkRuns: [] as Array<{ status: string; conclusion: string | null }>, statuses: [] as Array<{ state: string }>, deploy: [] as Array<{ status: string; conclusion: string | null }>, merged: false, headSha: SHA };
+  const st = { checkRuns: [] as Array<{ status: string; conclusion: string | null }>, statuses: [] as Array<{ state: string }>, deploy: [] as Array<{ status: string; conclusion: string | null }>, merged: false, headSha: PUSHED };
   const gh = {
     openPr: vi.fn(async () => ({ number: 7, url: 'https://github.com/acme/api/pull/7', state: 'open', merged: false })),
     pr: vi.fn(async () => ({ number: 7, url: 'u', state: 'open', merged: st.merged, headSha: st.headSha, ...(st.merged ? { mergeSha: MERGE } : {}) })),
-    checks: vi.fn(async () => ({ checkRuns: st.checkRuns, statuses: st.statuses })),
+    checks: vi.fn(async (_r: unknown, _sha: string) => ({ checkRuns: st.checkRuns, statuses: st.statuses })),
     mergePr: vi.fn(async (_r: unknown, _n: number, sha: string) => {
       if (sha !== st.headSha) throw new GitHubError('409', 409);
       st.merged = true;
@@ -43,7 +44,7 @@ function fakeGitHub() {
   return { gh, st };
 }
 
-function setup(o: { config?: Partial<FolderConfig>; products?: Product[]; runs?: ChatRun[] } = {}) {
+function setup(o: { config?: Partial<FolderConfig>; products?: Product[]; runs?: ChatRun[]; files?: string[] } = {}) {
   let now = 1_000_000;
   const runs = o.runs ?? [makeRun('r1', '/p/api')];
   const journal: string[] = [];
@@ -53,12 +54,12 @@ function setup(o: { config?: Partial<FolderConfig>; products?: Product[]; runs?:
   const worktrees = {
     commit: vi.fn(async () => ({ ok: true as const, sha: SHA })),
     remoteInfo: vi.fn(async (): Promise<{ url?: string; head?: string }> => ({ url: 'git@github.com:acme/api.git', head: 'main' })),
-    changedFiles: vi.fn(async () => ['src/a.ts', '.github/workflows/ci.yml']),
-    diff: vi.fn(async () => '+++ b/src/a.ts\n+x'),
+    scan: vi.fn(async (): Promise<{ names: string[]; secrets: string[] } | { error: string }> => ({ names: o.files ?? ['src/a.ts'], secrets: [] })),
     summary: vi.fn(async () => ({ files: 2, added: 3, removed: 1, commits: 1, stat: ' src/a.ts | 2 +-' })),
-    push: vi.fn(async (): Promise<{ ok: true } | { ok: false; reason: string }> => ({ ok: true })),
+    push: vi.fn(async (): Promise<{ ok: true; pushed: string } | { ok: false; reason: string }> => ({ ok: true, pushed: PUSHED })),
     discard: vi.fn(async () => ({ ok: true as const })),
     fastForward: vi.fn(async () => undefined),
+    diff: vi.fn(async () => ''),
     create: vi.fn(),
     merge: vi.fn(),
   };
@@ -81,14 +82,14 @@ function setup(o: { config?: Partial<FolderConfig>; products?: Product[]; runs?:
     now: () => now,
   };
   const ship = new ShipService(deps);
-  return { ship, runs, worktrees, gh, st, journal, settles, notes, persisted, clock: (ms: number) => (now += ms) };
+  return { ship, deps, runs, worktrees, gh, st, journal, settles, notes, persisted, clock: (ms: number) => (now += ms) };
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 async function approved(t: ReturnType<typeof setup>, id = 'r1') {
-  const p = await t.ship.prepare(id);
-  if ('error' in p) throw new Error(p.error);
-  const r = await t.ship.approve(id, { sha: p.sha });
+  const p = (await t.ship.prepare(id)) as ShipPreview;
+  if ('error' in p) throw new Error(String(p.error));
+  const r = await t.ship.approve(id, shipApprovalOf(p));
   if ('error' in r) throw new Error(r.error);
   await flush();
   return t.runs.find((x) => x.id === id)!;
@@ -96,49 +97,64 @@ async function approved(t: ReturnType<typeof setup>, id = 'r1') {
 
 describe('ship: o cartão (prepare)', () => {
   it('mostra repo, base, branch, SHA exato, diffstat, portão e destaca hooks/CI', async () => {
-    const t = setup();
+    const t = setup({ files: ['src/a.ts', '.github/workflows/ci.yml'] });
     const p = await t.ship.prepare('r1');
-    expect(p).toMatchObject({ owner: 'acme', repo: 'api', base: 'main', branch: 'agentic/lista-r1', sha: SHA, mode: 'merge', deploy: 'none', gate: 'pass', risky: ['.github/workflows/ci.yml'] });
+    expect(p).toMatchObject({ owner: 'acme', repo: 'api', base: 'main', remote: 'origin', branch: 'agentic/lista-r1', sha: SHA, mode: 'merge', deploy: 'none', gate: 'pass', risky: ['.github/workflows/ci.yml'] });
     expect(t.gh.openPr).not.toHaveBeenCalled();
     expect(t.worktrees.push).not.toHaveBeenCalled();
   });
-  it('recusa: ship=off, sem token, remoto fora do GitHub, segredo no diff', async () => {
+  it('recusa: ship=off, remoto fora do GitHub, segredo no diff', async () => {
     expect(await setup({ config: { ship: 'off' } }).ship.prepare('r1')).toMatchObject({ status: 409, error: expect.stringMatching(/desligado/) });
     const t = setup();
     t.worktrees.remoteInfo.mockResolvedValueOnce({ url: 'https://gitlab.com/a/b.git' });
     expect(await t.ship.prepare('r1')).toMatchObject({ error: expect.stringMatching(/github\.com/) });
-    t.worktrees.diff.mockResolvedValueOnce(`+++ b/a.ts\n+k = "AKIA${'A'.repeat(16)}"`);
+    t.worktrees.scan.mockResolvedValueOnce({ names: ['a.ts'], secrets: ['a.ts (chave da AWS)'] });
     expect(await t.ship.prepare('r1')).toMatchObject({ error: expect.stringMatching(/segredo/) });
   });
-  it('SHA do cartão diferente do HEAD atual = recusa', async () => {
+  it('a aprovação prende o conjunto inteiro: SHA, repo, base, remoto, modo, deploy e hooks/CI', async () => {
     const t = setup();
-    expect(await t.ship.approve('r1', { sha: 'f'.repeat(40) })).toMatchObject({ status: 409 });
+    const p = (await t.ship.prepare('r1')) as ShipPreview;
+    const ok = shipApprovalOf(p);
+    for (const bad of [{ sha: 'f'.repeat(40) }, { owner: 'outro' }, { repo: 'x' }, { base: 'dev' }, { remote: 'up' }, { mode: 'pr' as const }, { deploy: 'workflow:x.yml' }, { risky: ['.husky/pre-push'] }, { noCi: true }]) {
+      expect(await t.ship.approve('r1', { ...ok, ...bad })).toMatchObject({ status: 409 });
+    }
     expect(t.runs[0].ship).toBeUndefined();
+    expect(await t.ship.approve('r1', ok)).toHaveProperty('run');
   });
 });
 
 describe('ship: máquina de estados', () => {
-  it('caminho feliz: push → PR → CI verde → merge pelo SHA → deployed, com registro, VBoards, avisos e descarte', async () => {
+  it('caminho feliz: push (squash) → PR → CI verde → merge pelo SHA que subiu → deployed, com registro, VBoards, avisos e descarte', async () => {
     const t = setup();
     const run = await approved(t);
-    expect(t.worktrees.push).toHaveBeenCalledWith(run.isolated, { url: 'https://github.com/acme/api.git', sha: SHA, token: TOKEN, baseBranch: 'main' });
-    expect(run.ship).toMatchObject({ step: 'ci', prNumber: 7, prUrl: 'https://github.com/acme/api/pull/7' });
+    expect(t.worktrees.push).toHaveBeenCalledWith(run.isolated, { url: 'https://github.com/acme/api.git', sha: SHA, token: TOKEN, baseBranch: 'main', message: 'corrigir login' });
+    expect(run.ship).toMatchObject({ step: 'ci', prNumber: 7, prUrl: 'https://github.com/acme/api/pull/7', pushedSha: PUSHED });
     expect(t.settles).toContainEqual({ id: 'c1:s1', state: 'review', stage: 'pr', prUrl: 'https://github.com/acme/api/pull/7' });
     expect(t.notes).toEqual(['api:pr']);
     await t.ship.tick();
     expect(run.ship!.step).toBe('ci'); // pendente
     t.st.checkRuns = [{ status: 'completed', conclusion: 'success' }];
     await t.ship.tick();
-    expect(t.gh.mergePr).toHaveBeenCalledWith({ owner: 'acme', repo: 'api' }, 7, SHA);
+    expect(t.gh.checks).toHaveBeenLastCalledWith({ owner: 'acme', repo: 'api' }, PUSHED);
+    expect(t.gh.mergePr).toHaveBeenCalledWith({ owner: 'acme', repo: 'api' }, 7, PUSHED);
     expect(run.ship).toMatchObject({ step: 'deployed', mergeSha: MERGE });
     expect(t.journal).toEqual(['r1:pr', 'r1:merged', 'r1:deployed']);
     expect(t.settles.at(-1)).toEqual({ id: 'c1:s1', state: 'done', stage: 'deployed', prUrl: 'https://github.com/acme/api/pull/7' });
     expect(t.notes).toEqual(['api:pr', 'api:deployed']);
-    expect(t.worktrees.discard).toHaveBeenCalled();
     expect(run.isolated!.discarded).toBe(true);
     expect(t.worktrees.fastForward).toHaveBeenCalledWith('/p/api', 'origin', 'main');
     await t.ship.tick();
     expect(t.gh.mergePr).toHaveBeenCalledTimes(1);
+  });
+
+  it('subir de novo depois de falhar: o squash novo tem como pai o que já subiu (sem force)', async () => {
+    const t = setup();
+    const run = await approved(t);
+    t.st.checkRuns = [{ status: 'completed', conclusion: 'failure' }];
+    await t.ship.tick();
+    expect(run.ship!.step).toBe('failed');
+    await approved(t);
+    expect(t.worktrees.push).toHaveBeenLastCalledWith(run.isolated, expect.objectContaining({ parent: PUSHED }));
   });
 
   it('ship=pr: só abre o PR (o fim), sem merge', async () => {
@@ -164,7 +180,7 @@ describe('ship: máquina de estados', () => {
     expect(t.gh.mergePr).not.toHaveBeenCalled();
   });
 
-  it('no-ci bloqueia o merge até a aprovação extra no mesmo SHA', async () => {
+  it('no-ci bloqueia o merge até a aprovação extra com o mesmo conjunto', async () => {
     const t = setup();
     const run = await approved(t);
     await t.ship.tick();
@@ -178,17 +194,30 @@ describe('ship: máquina de estados', () => {
     await t.ship.tick();
     expect(t.gh.mergePr).not.toHaveBeenCalled();
     expect(t.notes.filter((n) => n === 'api:no_ci')).toHaveLength(1);
-    expect(await t.ship.approve('r1', { sha: 'f'.repeat(40), noCi: true })).toMatchObject({ status: 409 });
-    expect(await t.ship.approve('r1', { sha: SHA, noCi: true })).toHaveProperty('run');
+    expect(await t.ship.approve('r1', { ...shipApprovalOf(run.ship!, true), sha: 'f'.repeat(40) })).toMatchObject({ status: 409 });
+    expect(await t.ship.approve('r1', shipApprovalOf(run.ship!))).toMatchObject({ status: 409 }); // sem noCi
+    expect(await t.ship.approve('r1', shipApprovalOf(run.ship!, true))).toHaveProperty('run');
     await flush();
-    expect(t.gh.mergePr).toHaveBeenCalledWith(expect.anything(), 7, SHA);
+    expect(t.gh.mergePr).toHaveBeenCalledWith(expect.anything(), 7, PUSHED);
+    expect(run.ship!.step).toBe('deployed');
+  });
+
+  it('o diff muda workflows/hooks: CI verde vira no-ci (exige a confirmação extra)', async () => {
+    const t = setup({ files: ['src/a.ts', '.github/workflows/ci.yml'] });
+    const run = await approved(t);
+    t.st.checkRuns = [{ status: 'completed', conclusion: 'success' }];
+    await t.ship.tick();
+    expect(run.ship).toMatchObject({ step: 'ci', ci: 'pass', needs: 'no-ci', note: expect.stringMatching(/workflows ou hooks/) });
+    expect(t.gh.mergePr).not.toHaveBeenCalled();
+    expect(await t.ship.approve('r1', shipApprovalOf(run.ship!, true))).toHaveProperty('run');
+    await flush();
     expect(run.ship!.step).toBe('deployed');
   });
 
   it('noCi sem a subida estar esperando isso = recusa', async () => {
     const t = setup();
-    await approved(t);
-    expect(await t.ship.approve('r1', { sha: SHA, noCi: true })).toMatchObject({ status: 409 });
+    const run = await approved(t);
+    expect(await t.ship.approve('r1', shipApprovalOf(run.ship!, true))).toMatchObject({ status: 409 });
   });
 
   it('CI que não termina no prazo (vboards.ciMinutes) falha', async () => {
@@ -216,29 +245,56 @@ describe('ship: máquina de estados', () => {
     expect(t.worktrees.discard).not.toHaveBeenCalled();
   });
 
-  it('workflow verde = deployed', async () => {
+  it('reinício: deploy já juntado segue sozinho (só leitura)', async () => {
     const t = setup({ config: { deploy: 'workflow:deploy.yml' } });
     const run = await approved(t);
     t.st.checkRuns = [{ status: 'completed', conclusion: 'success' }];
-    t.st.deploy = [{ status: 'completed', conclusion: 'success' }];
     await t.ship.tick();
+    expect(run.ship!.step).toBe('deploying');
+    const again = new ShipService(t.deps);
+    again.afterRestart();
+    expect(run.ship!.needs).toBeUndefined();
+    t.st.deploy = [{ status: 'completed', conclusion: 'success' }];
+    await again.tick();
     expect(run.ship!.step).toBe('deployed');
   });
 
-  it('retomada depois do reinício: um serviço novo continua do que está gravado', async () => {
+  it('reinício antes do merge: runs.json não basta; push/merge esperam o PIN de novo (e conferem contra a cópia)', async () => {
     const t = setup();
     const run = await approved(t);
-    // Reinício no meio do merge: o PR já tinha sido juntado no GitHub.
-    run.ship!.step = 'merging';
-    run.ship!.ci = 'pass';
-    t.st.merged = true;
-    const again = new ShipService({ runs: { get: () => run, list: () => [run], persist: vi.fn(), journalShipped: vi.fn() }, worktrees: t.worktrees as unknown as ShipWorktreeOps, token: () => TOKEN, github: () => t.gh, folderConfig: async () => cfg() });
+    // Um agente forja o runs.json: CI "verde" e o merge liberado.
+    run.ship = { ...run.ship!, step: 'merging', ci: 'pass', noCiApproved: true };
+    const again = new ShipService(t.deps);
+    again.afterRestart();
+    expect(run.ship).toMatchObject({ step: 'merging', needs: 'reapprove' });
+    expect(run.ship!.noCiApproved).toBeUndefined();
     await again.tick();
+    expect(t.gh.pr).not.toHaveBeenCalled();
     expect(t.gh.mergePr).not.toHaveBeenCalled();
-    expect(run.ship).toMatchObject({ step: 'deployed', mergeSha: MERGE });
+    // Forjou o repo: a aprovação nova (feita sobre a cópia e a pasta de agora) não bate.
+    run.ship = { ...run.ship!, owner: 'atacante' };
+    const p = (await again.prepare('r1')) as ShipPreview;
+    expect(await again.approve('r1', shipApprovalOf(p))).toMatchObject({ status: 409 });
+    run.ship = { ...run.ship!, owner: 'acme' };
+    expect(await again.approve('r1', shipApprovalOf(p))).toHaveProperty('run');
+    await flush();
+    expect(t.gh.mergePr).toHaveBeenCalledWith(expect.anything(), 7, PUSHED);
+    expect(run.ship!.step).toBe('deployed');
   });
 
-  it('merge pelo SHA aprovado: PR com head diferente = recusa', async () => {
+  it('reinício no meio do push: não sobe sozinho', async () => {
+    const t = setup();
+    const run = makeRun('r1', '/p/api');
+    run.ship = { step: 'pushing', mode: 'merge', sha: SHA, owner: 'acme', repo: 'api', remote: 'origin', base: 'main', branch: run.isolated!.branch, deploy: 'none', risky: [], ciMinutes: 30, startedAt: 0, stepAt: 0 };
+    t.runs.splice(0, 1, run);
+    const again = new ShipService(t.deps);
+    again.afterRestart();
+    await again.tick();
+    expect(t.worktrees.push).not.toHaveBeenCalled();
+    expect(run.ship!.needs).toBe('reapprove');
+  });
+
+  it('merge pelo SHA que subiu: PR com head diferente = recusa', async () => {
     const t = setup();
     const run = await approved(t);
     t.st.checkRuns = [{ status: 'completed', conclusion: 'success' }];
@@ -307,7 +363,7 @@ describe('ship: merge automático (vboards.autoMerge=low, sem PIN)', () => {
   function autoSetup(o: { config?: Partial<FolderConfig>; item?: Partial<ChatRun['items'][number]>; files?: string[] } = {}) {
     const t = setup({ config: { ...LOW, ...o.config }, runs: [autoRun(o.item)] });
     const files = o.files ?? ['src/ui/button.tsx'];
-    t.worktrees.changedFiles.mockResolvedValue(files);
+    t.worktrees.scan.mockResolvedValue({ names: files, secrets: [] });
     t.worktrees.diff.mockResolvedValue(files.map((f) => `diff --git a/${f} b/${f}\n--- a/${f}\n+++ b/${f}\n@@ -1 +1 @@\n-a\n+b`).join('\n'));
     return t;
   }
@@ -325,8 +381,53 @@ describe('ship: merge automático (vboards.autoMerge=low, sem PIN)', () => {
     expect(t.gh.mergePr).not.toHaveBeenCalled();
     t.st.checkRuns = [{ status: 'completed', conclusion: 'success' }];
     await t.ship.tick();
-    expect(t.gh.mergePr).toHaveBeenCalledWith({ owner: 'acme', repo: 'api' }, 7, SHA);
+    expect(t.gh.mergePr).toHaveBeenCalledTimes(1);
     expect(run.ship!.step).toBe('deployed');
+  });
+
+  it('o caminho sem PIN passa pela mesma comparação do conjunto aprovado (qualquer campo diferente recusa)', async () => {
+    const t = autoSetup();
+    const p = (await t.ship.prepare('r1')) as ShipPreview;
+    for (const bad of [{ sha: 'f'.repeat(40) }, { deploy: 'workflow:deploy.yml' }, { base: 'dev' }, { mode: 'pr' as const }, { repo: 'outro' }]) {
+      expect(await t.ship.approve('r1', { ...shipApprovalOf(p), ...bad }, { auto: true })).toMatchObject({ status: 409 });
+    }
+    expect(t.runs[0].ship).toBeUndefined();
+    expect(await t.ship.approve('r1', { ...shipApprovalOf(p), noCi: true }, { auto: true })).toMatchObject({ status: 409 });
+    expect(t.worktrees.push).not.toHaveBeenCalled();
+  });
+
+  it('reinício: lista lida do runs.json nunca sobe sozinha, e subida retomada (reapprove) não aceita o caminho sem PIN', async () => {
+    const t = autoSetup();
+    t.ship.start(60 * MIN);
+    t.ship.stop();
+    await t.ship.tick();
+    await flush();
+    expect(t.runs[0].ship).toBeUndefined();
+    expect(t.runs[0].autoShip).toBeUndefined();
+    expect(t.worktrees.push).not.toHaveBeenCalled();
+    // Subida que estava em andamento antes do reinício: volta a pedir o PIN; o auto não continua por cima.
+    const t2 = autoSetup();
+    const p = (await t2.ship.prepare('r1')) as ShipPreview;
+    t2.runs[0].ship = { step: 'pushing', mode: 'merge', sha: SHA, owner: 'acme', repo: 'api', remote: 'origin', base: 'main', branch: 'agentic/lista-r1', deploy: 'none', risky: [], ciMinutes: 30, startedAt: 1, stepAt: 1, auto: true };
+    t2.ship.start(60 * MIN);
+    t2.ship.stop();
+    expect(t2.runs[0].ship!.needs).toBe('reapprove');
+    expect(await t2.ship.approve('r1', shipApprovalOf(p), { auto: true })).toMatchObject({ status: 409 });
+    expect(t2.runs[0].ship!.needs).toBe('reapprove');
+    expect(t2.worktrees.push).not.toHaveBeenCalled();
+  });
+
+  it('hooks/CI no diff (riskyFiles = no-ci): o auto bloqueia mesmo com risco calculado baixo por engano', async () => {
+    const t = autoSetup({ files: ['src/ui/button.tsx', '.husky/pre-push'] });
+    await t.ship.tick();
+    await flush();
+    expect(t.runs[0].ship).toBeUndefined();
+    expect(t.runs[0].autoShip?.blocked).toMatch(/Risco alto|hooks\/CI/);
+    // Direto no approve: risky no conjunto aprovado = recusa do caminho sem PIN.
+    const p = (await t.ship.prepare('r1')) as ShipPreview;
+    expect(p.risky).toEqual(['.husky/pre-push']);
+    expect(await t.ship.approve('r1', shipApprovalOf(p), { auto: true })).toMatchObject({ status: 409 });
+    expect(t.worktrees.push).not.toHaveBeenCalled();
   });
 
   it('avalia uma vez só por lista', async () => {

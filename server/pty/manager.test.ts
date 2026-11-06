@@ -383,3 +383,15 @@ describe('PtyManager.editorPath', () => {
     expect(status(() => setup({ agent: { cwd: join(tmpdir(), 'nao-existe-habblaud') } }).manager.editorPath(`acc:${PID}`))).toBe(400);
   });
 });
+
+describe('PtyManager: segredos', () => {
+  it('o terminal nunca recebe os segredos do Habblaud', () => {
+    const envs: NodeJS.ProcessEnv[] = [];
+    const s = setup({ env: { PATH: process.env.PATH, HABBLAUD_GITHUB_TOKEN: 'github_pat_x', HABBLAUD_VBOARDS_TOKEN: 'vb_x' }, spawn: (_f, _a, o) => (envs.push(o.env), new FakeProc(9999)) });
+    s.manager.create({ cwd: tmpdir() });
+    expect(envs).toHaveLength(1);
+    expect(envs[0].HABBLAUD_GITHUB_TOKEN).toBeUndefined();
+    expect(envs[0].HABBLAUD_VBOARDS_TOKEN).toBeUndefined();
+    expect(envs[0].PATH).toBe(process.env.PATH);
+  });
+});

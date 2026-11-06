@@ -16,7 +16,7 @@ import { isLocalHost, sendWhatsApp, validateWa, type WaSettings } from './whatsa
  * 'quota': uma lista pausou pela cota da conta (chat/runs.ts); o título é o nome da pasta. 'pr', 'ci_failed', 'no_ci' e
  * 'deployed': o "Subir" (chat/ship.ts), com o nome da pasta.
  */
-export type NotifyEvent = 'review' | 'ready' | 'failed' | 'quota' | 'pr' | 'ci_failed' | 'no_ci' | 'deployed';
+export type NotifyEvent = 'review' | 'ready' | 'failed' | 'quota' | 'pr' | 'ci_failed' | 'no_ci' | 'deployed' | 'store_pin' | 'store_ok' | 'store_failed';
 
 const EVENT_TEXT: Record<NotifyEvent, () => string> = {
   review: () => tr('aguardando revisão'),
@@ -27,6 +27,9 @@ const EVENT_TEXT: Record<NotifyEvent, () => string> = {
   ci_failed: () => tr('CI do PR falhou'),
   no_ci: () => tr('repo sem CI de PR: o merge espera a sua aprovação com PIN'),
   deployed: () => tr('no ar (deployed)'),
+  store_pin: () => tr('loja: espera a sua aprovação com PIN'),
+  store_ok: () => tr('loja: etapa concluída'),
+  store_failed: () => tr('loja: etapa falhou'),
 };
 
 const TITLE_MAX = 100;

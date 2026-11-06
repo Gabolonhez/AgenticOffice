@@ -666,7 +666,7 @@ describe('chat: lista, registro por projeto e o fim no VBoards', () => {
     await flush();
     end('chat:1', 'done');
     const run = svc.get('r1')!;
-    run.ship = { step: 'ci', mode: 'merge', sha: 'a'.repeat(40), owner: 'o', repo: 'r', remote: 'origin', base: 'main', branch: 'agentic/lista-1', deploy: 'none', ciMinutes: 30, startedAt: 0, stepAt: 0, prUrl: 'u' };
+    run.ship = { step: 'ci', mode: 'merge', sha: 'a'.repeat(40), owner: 'o', repo: 'r', remote: 'origin', base: 'main', branch: 'agentic/lista-1', deploy: 'none', risky: [], ciMinutes: 30, startedAt: 0, stepAt: 0, prUrl: 'u' };
     expect(await svc.merge('r1')).toMatchObject({ status: 409, error: expect.stringMatching(/Subir/) });
     expect(await svc.discard('r1')).toMatchObject({ status: 409 });
     run.ship = { ...run.ship, mode: 'pr', step: 'pr' };

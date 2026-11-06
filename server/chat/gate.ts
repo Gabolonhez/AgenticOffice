@@ -13,6 +13,7 @@ import { tr } from '../../shared/i18n';
 import type { RunAuto } from '../../shared/runs';
 import type { Provider } from '../../shared/types';
 import { INHERITED_SESSION_VARS } from '../pty/manager';
+import { withoutSecrets } from '../secret-env';
 import { AI_TIMEOUT_MS, claudeRunner, type AiRunner } from '../summary/service';
 import { resolveCliBin, type CliBin } from './bins';
 import { agyDriver } from './drivers/agy';
@@ -36,9 +37,9 @@ export interface CheckResult { ok: boolean; tail: string }
 export type ReviewResult = { ok: boolean; findings: string; by: string } | { error: string; by: string };
 
 function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+  const env = withoutSecrets(process.env);
   for (const k of INHERITED_SESSION_VARS) delete env[k];
-  return { ...env, ...noPushEnv(env), ...extra };
+  return withoutSecrets({ ...env, ...noPushEnv(env), ...extra });
 }
 
 /** O vboards.check num shell, na cópia isolada: passa com código 0 dentro do prazo. Guarda o fim da saída, mascarado. */

@@ -102,3 +102,12 @@ describe('Jarvis: seção por projeto e as rotinas de fechamento e semanal', () 
     expect(post.mock.calls[0][0]).toMatch(/^Fechamento do dia 18:30\nDia fechado/);
   });
 });
+
+describe('Jarvis: semanal com sugestão de versão', () => {
+  it('o material lista a versão proposta por app', () => {
+    const m = briefingMaterial(input({ versions: [{ app: 'PeptPro', version: '1.5.0', count: 3 }] }));
+    expect(m).toContain('Sugestão de versão para a loja:');
+    expect(m).toContain('- PeptPro: 1.5.0 (3 tarefas novas)');
+    expect(briefingMaterial(input())).not.toContain('Sugestão de versão');
+  });
+});

@@ -12788,3 +12788,305 @@ html.has-jarvis {
     transition: none;
   }
 }
+
+/* ------------------------------------------------------------------ Novo projeto (ui/projects.ts) */
+/* Assistente em 4 etapas (ideia, perguntas, spec, criar) com o checklist dos passos e o status de cada um. */
+.ui-proj {
+  width: 440px;
+  max-width: calc(100vw - 16px);
+}
+
+.ui-proj__stepper {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+  font-size: 11.5px;
+  color: var(--ui-muted);
+}
+
+.ui-proj__stepper li {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--ui-bg-soft);
+  border: 1px solid var(--ui-line);
+}
+
+.ui-proj__stepper li.is-current {
+  color: var(--ui-text);
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+
+.ui-proj__stepper li.is-past {
+  color: var(--ui-text);
+}
+
+.ui-proj__num {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  font: 600 11px/1 var(--font-ui);
+  background: var(--ui-line-strong);
+  color: var(--ui-text);
+}
+
+.ui-proj__stepper li.is-current .ui-proj__num {
+  background: var(--ui-accent);
+  color: #0d1420;
+}
+
+.ui-proj__stepper li.is-past .ui-proj__num {
+  background: var(--lv-ok);
+  color: #0d1420;
+}
+
+.ui-proj__lead {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ui-text);
+}
+
+.ui-proj__hint {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--ui-faint);
+  margin: 0;
+}
+
+.ui-proj__parts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--radius-sm);
+}
+
+.ui-proj__parts legend {
+  padding: 0 4px;
+  font-size: 11.5px;
+  color: var(--ui-muted);
+}
+
+.ui-proj__colors {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.ui-proj__colors input[type='color'] {
+  width: 100%;
+  height: 32px;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.ui-proj__errors {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--lv-crit);
+}
+
+.ui-proj__errors:empty {
+  display: none;
+}
+
+.ui-proj__spec {
+  min-height: 280px;
+  font: 12px/1.45 var(--font-mono);
+  resize: vertical;
+}
+
+.ui-proj__where {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ui-muted);
+  overflow-wrap: anywhere;
+}
+
+.ui-proj__drafts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-proj__drafts .ui-btn {
+  width: 100%;
+  text-align: left;
+}
+
+.ui-proj__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-proj__step {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  align-items: center;
+  column-gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--ui-bg-soft);
+  border-left: 3px solid var(--st-offline);
+  font-size: 12.5px;
+}
+
+.ui-proj__chip {
+  font: 600 10.5px/1.6 var(--font-ui);
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-radius: 4px;
+  background: var(--ui-line);
+  color: var(--ui-muted);
+}
+
+.ui-proj__note {
+  grid-column: 2;
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 11.5px/1.4 var(--font-ui);
+  color: var(--ui-muted);
+}
+
+.ui-proj__step.is-done { border-left-color: var(--lv-ok); }
+.ui-proj__step.is-done .ui-proj__chip { background: rgba(79, 209, 139, 0.18); color: #b9f2d2; }
+.ui-proj__step.is-running { border-left-color: var(--ui-accent); }
+.ui-proj__step.is-running .ui-proj__chip { background: var(--ui-accent-soft); color: var(--ui-accent); }
+.ui-proj__step.is-manual { border-left-color: var(--lv-warn); }
+.ui-proj__step.is-manual .ui-proj__chip { background: rgba(255, 181, 71, 0.16); color: #ffd79a; }
+.ui-proj__step.is-failed { border-left-color: var(--lv-crit); }
+.ui-proj__step.is-failed .ui-proj__chip { background: rgba(255, 107, 107, 0.16); color: #ffc0c0; }
+.ui-proj__step.is-skipped { opacity: 0.6; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .ui-proj__step.is-running .ui-proj__chip {
+    animation: ui-proj-pulse 1.2s ease-in-out infinite;
+  }
+}
+
+@keyframes ui-proj-pulse {
+  50% { opacity: 0.55; }
+}
+
+/* Painel "Loja" (ui/loja-panel.ts): status do OTA, build e envio, e o pacote de versão. */
+.ui-loja {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius);
+  background: var(--ui-bg-soft);
+  min-width: 0;
+}
+
+.ui-loja__title {
+  margin: 0;
+  font-size: 13px;
+}
+
+.ui-loja__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 4px 0;
+  --dot: var(--st-offline);
+}
+
+.ui-loja__row--running,
+.ui-loja__row--pending {
+  --dot: var(--st-waiting);
+}
+
+.ui-loja__row--success {
+  --dot: var(--lv-ok);
+}
+
+.ui-loja__row--failed {
+  --dot: var(--lv-crit);
+}
+
+.ui-loja__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--dot);
+  flex: none;
+}
+
+.ui-loja__kind {
+  font-weight: 600;
+  min-width: 9em;
+}
+
+.ui-loja__what {
+  color: var(--ui-muted);
+  font-size: 12px;
+}
+
+.ui-loja__link {
+  color: var(--ui-accent);
+  font-size: 12px;
+}
+
+.ui-loja__cut {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--ui-accent-soft);
+}
+
+.ui-loja__ver {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 20px;
+}
+
+.ui-loja__from,
+.ui-loja__arrow {
+  color: var(--ui-muted);
+  font-size: 14px;
+}
+
+.ui-loja__to {
+  color: var(--ui-accent);
+}
+
+.ui-loja__items {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ui-loja__notes pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}

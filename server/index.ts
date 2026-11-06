@@ -28,6 +28,9 @@ import { loadHeadlessScreen } from './pty/screen';
 import { openMainAgent, SessionHistory } from './sources/history';
 import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
+import { defaultProjectsRoot, ProjectsService } from './projects/create';
+import { loadGithubToken } from './projects/github-repo';
+import { createProjectRoutes } from './projects/http';
 import { PermissionRegistry } from './permissions/registry';
 import { ApprovalPin } from './permissions/pin';
 import { codexAccountOf } from './codex/http';
@@ -76,6 +79,8 @@ import { createWorktreeOps } from './chat/worktree';
 import { quotaBlock } from './chat/quota';
 import { readMetrics, RunService } from './chat/runs';
 import { ShipService } from './chat/ship';
+import { parseTranslation, readAppVersion, StoreService, translatePrompt } from './chat/lojas';
+import { takeSecrets } from './secret-env';
 import { GitHub, GitHubTokenStore } from './chat/github';
 import { openInVsCode } from './chat/bins';
 import { refinerFor, reviewDiff, runChecks, runQa } from './chat/gate';
@@ -357,13 +362,18 @@ const knownFolders = async (limit?: number) => {
   const last = new Map<string, number>();
   for (const a of snap.agents) last.set(a.roomId, Math.max(last.get(a.roomId) ?? 0, a.lastEventAt ?? 0));
   const rooms = snap.rooms.filter((r) => !isDemoId(r.id)).map((r) => ({ path: r.path, lastAt: last.get(r.id) ?? 0 }));
-  return recentFolders(history ? await history.list().catch(() => []) : [], rooms, limit);
+  // Repos dos produtos registrados também contam (um projeto novo do molde ainda não teve sessão nenhuma).
+  const repos = products().flatMap((p) => p.repos.map((r) => ({ path: r.path, lastAt: 0 })));
+  return recentFolders(history ? await history.list().catch(() => []) : [], [...rooms, ...repos], limit);
 };
 // Chat com agentes: abre processos com acesso total, então segue a mesma trava do terminal (e HABBLAUD_PTY, fora do Docker).
 const chatOff = chatOffReason({ inDocker: config.inDocker, ptyOptIn, terminal: config.terminal, terminalReason: terminalOffReason(process.env, config.host, config.inDocker) });
 // Ponte com o VBoards (vboards/vboards.ts): git config --global vboards.url/vboards.token/user.email ou
 // HABBLAUD_VBOARDS_URL/_TOKEN/_EMAIL; HABBLAUD_VBOARDS=0 desliga. A fila só é buscada com o Novo agente ligado.
 const vboardsConfig = await loadVBoardsConfig(process.env);
+// Lida a configuração, os segredos do Habblaud saem do process.env: nenhum processo filho (agente, portão, terminal,
+// hooks do git) herda o token do GitHub nem os outros (secret-env.ts).
+const envSecrets = takeSecrets(process.env);
 // Avisos ao dono (opcional, vboards/ntfy.ts): ntfy e/ou WhatsApp (WA-AKG), o horário do briefing e o provedor do Jarvis.
 const ntfy = new NotifySettings(join(config.dataDir, 'notify.json'));
 // API v1 do VBoards (vboards/api.ts): só com um token vb_ (ferramentas vboards_* do Jarvis e a caixa do WhatsApp).
@@ -516,9 +526,23 @@ const runs = chat
 late.runs = runs;
 // "Subir" (chat/ship.ts): push do branch agentic/*, PR, CI, merge e deploy pelo GitHub, sempre com o PIN. Token em
 // HABBLAUD_GITHUB_TOKEN ou <dataDir>/github.json (600, gravado só pelo próprio computador).
-const githubToken = new GitHubTokenStore(join(config.dataDir, 'github.json'));
+const githubToken = new GitHubTokenStore(join(config.dataDir, 'github.json'), { HABBLAUD_GITHUB_TOKEN: envSecrets.HABBLAUD_GITHUB_TOKEN });
+// Lojas (chat/lojas.ts): depois do deployed de um app, dispara o workflow de OTA/build/submit do próprio repo.
+const lojas = new StoreService({
+  folderConfig: (f) => readFolderConfig(f),
+  products,
+  token: () => githubToken.get(),
+  github: (token) => new GitHub(token),
+  remoteInfo: (f, r) => createWorktreeOps(config.dataDir).remoteInfo(f, r),
+  journal: { append: (e) => appendJournal(journalFile, e), read: (since) => readJournal(journalFile, since) },
+  notify: (title, event) => ntfy.notify(title, event),
+  appVersion: readAppVersion,
+  translate: async (lines) => parseTranslation((await claudeRunner(summaryCwd(config.dataDir))(translatePrompt(lines))).text, lines.length),
+  file: join(config.dataDir, 'chat', 'lojas.json'),
+});
 const ship = runs
   ? new ShipService({
+      onDeployed: (folder) => void lojas.afterDeployed(folder),
       runs,
       worktrees: createWorktreeOps(config.dataDir),
       token: () => githubToken.get(),
@@ -581,6 +605,29 @@ if (chat && jarvis) {
     if (id === jarvis.id()) hub.broadcast('jarvis', { agentId: id, idle: true });
   });
 }
+// Projeto novo a partir do molde (projects/): briefing, spec e criação retomável. Criar sempre passa pelo PIN.
+const projectsRoot = () => process.env.HABBLAUD_PROJECTS_ROOT?.trim() || defaultProjectsRoot(products().flatMap((p) => p.repos.map((r) => r.path)));
+const templateDir = () => process.env.HABBLAUD_TEMPLATE_DIR?.trim() || (projectsRoot() ? join(projectsRoot()!, 'app-base') : undefined);
+const projects = chatOff
+  ? undefined
+  : new ProjectsService({
+      dataDir: config.dataDir,
+      projectsRoot,
+      templateDir,
+      githubToken: () => loadGithubToken(config.dataDir),
+      githubOwner: () => process.env.HABBLAUD_GITHUB_OWNER?.trim() || undefined,
+      products: { load: () => loadProducts(productsFile), save: (raw) => saveProducts(productsFile, raw) },
+      writeFolderConfig: (f, v) => writeFolderConfig(f, v),
+      vboards: vboardsApi,
+      // O agente do projeto (Claude, pedindo aprovação a cada ação) faz a sala nova aparecer no escritório.
+      openAgent: chat
+        ? async (folder, prompt) => {
+            chatFolders = await knownFolders(100);
+            const r = chat.open({ folder, provider: 'claude', permission: 'ask', prompt });
+            return 'agentId' in r ? { agentId: r.agentId } : { reason: r.reason };
+          }
+        : undefined,
+    });
 // Triagem das ideias e laço de perguntas (vboards/triage.ts): uma rodada só de leitura, sem repositório (HABBLAUD_TRIAGE=0
 // desliga a varredura das ideias novas; as ferramentas e as respostas continuam).
 const triage =
@@ -608,6 +655,7 @@ const jarvisTools =
         runs,
         worktrees: createWorktreeOps(config.dataDir),
         ship,
+        lojas,
         folders: () => chatFolders,
         folderConfig: (f) => readFolderConfig(f),
         writeFolderConfig: (f, v) => writeFolderConfig(f, v),
@@ -619,6 +667,7 @@ const jarvisTools =
         metrics: (since) => readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since),
         journal: (since) => readJournal(journalFile, since),
         products,
+        projects,
         notify: (text, channel) => ntfy.sendText(text, { channel }),
         triggers,
         vboards: vboardsApi,
@@ -652,7 +701,11 @@ const routine = (kind: ReportKind) =>
         ...(triggers?.history() ?? []).filter((f) => f.outcome === 'failed' && f.at >= since).map((f) => tr('gatilho "{0}": {1}', [f.ruleName, f.note ?? ''])),
       ];
       const ledger = projectLedger(readJournal(journalFile, since - LEDGER_OPEN_MS), since);
-      return { since, summary, summaryError, metrics: readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since), quota: quotaLines(), failures, ledger, waiting: triage?.waiting().map((w) => ({ cardId: w.cardId, title: w.title, questions: w.questions })) };
+      const versions =
+        kind === 'weekly'
+          ? (await Promise.all(products().flatMap((p) => p.repos.filter((r) => r.role === 'app').map((r) => ({ app: p.name, folder: r.path }))).map(async (a) => ({ app: a.app, cut: await lojas.cut(a.folder, false).catch(() => undefined) })))).flatMap((x) => (x.cut?.items.length ? [{ app: x.app, version: x.cut.version, count: x.cut.items.length }] : []))
+          : undefined;
+      return { since, versions, summary, summaryError, metrics: readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since), quota: quotaLines(), failures, ledger, waiting: triage?.waiting().map((w) => ({ cardId: w.cardId, title: w.title, questions: w.questions })) };
     },
     post: (text) => void chat!.post(jarvis!.ensure(), text),
     notify: (text, headline) => ntfy.sendText(text, { title: reportTitle(kind), headline }),
@@ -687,6 +740,7 @@ const chatRoutes = chat
       delegation,
       runs,
       ship,
+      lojas,
       pin: approvalPin,
       github: githubToken,
       openEditor: (path) => openInVsCode(path),
@@ -701,6 +755,7 @@ if (chat) {
   runs?.load();
   runs?.start();
   ship?.start();
+  lojas.start();
   triggers?.load();
   triggers?.start();
   if (process.env.HABBLAUD_TRIAGE !== '0') setInterval(() => void triage?.scan().catch((err) => log.warnOnce(`triage:scan:${errMsg(err)}`, tr('Triagem: falha na varredura das ideias ({0}).', [errMsg(err)]))), 2 * 60_000).unref();
@@ -744,6 +799,7 @@ const api = createApiHandler({
   triage,
   ntfy,
   products: { load: () => loadProducts(productsFile), save: (raw) => saveProducts(productsFile, raw) },
+  projects: projects ? createProjectRoutes(projects, permissions ? approvalPin : undefined, () => ({ githubOwner: process.env.HABBLAUD_GITHUB_OWNER?.trim() || undefined, root: projectsRoot(), template: templateDir() })) : undefined,
   chat: chatRoutes,
   chatOff,
   codexLive,

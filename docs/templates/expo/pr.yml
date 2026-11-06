@@ -1,0 +1,25 @@
+# Modelo do Habblaud: CI de PR para app Expo. Copie para .github/workflows/pr.yml do repo do app.
+# Sem checks no PR o Habblaud trata o CI como vazio (no-ci) e o merge pede PIN extra.
+name: pr
+
+on:
+  pull_request:
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test --if-present
+      - run: npx expo-doctor

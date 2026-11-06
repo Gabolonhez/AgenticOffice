@@ -16,7 +16,7 @@ import { basename, dirname } from 'node:path';
 import { maskSecrets } from '../../shared/activity';
 import { CHAT_TEXT_MAX } from '../../shared/chat';
 import { tr } from '../../shared/i18n';
-import type { ChatRun, RunMetric } from '../../shared/runs';
+import { shipApprovalOf, type ChatRun, type RunMetric } from '../../shared/runs';
 import type { TriggerRule } from '../../shared/triggers';
 import type { Provider } from '../../shared/types';
 import { askHuman, type HumanAnswer, type McpTool } from '../chat/permission';
@@ -24,7 +24,9 @@ import { LEDGER_OPEN_MS, projectLedger, type JournalEntry } from '../chat/journa
 import type { RunService } from '../chat/runs';
 import type { ShipService } from '../chat/ship';
 import { riskLabel } from '../chat/risk';
+import type { StoreService } from '../chat/lojas';
 import type { Product } from '../vboards/products';
+import { parseOptions, type ProjectsService } from '../projects/create';
 import type { ChatService } from '../chat/service';
 import type { TriggerService } from '../chat/triggers';
 import type { WorktreeOps } from '../chat/types';
@@ -49,7 +51,7 @@ export const NOTIFY_NTFY_MAX = 200;
 export const NOTIFY_WA_MAX = 3000;
 const HOUR = 60 * 60_000;
 /** Ferramentas de leitura que devolvem texto de fora (embrulhado): contaminam o turno desde o início da chamada. */
-const UNTRUSTED_READS: ReadonlySet<string> = new Set(['projects_status', 'release_notes', 'memory_read','agents_list', 'agents_read', 'runs_get', 'runs_ship_status', 'vboards_me', 'vboards_projects', 'vboards_tasks_list', 'vboards_schedule_list', 'vboards_summary', 'vboards_triage', 'vboards_research']);
+const UNTRUSTED_READS: ReadonlySet<string> = new Set(['projects_status', 'release_notes', 'release_cut', 'memory_read','agents_list', 'agents_read', 'runs_get', 'runs_ship_status', 'vboards_me', 'vboards_projects', 'vboards_tasks_list', 'vboards_schedule_list', 'vboards_summary', 'vboards_triage', 'vboards_research']);
 const READ_ITEMS = 30;
 const READ_TEXT = 600;
 const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'antigravity'];
@@ -107,6 +109,8 @@ export interface JarvisToolsDeps {
   worktrees?: Pick<WorktreeOps, 'summary'>;
   /** "Subir" (chat/ship.ts): runs_ship sempre com cartão crítico (PIN), runs_ship_status SAFE. */
   ship?: Pick<ShipService, 'prepare' | 'approve' | 'status'>;
+  /** Lojas (chat/lojas.ts): release_cut SAFE (resultado embrulhado), release_submit sempre com cartão crítico (PIN). */
+  lojas?: Pick<StoreService, 'cut' | 'request' | 'appFolder'>;
   folders: () => Array<{ path: string; name?: string }>;
   folderConfig: (folder: string) => Promise<FolderConfig>;
   writeFolderConfig: (folder: string, values: Partial<Record<FolderKey, string>>) => Promise<string | undefined>;
@@ -115,6 +119,8 @@ export interface JarvisToolsDeps {
   /** Registro por projeto (chat/journal.ts) desde `since`, e o registro de produtos (projects_status, release_notes). */
   journal?: (since: number) => JournalEntry[];
   products?: () => Product[];
+  /** Projeto novo a partir do molde (projects_draft, projects_create). */
+  projects?: Pick<ProjectsService, 'draft' | 'plan' | 'facts' | 'start' | 'get'>;
   notify?: (text: string, channel: NotifyChannel) => Promise<{ ntfy?: boolean; whatsapp?: boolean; error?: string }>;
   triggers?: Pick<TriggerService, 'list' | 'create' | 'update' | 'remove' | 'test'>;
   vboards?: VBoardsApi;
@@ -243,6 +249,20 @@ export class JarvisTools {
       t('projects_config_get', 'SAFE. Settings of a folder (git config vboards.*; the check command masked).', obj({ folder: S() }, ['folder']), async (a) => this.projectsConfigGet(a)),
       t('projects_status', 'SAFE. Per project (product or folder; empty = all), from the journal: done and stuck in the last 7 days, doing, to do. Wrapped as untrusted data.', obj({ project: S('Product id/name or folder (path or name)') }), async (a) => this.projectsStatus(a)),
       t('release_notes', 'SAFE. What was merged or deployed in a folder or product since `since` (ms epoch; default 7 days): titles for release notes. Wrapped as untrusted data.', obj({ folder: S('Folder (path or name) or product'), since: { type: 'number' } }, ['folder']), async (a) => this.releaseNotes(a)),
+      t(
+        'projects_draft',
+        'SAFE. Briefing of a NEW product from the app-base template: pass what you know (idea, name, audience, monetization, parts app/server/web, bundleId, primaryColor #RRGGBB, secondaryColor, notes). Returns the questions still missing (ask the owner, then call again with everything) or saves spec.md + plan and returns the slug for projects_create.',
+        obj({ idea: S(), name: S(), audience: S(), monetization: S(), parts: { type: 'array', items: { type: 'string', enum: ['app', 'server', 'web'] } }, bundleId: S(), primaryColor: S(), secondaryColor: S(), notes: S() }, ['idea']),
+        async (a) => this.projectsDraft(a),
+      ),
+      t(
+        'projects_create',
+        'GATED, ALWAYS (owner card with PIN, even in a clean turn). Creates the product drafted by projects_draft: copies the template, personalizes, CI workflow, git init + first commit, optional private GitHub repos (github + githubOwner), registry + vboards.* keys, optional VBoards card (vboards) and an agent in the new room (agent). Resumable: call again to retry what is pending. Never pushes.',
+        obj({ slug: S(), github: { type: 'boolean' }, githubOwner: S(), vboards: { type: 'boolean' }, agent: { type: 'boolean' }, ...REASON }, ['slug']),
+        async (a) => this.projectsCreate(a),
+      ),
+      t('release_cut', 'SAFE. Release package of an app (folder or product): tasks deployed since the last version, proposed semver and the "what is new" text in pt/en/es. Titles come from PRs: wrapped as untrusted data.', obj({ app: S('App folder (path or name) or product') }, ['app']), async (a) => this.releaseCut(a)),
+      t('release_submit', 'GATED, always (critical card with PIN). Sends the app version for store review: dispatches the repo store workflow (kind=submit). Use the version from release_cut.', obj({ app: S(), version: S('x.y.z from release_cut'), ...REASON }, ['app', 'version']), async (a) => this.releaseSubmit(a)),
       t('projects_config_set','GATED. Changes settings of a folder (keys: card, auto, provider, budget, check, reviewer, reviewerModel, copy, ship, base, remote, deploy, ciMinutes, autoMerge, riskPaths, riskLines). autoMerge=low lets low-risk tasks ship WITHOUT PIN: only from a clean turn of the owner on the page.', obj({ folder: S(), values: { type: 'object' }, ...REASON }, ['folder', 'values']), async (a) => this.projectsConfigSet(a)),
       // --- uso
       t('usage_accounts', 'SAFE. Accounts and their 5h/week quota.', obj({}), async () => ok(this.deps.accounts?.() ?? [])),
@@ -511,29 +531,34 @@ export class JarvisTools {
         tr('SHA: {0}', [s.sha]),
         ...(s.prUrl ? [tr('PR: {0}', [s.prUrl])] : []),
       ];
-      const refused = await this.gate('runs_ship', { id: run.id, sha: s.sha, noCi: true }, facts, a.reason);
+      const approval = shipApprovalOf(s, true);
+      if (s.risky?.length) facts.push(tr('ATENÇÃO: o diff muda workflows/hooks ({0}); CI verde não prova nada.', [s.risky.join(', ')]));
+      facts.push(tr('Remoto: {0} · modo: {1} · deploy: {2}', [s.remote, s.mode, s.deploy]));
+      const refused = await this.gate('runs_ship', { id: run.id, ...approval }, facts, a.reason);
       if (refused) return fail(refused);
-      const r = await ship.approve(run.id, { sha: s.sha, noCi: true });
+      const r = await ship.approve(run.id, approval);
       return 'run' in r ? ok(tr('Merge sem CI aprovado: segue para o merge.')) : fail(r.error);
     }
     const p = await ship.prepare(run.id);
     if ('error' in p) return fail(p.error);
     const facts = [
+      ...(s?.needs === 'reapprove' ? [tr('RETOMADA depois de um reinício: o push/merge desta lista só segue com o PIN de novo.')] : []),
       tr('SUBIR a lista {0}: push do branch e PR ({1})', [run.id, p.mode === 'merge' ? tr('com CI verde, merge automático e deploy') : tr('só o PR')]),
       tr('Pasta: {0}', [p.folder]),
       tr('Repositório: {0}/{1}', [p.owner, p.repo]),
       tr('Base: {0}', [p.base]),
       tr('Branch: {0}', [p.branch]),
       tr('SHA: {0}', [p.sha]),
-      tr('Deploy: {0}', [p.deploy]),
+      tr('Remoto: {0} · modo: {1} · deploy: {2}', [p.remote, p.mode, p.deploy]),
       tr('Portão: {0}', [p.gate]),
       tr('Risco: {0}{1}', [riskLabel(p.risk), p.riskWhy.length ? ` (${clip(p.riskWhy.join('; '), 400)})` : '']),
       ...(p.risky.length ? [tr('ATENÇÃO: muda hooks/CI que rodam com a credencial do dono: {0}', [p.risky.join(', ')])] : []),
       tr('Diff: {0}', [clip(p.stat, 600) || tr('(vazio)')]),
     ];
-    const refused = await this.gate('runs_ship', { id: run.id, sha: p.sha, repo: `${p.owner}/${p.repo}` }, facts, a.reason);
+    const approval = shipApprovalOf(p);
+    const refused = await this.gate('runs_ship', { id: run.id, ...approval }, facts, a.reason);
     if (refused) return fail(refused);
-    const r = await ship.approve(run.id, { sha: p.sha });
+    const r = await ship.approve(run.id, approval);
     return 'run' in r ? ok(tr('Subindo: {0} → {1}/{2} ({3}). Acompanhe com runs_ship_status.', [p.branch, p.owner, p.repo, p.base])) : fail(r.error);
   }
 
@@ -583,6 +608,31 @@ export class JarvisTools {
     if (refused) return fail(refused);
     const err = await this.deps.writeFolderConfig(f.path, v.values);
     return err ? fail(tr('Não deu para gravar no git config da pasta: {0}', [maskSecrets(err)])) : ok(tr('Gravado no git config da pasta.'));
+  }
+
+  private projectsDraft(a: Record<string, unknown>): Result {
+    if (!this.deps.projects) return fail(tr('Projeto novo indisponível (chat com agentes desligado).'));
+    const r = this.deps.projects.draft(a);
+    if ('slug' in r) return ok({ slug: r.slug, next: tr('Mostre a spec ao dono; com o ok dele, chame projects_create.'), spec: r.spec });
+    return r.errors.length ? fail([...r.errors, ...r.questions.map((q) => q.question)].join('\n')) : ok({ questions: r.questions, next: tr('Pergunte ao dono o que falta e chame de novo com todas as respostas.') });
+  }
+
+  /** projects_create: SEMPRE cartão crítico (PIN), limpo ou contaminado; os fatos vêm do plano, a spec inteira vai junto. */
+  private async projectsCreate(a: Record<string, unknown>): Promise<Result> {
+    const svc = this.deps.projects;
+    if (!svc) return fail(tr('Projeto novo indisponível (chat com agentes desligado).'));
+    const slug = str(a.slug);
+    const options = parseOptions(a);
+    if ('error' in options) return fail(options.error);
+    const plan = svc.plan(slug, options);
+    if ('error' in plan) return fail(plan.error);
+    const spec = svc.get(slug)?.spec ?? '';
+    const refused = await this.gate('projects_create', { slug, ...options }, svc.facts(plan), a.reason, spec || undefined);
+    if (refused) return fail(refused);
+    const r = svc.start(slug, options);
+    if ('error' in r) return fail(r.error);
+    const end = await r.done;
+    return ok({ slug, root: end.root, steps: end.steps.map((s) => ({ id: s.id, status: s.status, ...(s.note ? { note: s.note } : {}) })) });
   }
 
   // ------------------------------------------------------------------ uso
@@ -637,6 +687,33 @@ export class JarvisTools {
       .slice(0, 100)
       .map((e) => ({ title: e.title ?? '', stage: e.stage, at: new Date(e.at).toISOString(), folder: basename(e.folder) }));
     return ok(wrapUntrusted('journal', target, JSON.stringify({ since: new Date(since).toISOString(), notes }, null, 1)));
+  }
+
+  private async releaseCut(a: Record<string, unknown>): Promise<Result> {
+    const l = this.deps.lojas;
+    const folder = l?.appFolder(str(a.app), this.deps.folders());
+    if (!l || !folder) return fail(tr('App não encontrado: diga a pasta ou o produto.'));
+    return ok(wrapUntrusted('release_cut', str(a.app), JSON.stringify(await l.cut(folder), null, 1)));
+  }
+
+  /** release_submit: cartão crítico com versão e texto nos 3 idiomas; só depois do PIN dispara o submit. */
+  private async releaseSubmit(a: Record<string, unknown>): Promise<Result> {
+    const l = this.deps.lojas;
+    const folder = l?.appFolder(str(a.app), this.deps.folders());
+    if (!l || !folder) return fail(tr('App não encontrado: diga a pasta ou o produto.'));
+    const version = str(a.version);
+    const cut = await l.cut(folder);
+    if (version !== cut.version) return fail(tr('A versão proposta agora é {0}, não {1}: rode release_cut de novo.', [cut.version, version]));
+    const facts = [
+      tr('ENVIAR PARA REVISÃO DA LOJA: {0} versão {1} (público e irreversível)', [basename(folder), cut.version]),
+      tr('Última versão: {0}', [cut.lastVersion ?? tr('(nenhuma)')]),
+      tr('Tarefas na versão: {0}', [cut.items.length]),
+      ...(cut.translated ? [] : [tr('Atenção: en/es estão em português (sem tradução).')]),
+    ];
+    const refused = await this.gate('release_submit', { app: folder, version }, facts, a.reason, [cut.notes.pt, cut.notes.en, cut.notes.es].join('\n\n'));
+    if (refused) return fail(refused);
+    const r = await l.request(folder, { kind: 'submit', version }, true);
+    return 'event' in r ? ok(tr('Disparado: submit da versão {0}. Acompanhe na tela da pasta.', [version])) : fail(r.error);
   }
 
   // ------------------------------------------------------------------ aviso

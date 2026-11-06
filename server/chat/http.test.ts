@@ -196,6 +196,7 @@ describe('chat: rotas HTTP', () => {
 
 describe('chat: rotas do "Subir"', () => {
   const SHA = 'a'.repeat(40);
+  const card = { sha: SHA, owner: 'acme', repo: 'api', base: 'main', remote: 'origin', mode: 'merge', deploy: 'none', risky: ['.husky/pre-push'] };
   async function startShip(o: { pinSet?: boolean; remote?: { is: boolean; trusted: boolean } } = {}) {
     const approvals: unknown[] = [];
     const saved: unknown[] = [];
@@ -222,7 +223,7 @@ describe('chat: rotas do "Subir"', () => {
 
   it('sem PIN definido = 403; nada sobe', async () => {
     const { port, approvals } = await startShip();
-    const r = await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456' });
+    const r = await post(port, '/api/chat/runs/r1/ship', { ...card, pin: '123456' });
     expect(r.status).toBe(403);
     expect(JSON.parse(r.body)).toMatchObject({ pin: 'unset', error: expect.stringMatching(/defina um PIN/) });
     expect(approvals).toEqual([]);
@@ -230,15 +231,19 @@ describe('chat: rotas do "Subir"', () => {
 
   it('PIN faltando ou errado = 403; certo sobe o SHA do cartão (e o noCi só quando pedido)', async () => {
     const { port, approvals } = await startShip({ pinSet: true });
-    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA })).status).toBe(403);
-    const wrong = await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '000000' });
+    expect((await post(port, '/api/chat/runs/r1/ship', card)).status).toBe(403);
+    const wrong = await post(port, '/api/chat/runs/r1/ship', { ...card, pin: '000000' });
     expect(wrong.status).toBe(403);
     expect(JSON.parse(wrong.body).pin).toBe('wrong');
     expect(approvals).toEqual([]);
     expect((await post(port, '/api/chat/runs/r1/ship', { sha: 'curto', pin: '123456' })).status).toBe(400);
-    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456' })).status).toBe(200);
-    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456', noCi: true })).status).toBe(200);
-    expect(approvals).toEqual([{ id: 'r1', sha: SHA }, { id: 'r1', sha: SHA, noCi: true }]);
+    expect((await post(port, '/api/chat/runs/r1/ship', { ...card, pin: '123456' })).status).toBe(200);
+    expect((await post(port, '/api/chat/runs/r1/ship', { ...card, pin: '123456', noCi: true })).status).toBe(200);
+    expect(approvals).toEqual([{ id: 'r1', ...card }, { id: 'r1', ...card, noCi: true }]);
+    // Cartão pela metade (só o SHA) não passa.
+    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456' })).status).toBe(400);
+    expect((await post(port, '/api/chat/runs/r1/ship', { ...card, risky: 'x', pin: '123456' })).status).toBe(400);
+    expect(approvals).toHaveLength(2);
   });
 
   it('prepare não pede PIN (só commita e mostra o cartão)', async () => {
@@ -251,7 +256,7 @@ describe('chat: rotas do "Subir"', () => {
 
   it('porta remota sem "chat" liberado: 403 no ship e no prepare', async () => {
     const { port, approvals } = await startShip({ pinSet: true, remote: { is: true, trusted: false } });
-    expect((await post(port, '/api/chat/runs/r1/ship', { sha: SHA, pin: '123456' })).status).toBe(403);
+    expect((await post(port, '/api/chat/runs/r1/ship', { ...card, pin: '123456' })).status).toBe(403);
     expect((await post(port, '/api/chat/runs/r1/ship/prepare', {})).status).toBe(403);
     expect(approvals).toEqual([]);
   });
@@ -273,5 +278,46 @@ describe('chat: rotas do "Subir"', () => {
     expect(JSON.parse(r.body)).toEqual({ opened: false, path: 'C:\\data\\wt\\r1' });
     expect(opened).toEqual(['C:\\data\\wt\\r1']);
     expect((await post(port, '/api/chat/runs/zz/vscode', {})).status).toBe(404);
+  });
+});
+
+describe('chat: rotas das lojas', () => {
+  async function startLojas() {
+    const requests: unknown[] = [];
+    const lojas = {
+      list: () => [],
+      lastByKind: () => ({}),
+      cut: async () => ({ version: '1.0.1' }),
+      request: async (folder: string, a: unknown) => (requests.push({ folder, ...(a as object) }), { event: { id: 'st1' } }),
+      approve: async () => ({ event: { id: 'st1' } }),
+    } as unknown as ChatRouteDeps['lojas'];
+    const pin = { check: async (p: unknown) => (p === '123456' ? 'ok' : p === undefined ? 'missing' : 'wrong'), triesLeft: () => 4 } as unknown as ChatRouteDeps['pin'];
+    const routes = createChatRoutes({ chat: {} as ChatRouteDeps['chat'], folders: () => [{ path: 'C:\\app' }], accounts: () => [], lojas, pin });
+    const server = http.createServer((req, res) => routes(req, res, new URL(req.url ?? '/', 'http://x'), undefined));
+    servers.push(server);
+    await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
+    return { port: (server.address() as AddressInfo).port, requests };
+  }
+  const post = (port: number, path: string, body: unknown) => raw(port, path, { method: 'POST', headers: json, body: JSON.stringify(body) });
+
+  it('OTA em preview não pede PIN; production, build e submit pedem (sem PIN = 403 e nada dispara)', async () => {
+    const { port, requests } = await startLojas();
+    const base = { folder: 'C:\\app' };
+    expect((await post(port, '/api/chat/lojas/request', { ...base, kind: 'ota', channel: 'preview' })).status).toBe(200);
+    for (const b of [{ kind: 'ota', channel: 'production' }, { kind: 'ota' }, { kind: 'build' }, { kind: 'submit', version: '1.0.1' }]) {
+      expect((await post(port, '/api/chat/lojas/request', { ...base, ...b })).status).toBe(403);
+      expect((await post(port, '/api/chat/lojas/request', { ...base, ...b, pin: '000000' })).status).toBe(403);
+    }
+    expect(requests).toHaveLength(1);
+    expect((await post(port, '/api/chat/lojas/request', { ...base, kind: 'submit', version: '1.0.1', pin: '123456' })).status).toBe(200);
+    expect(requests).toHaveLength(2);
+  });
+
+  it('approve exige PIN; pasta desconhecida = 404/400', async () => {
+    const { port } = await startLojas();
+    expect((await post(port, '/api/chat/lojas/approve', { id: 'st1' })).status).toBe(403);
+    expect((await post(port, '/api/chat/lojas/approve', { id: 'st1', pin: '123456' })).status).toBe(200);
+    expect((await post(port, '/api/chat/lojas/cut', { folder: 'C:\\outra' })).status).toBe(404);
+    expect((await post(port, '/api/chat/lojas/request', { folder: 'C:\\outra', kind: 'ota' })).status).toBe(400);
   });
 });

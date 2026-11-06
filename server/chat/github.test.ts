@@ -122,6 +122,42 @@ describe('github: chamadas REST (fetch falso)', () => {
   });
 });
 
+describe('github: paginação e token só fine-grained', () => {
+  const sha = 'a'.repeat(40);
+  const page = (runs: unknown[], next?: string) => new Response(JSON.stringify({ check_runs: runs }), { status: 200, headers: { 'Content-Type': 'application/json', ...(next ? { Link: `<${next}>; rel="next", <x>; rel="last"` } : {}) } });
+
+  it('check-runs: segue o Link next até o fim (uma falha na página 2 reprova)', async () => {
+    const urls: string[] = [];
+    const p2 = `${API}/commits/${sha}/check-runs?per_page=100&page=2`;
+    const f = (async (url: string) => {
+      urls.push(url);
+      if (url.includes('/status')) return new Response(JSON.stringify({ statuses: [] }), { status: 200 });
+      return url === p2 ? page([{ status: 'completed', conclusion: 'failure' }]) : page([{ status: 'completed', conclusion: 'success' }], p2);
+    }) as unknown as typeof fetch;
+    expect(ciVerdict(await new GitHub(TOKEN, f).checks(R, sha))).toBe('fail');
+    expect(urls).toContain(p2);
+  });
+
+  it('Link para outro host não é seguido (o token não sai do GitHub)', async () => {
+    const urls: string[] = [];
+    const f = (async (url: string) => {
+      urls.push(url);
+      if (url.includes('/status')) return new Response(JSON.stringify({ statuses: [] }), { status: 200 });
+      return page([{ status: 'completed', conclusion: 'success' }], 'https://evil.example/x');
+    }) as unknown as typeof fetch;
+    await new GitHub(TOKEN, f).checks(R, sha);
+    expect(urls.some((u) => u.includes('evil'))).toBe(false);
+  });
+
+  it('token clássico (ghp_) é recusado com explicação; na variável conta como sem token', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'hb-gh-')), 'github.json');
+    expect(new GitHubTokenStore(file, {}).save(`ghp_${'a'.repeat(36)}`)).toMatch(/clássico.*fine-grained/);
+    const env = new GitHubTokenStore(file, { HABBLAUD_GITHUB_TOKEN: `ghp_${'a'.repeat(36)}` });
+    expect(env.get()).toBeUndefined();
+    expect(env.view(true)).toMatchObject({ set: false, source: 'env' });
+  });
+});
+
 describe('github: token', () => {
   it('env vence o arquivo; o arquivo nasce 600 e o token não volta na vista', () => {
     const file = join(mkdtempSync(join(tmpdir(), 'hb-gh-')), 'github.json');

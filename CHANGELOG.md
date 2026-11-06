@@ -23,25 +23,65 @@ do meio (0.**3**.0).
   com o link do PR e registra "auto" no registro por projeto; quando não sobe, o cartão diz por quê.
 - **Só liga pela tela local** (com confirmação) **ou pelo cartão com PIN do Jarvis**, num pedido seu pela página:
   WhatsApp, voz, VBoards e agendamentos nunca ligam.
+### Projeto novo a partir do molde
+
+- **Novo projeto:** botão na barra do topo com um assistente em 4 etapas: a ideia, as perguntas do briefing (nome,
+  público, monetização, partes app/server/web, bundle id e cores), a revisão da spec e do plano (em
+  `~/.habblaud/projects/<slug>/spec.md`) e o checklist da criação, com o status de cada passo (feito, pendente, manual).
+  Criar pede o PIN de aprovação. O molde (`HABBLAUD_TEMPLATE_DIR`, padrão `app-base` na pasta dos projetos) é copiado
+  para `<HABBLAUD_PROJECTS_ROOT>/<slug>/<slug>-app|server|web` sem `node_modules`, `.git`, `.env`, pastas nativas nem
+  credenciais, e nunca por cima de uma pasta que já existe. Depois: nome, slug, bundle id, package e cores
+  personalizados, workflow de CI de pull request e `eas.json` (os workflows de deploy do molde não ficam ativos: vão como
+  modelo para `docs/deploy-templates/` e o deploy vira passo manual, com secrets e host próprios), `git init` com o commit inicial, repositórios privados no
+  GitHub (opcional; sem a permissão Administration o passo vira manual com a instrução), o produto no registro com as
+  chaves `vboards.*` (ship desligado), o card no VBoards com os cards iniciais da spec (opcional) e um agente que abre a
+  sala nova no escritório. A criação é retomável: rodar de novo tenta só o que falta. Nada faz push nem deploy.
+- **Jarvis:** `projects_draft` conduz o briefing e grava a spec; `projects_create` cria o projeto sempre com cartão
+  crítico (PIN), mesmo num turno limpo.
+### Lojas para apps Expo
+
+- **OTA, build e envio à loja pelo CI do próprio app:** com `vboards.store` = `ota` ou `ota+build` e
+  `vboards.storeWorkflow`, depois do deploy de um repositório com papel `app` o Habblaud dispara o workflow do repo
+  (`workflow_dispatch` com `kind`, `channel` e `version`) e acompanha a execução. O OTA em canal que não é
+  `production` (`vboards.otaChannel`, padrão `preview`) sai sozinho; OTA em `production`, build e envio para revisão
+  da loja só saem com o PIN. Cada etapa vai ao registro (`ota_preview`, `ota_production`, `build`, `submitted`) e ao
+  celular. O token do GitHub precisa de Actions: Read and write.
+- **Pacote de versão (`release_cut`):** agrupa as tarefas no ar desde a última versão enviada, propõe a versão
+  (semver, `vboards.versionBump`) e o texto "o que há de novo" em pt/en/es, tratado como dado de fora. A ferramenta
+  `release_submit` do Jarvis abre o cartão crítico "Enviar para revisão da loja". O resumo semanal ganha a sugestão
+  de versão por app.
+- **Painel "Loja" em Configurações › VBoards:** status do último OTA, build e envio com o link da execução, e o botão
+  "Preparar versão".
+- **Modelos de workflow** em `docs/templates/expo/` (`pr.yml`, `store.yml` e um README com a Fase 0 de cada app).
 
 ### Subir: do PR ao deploy
 
 - **Botão "Subir" nas listas:** a cópia isolada de uma lista vira um PR no GitHub, com um cartão que mostra pasta,
-  repositório, base, branch, o SHA exato, o diffstat, o resultado do portão e, em destaque, mudanças em `.husky/`,
-  `.githooks/` e `.github/workflows/`. Só sobe com o PIN de aprovação, e o push e o merge ficam presos àquele SHA.
-- **Push seguro:** só branches `agentic/*`, nunca a base, sem force; o token vai só no ambiente do git (nunca na linha de
-  comando), sem hooks e sem janela de senha. Uma varredura recusa `.env`, chaves privadas, `*adminsdk*.json` e tokens
-  (`ghp_`, `github_pat_`, `sk-`, `AKIA`, `xox`) no diff.
-- **CI, merge e deploy:** com `vboards.ship=merge`, o Habblaud acompanha o CI a cada minuto (prazo em
-  `vboards.ciMinutes`, padrão 30), faz o merge pelo SHA aprovado só com CI verde e espera o workflow de
-  `vboards.deploy=workflow:<arquivo.yml>` (ou `none`). Repo sem CI de PR nunca conta como verde: o merge pede uma
-  aprovação extra com PIN ("merge = deploy em produção"). Tudo sobrevive a um reinício. Produto com vários repos sobe na
-  ordem server → web → app. Depois do deploy, a cópia é descartada e o checkout local avança se estiver limpo e na base.
+  repositório, base, remoto, modo, deploy, branch, o SHA exato, o diffstat, o resultado do portão e, em destaque, mudanças
+  em `.husky/`, `.githooks/` e `.github/workflows/`. Só sobe com o PIN de aprovação, e a aprovação prende o cartão
+  inteiro: se qualquer um desses campos mudar, o Habblaud recusa e pede para aprovar de novo.
+- **Push seguro:** só branches `agentic/*`, nunca a base, sem force. Sobe um único commit (squash da árvore aprovada), a
+  partir de um repositório temporário que não lê a configuração do sistema, a global nem a do projeto (nada de
+  `insteadOf`, proxy, include ou hooks do repo); o token vai só no ambiente do git, nunca na linha de comando, com TLS
+  verificado e sem janela de senha. Uma varredura endurecida (sem textconv, diff externo nem attributes; binário como
+  texto) recusa `.env`, chaves privadas, `*adminsdk*.json`, `.p8`, `.p12`, `.jks`, `.keystore`, `.mobileprovision` e
+  tokens (`ghp_`, `github_pat_`, `sk-`, `sk_live_`/`rk_live_`, `AIza`, `_authToken`, `AKIA`, `xox`).
+- **CI, merge e deploy:** com `vboards.ship=merge`, o Habblaud acompanha o CI a cada minuto (todas as páginas de checks;
+  prazo em `vboards.ciMinutes`, padrão 30), faz o merge pelo SHA que subiu só com CI verde e espera o workflow de
+  `vboards.deploy=workflow:<arquivo.yml>` (ou `none`). Repo sem CI de PR nunca conta como verde, e um diff que muda os
+  próprios workflows ou hooks também não: o merge pede uma aprovação extra com PIN ("merge = deploy em produção").
+  Produto com vários repos sobe na ordem server → web → app. Depois do deploy, a cópia é descartada e o checkout local
+  avança (sem hooks) se estiver limpo e na base.
+- **Reinício:** o acompanhamento de um deploy já juntado continua sozinho; push e merge que ainda não aconteceram voltam
+  a esperar o PIN ("Aprovar de novo"), conferidos de novo contra a cópia e a pasta.
 - **Progresso e avisos:** barra de etapas (push, PR, CI, merge, deploy) com o link do PR; etapa e link vão para o VBoards
   e para o registro por projeto; avisos no celular de PR aberto, CI falho, repo sem CI e deployed. Juntar e Subir são
   exclusivos por lista. O Jarvis ganhou `runs_ship` (sempre cartão com PIN) e `runs_ship_status`.
-- **Configurações:** campos `ship`, `base`, `remote`, `deploy` e `ciMinutes` por pasta e a tela **Token do GitHub**
-  (fine-grained; fica só neste computador, em `~/.habblaud/github.json` com permissão 600, ou em `HABBLAUD_GITHUB_TOKEN`).
+- **Configurações:** campos `ship`, `base`, `remote`, `deploy` e `ciMinutes` por pasta e a tela **Token do GitHub**. Só
+  token fine-grained (`github_pat_`; o clássico `ghp_` é recusado). Fica neste computador, em `~/.habblaud/github.json`
+  com permissão 600, ou em `HABBLAUD_GITHUB_TOKEN`; os segredos do Habblaud não vão para nenhum processo filho (agentes,
+  portão, QA, terminal, hooks). **Limite:** os agentes rodam com o seu usuário do sistema e conseguem ler os arquivos de
+  `~/.habblaud`, inclusive o token; por isso use um token fine-grained restrito aos repositórios necessários.
 - **Abrir no VS Code:** abre a cópia isolada de uma lista no VS Code; sem o comando `code`, mostra o caminho para copiar.
 
 ### Triagem, perguntas e pesquisa do VBoards

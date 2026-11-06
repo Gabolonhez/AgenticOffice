@@ -117,8 +117,14 @@ export interface RunShip {
   branch: string;
   /** `none` ou `workflow:<arquivo.yml>`. */
   deploy: string;
+  /** Hooks/CI mudados pelo próprio diff: CI verde não basta (o merge pede a confirmação extra). */
+  risky: string[];
   ciMinutes: number;
   startedAt: number;
+  /** O commit que subiu (squash da árvore do `sha`): o PR, o CI e o merge são dele. */
+  pushedSha?: string;
+  /** Pai do squash: o commit que já subiu antes neste branch (subir de novo sem force). */
+  parentSha?: string;
   /** Quando entrou na etapa atual (prazos do CI e do deploy). */
   stepAt: number;
   prNumber?: number;
@@ -126,8 +132,12 @@ export interface RunShip {
   ci?: CiVerdict;
   /** O commit do merge na base (o deploy espera o workflow dele). */
   mergeSha?: string;
-  /** Repo sem CI de PR: o merge espera uma aprovação extra com PIN ("merge = deploy em produção"). */
-  needs?: 'no-ci';
+  /**
+   * 'no-ci': repo sem CI de PR (ou que muda o próprio CI): o merge espera uma aprovação extra com PIN ("merge = deploy
+   * em produção"). 'reapprove': o servidor reiniciou antes do merge; push e merge esperam o PIN de novo (runs.json não
+   * é prova de aprovação).
+   */
+  needs?: 'no-ci' | 'reapprove';
   noCiApproved?: boolean;
   /** Etapa em que falhou. */
   failedAt?: ShipStep;
@@ -166,6 +176,29 @@ export interface ShipPreview {
   risk: RiskLevel;
   riskWhy: string[];
 }
+
+/**
+ * O que a aprovação prende (a rota e o Jarvis mandam; o servidor compara campo a campo com o que vale agora): mudou
+ * qualquer um, recusa.
+ */
+export interface ShipApproval {
+  sha: string;
+  owner: string;
+  repo: string;
+  base: string;
+  remote: string;
+  mode: 'pr' | 'merge';
+  deploy: string;
+  risky: string[];
+  /** A aprovação extra do merge sem CI. */
+  noCi?: boolean;
+}
+
+export const shipApprovalOf = (x: Omit<ShipApproval, 'noCi'>, noCi?: boolean): ShipApproval => ({ sha: x.sha, owner: x.owner, repo: x.repo, base: x.base, remote: x.remote, mode: x.mode, deploy: x.deploy, risky: [...x.risky], ...(noCi ? { noCi: true } : {}) });
+
+/** Mesmo conjunto aprovado (noCi incluído). */
+export const sameApproval = (a: ShipApproval, b: ShipApproval): boolean =>
+  a.sha === b.sha && a.owner === b.owner && a.repo === b.repo && a.base === b.base && a.remote === b.remote && a.mode === b.mode && a.deploy === b.deploy && !!a.noCi === !!b.noCi && a.risky.length === b.risky.length && a.risky.every((r, i) => r === b.risky[i]);
 
 /** GET/PUT /api/chat/github: o token do GitHub do "Subir" (nunca volta para a página). */
 export interface GitHubTokenView {

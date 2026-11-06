@@ -16,6 +16,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { PtyInfo, PtyStatus } from '../../shared/types';
 import { frame } from '../http/sse';
 import { errMsg, log } from '../log';
+import { withoutSecrets } from '../secret-env';
 import { pidAlive } from '../sources/registry';
 import { readProcInfo, sameProcess, type ProcInfo, type RegisteredProc } from './procinfo';
 import { killWithConsoleReset } from './winkill';
@@ -414,7 +415,7 @@ export class PtyManager {
     const spawn = this.opts.spawn;
     if (!spawn) throw new PtyError(503, tr('terminal desligado: {0}', [this.opts.disabledReason ?? tr('indisponível')]));
     const { cwd, account, cols, rows } = plan;
-    const env: NodeJS.ProcessEnv = { ...(this.opts.env ?? process.env), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+    const env: NodeJS.ProcessEnv = { ...withoutSecrets(this.opts.env ?? process.env), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
     for (const k of INHERITED_SESSION_VARS) delete env[k];
     if (account.isDefault) delete env.CLAUDE_CONFIG_DIR;
     else env.CLAUDE_CONFIG_DIR = account.dir;

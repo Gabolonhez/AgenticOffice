@@ -131,6 +131,8 @@ export interface ApiDeps {
    * remota só leitura, como a configuração das pastas.
    */
   products?: { load(): { products: unknown[]; error?: string }; save(raw: unknown): { products: unknown[] } | { error: string } };
+  /** Assistente "Novo projeto" (projects/http.ts): /api/projects/*. Só pelo próprio computador. */
+  projects?: (req: IncomingMessage, res: ServerResponse, path: string) => void;
 }
 
 /** Corpo do POST /api/assets3d/import: o zip (~10 MB) em base64. */
@@ -726,6 +728,18 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
             .catch((err) => fail(res, err));
       } else sendJson(res, 404, { error: tr('rota desconhecida') });
       if (!vb || problem) req.resume();
+      return true;
+    }
+    if (path === '/api/projects' || path.startsWith('/api/projects/')) {
+      // Copia o molde, roda git e cria repositórios: só pelo próprio computador (a trava do terminal interativo).
+      const problem = isRemote(req) ? tr('o assistente de projeto novo só funciona pelo próprio computador (http://localhost)') : ptyRequestProblem(req);
+      if (!deps.projects) {
+        req.resume();
+        sendJson(res, 404, { error: tr('rota desconhecida') });
+      } else if (problem) {
+        req.resume();
+        sendJson(res, 403, { error: problem });
+      } else deps.projects(req, res, path);
       return true;
     }
     if (path === '/api/dictation' || path.startsWith('/api/dictation/')) {

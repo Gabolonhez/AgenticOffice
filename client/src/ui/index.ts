@@ -14,6 +14,7 @@ import type { Selection, WorldApi } from '../world/api';
 import type { PanelName, TerminalRouter, UiComponent, UiContext } from './context';
 import { DayLauncher } from './daystats-launcher';
 import { SummaryPanel } from './summary';
+import { ProjectWizard } from './projects';
 import { RoomRenamer } from './roomrename';
 import { h } from './dom';
 import { CanvasView } from './canvas';
@@ -315,6 +316,10 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   root.append(summary.el);
   const day = new DayLauncher(ctx, (el) => root.append(el));
   topbar.addPanelButton(day.button);
+  // Novo projeto a partir do molde (server/projects): briefing, spec e criação com o PIN.
+  const projects = new ProjectWizard(ctx);
+  topbar.addPanelButton(projects.button);
+  root.append(projects.el);
   // Quadro: os agentes em cartões, alternando com a pixel art (atalho V).
   canvas = new CanvasView(ctx);
   topbar.addPanelButton(canvas.button);
@@ -340,7 +345,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   }));
   drawer.onLayoutChange = () => applyLayout();
 
-  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, summary, updateToaster, invite, worldChip, vboards, canvas, jarvis];
+  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, summary, projects, updateToaster, invite, worldChip, vboards, canvas, jarvis];
   if (scene) components.push(scene);
   if (scene3d) components.push(scene3d);
   root.append(worldSocial.el);
