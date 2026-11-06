@@ -65,7 +65,7 @@ import { VBoardsApi } from './vboards/api';
 import { JarvisInbox, JarvisService, JARVIS_ID } from './jarvis/service';
 import { JarvisTools } from './jarvis/tools';
 import { createJarvisRoutes } from './jarvis/http';
-import { Briefing } from './jarvis/briefing';
+import { Briefing, reportTitle, type ReportKind } from './jarvis/briefing';
 import { Delegation } from './chat/delegation';
 import { createChatRoutes } from './chat/http';
 import { claudeRunner, DaySummaryService, gitSubjectsToday, summaryCwd } from './summary/service';
@@ -75,6 +75,8 @@ import { quotaBlock } from './chat/quota';
 import { readMetrics, RunService } from './chat/runs';
 import { refinerFor, reviewDiff, runChecks } from './chat/gate';
 import { NotifySettings } from './vboards/ntfy';
+import { loadProducts, productOfFolder, saveProducts, type Product } from './vboards/products';
+import { LEDGER_OPEN_MS, projectLedger, readJournal } from './chat/journal';
 import { officeApprover, TriggerService } from './chat/triggers';
 
 const config = loadConfig();
@@ -360,6 +362,16 @@ const vboardsConfig = await loadVBoardsConfig(process.env);
 const ntfy = new NotifySettings(join(config.dataDir, 'notify.json'));
 // API v1 do VBoards (vboards/api.ts): só com um token vb_ (ferramentas vboards_* do Jarvis e a caixa do WhatsApp).
 const vboardsApi = 'off' in vboardsConfig ? undefined : new VBoardsApi(vboardsConfig);
+// Registro de produtos (vboards/products.ts): produto do VBoards -> repos (app, server, web). Lido a cada uso (é pequeno
+// e pode ser editado à mão); estragado = nenhum produto, com um aviso.
+const productsFile = join(config.dataDir, 'products.json');
+const products = (): Product[] => {
+  const r = loadProducts(productsFile);
+  if (r.error) log.warnOnce(`products:${r.error}`, tr('Registro de produtos ignorado: {0}', [r.error]));
+  return r.products;
+};
+// Registro por projeto (chat/journal.ts): as etapas das tarefas das listas, para o briefing e os relatórios.
+const journalFile = join(config.dataDir, 'chat', 'journal.jsonl');
 const vboards =
   'off' in vboardsConfig
     ? undefined
@@ -411,6 +423,7 @@ const vboards =
         // "Refinar" (o clique já foi no VBoards): uma rodada só de leitura na pasta, pelo vboards.provider.
         refine: chatOff ? undefined : (folder, prompt, cfg) => refinerFor(cfg.provider, folder, cfg.budget).run(prompt).then((r) => r.text),
         notify: (title, event) => ntfy.notify(title, event),
+        products,
         file: join(config.dataDir, 'vboards-links.json'),
       });
 vboards?.load();
@@ -479,6 +492,8 @@ const runs = chat
       gate: { checks: (cmd, cwd) => runChecks(cmd, cwd), review: (auto, diff) => reviewDiff(auto, diff, join(config.dataDir, 'review')) },
       file: join(config.dataDir, 'chat', 'runs.json'),
       metricsFile: join(config.dataDir, 'chat', 'run-metrics.jsonl'),
+      journalFile,
+      productOf: (folder) => productOfFolder(folder, products())?.id,
       maxParallel: config.maxParallelRuns,
       // Cota da conta (chat/quota.ts): a da lista ou a padrão do provedor (a pasta que a CLI usa sem conta escolhida).
       quota: (provider, account) => {
@@ -547,6 +562,8 @@ const jarvisTools =
             return { id: a.id, provider: a.provider, name: accounts.find(a.id)?.detected.name, status: v.status, fiveHourPct: v.usage?.fiveHour?.utilization, weekPct: v.usage?.sevenDay?.utilization, resetsAt: v.usage?.fiveHour?.resetsAt };
           }),
         metrics: (since) => readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since),
+        journal: (since) => readJournal(journalFile, since),
+        products,
         notify: (text, channel) => ntfy.sendText(text, { channel }),
         triggers,
         vboards: vboardsApi,
@@ -555,10 +572,12 @@ const jarvisTools =
     : undefined;
 // Caixa do WhatsApp do Jarvis: com o WA-AKG configurado e um token vb_ do VBoards.
 const jarvisInbox = jarvis && vboardsApi ? new JarvisInbox({ api: vboardsApi, wa: () => ntfy.wa(), say: (text, origin, ref) => jarvis.say(text, origin, ref) }) : undefined;
-// Briefing do Jarvis: no horário de notify.json (desligado sem hora) ou pelo botão.
-const briefing = jarvis
-  ? new Briefing({
-      settings: () => ntfy.briefing(),
+// Rotinas do Jarvis (jarvis/briefing.ts): o briefing (no horário de notify.json, desligado sem hora, ou pelo botão), o
+// fechamento do dia e o semanal (só no horário deles, desligados por padrão). Mesmo material, mesmos canais.
+const routine = (kind: ReportKind) =>
+  new Briefing({
+      kind,
+      settings: () => ntfy.briefing(kind),
       runner: claudeRunner(summaryCwd(config.dataDir)),
       gather: async (since) => {
         let summary: Record<string, unknown> | undefined;
@@ -574,13 +593,15 @@ const briefing = jarvis
           ...(runs?.list() ?? []).flatMap((r) => r.items.filter((i) => (i.state === 'failed' || i.state === 'interrupted') && (i.endedAt ?? 0) >= since).map((i) => tr('lista em {0}: {1} ({2})', [r.options.folder, i.text.slice(0, 80), i.state]))),
           ...(triggers?.history() ?? []).filter((f) => f.outcome === 'failed' && f.at >= since).map((f) => tr('gatilho "{0}": {1}', [f.ruleName, f.note ?? ''])),
         ];
-        return { since, summary, summaryError, metrics: readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since), quota: quotaLines(), failures };
+        const ledger = projectLedger(readJournal(journalFile, since - LEDGER_OPEN_MS), since);
+        return { since, summary, summaryError, metrics: readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since), quota: quotaLines(), failures, ledger };
       },
-      post: (text) => void chat!.post(jarvis.ensure(), text),
-      notify: (text, headline) => ntfy.sendText(text, { title: tr('Briefing'), headline }),
-      file: join(config.dataDir, 'jarvis', 'briefing.json'),
-    })
-  : undefined;
+      post: (text) => void chat!.post(jarvis!.ensure(), text),
+      notify: (text, headline) => ntfy.sendText(text, { title: reportTitle(kind), headline }),
+      file: join(config.dataDir, 'jarvis', kind === 'briefing' ? 'briefing.json' : `${kind}.json`),
+    });
+const briefing = jarvis ? routine('briefing') : undefined;
+const extraRoutines = jarvis ? [routine('closing'), routine('weekly')] : [];
 late.briefing = briefing;
 // Resumo do dia (server/summary): atividade de hoje no escritório, conversas do chat e commits das pastas conhecidas.
 const daySummary = chat
@@ -621,6 +642,7 @@ if (chat) {
   triggers?.start();
   jarvisInbox?.start();
   briefing?.start();
+  for (const r of extraRoutines) r.start();
   refreshChatFolders();
   setInterval(refreshChatFolders, 30_000).unref();
 }
@@ -655,6 +677,7 @@ const api = createApiHandler({
   spawnFolders: () => knownFolders(),
   vboards,
   ntfy,
+  products: { load: () => loadProducts(productsFile), save: (raw) => saveProducts(productsFile, raw) },
   chat: chatRoutes,
   chatOff,
   codexLive,
@@ -846,6 +869,7 @@ function shutdown(signal: string): void {
   triggers?.stop();
   jarvisInbox?.stop();
   briefing?.stop();
+  for (const r of extraRoutines) r.stop();
   chat?.stopAll();
   timeline?.stop();
   permissions?.stop();

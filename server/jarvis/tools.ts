@@ -20,7 +20,9 @@ import type { ChatRun, RunMetric } from '../../shared/runs';
 import type { TriggerRule } from '../../shared/triggers';
 import type { Provider } from '../../shared/types';
 import { askHuman, type HumanAnswer, type McpTool } from '../chat/permission';
+import { LEDGER_OPEN_MS, projectLedger, type JournalEntry } from '../chat/journal';
 import type { RunService } from '../chat/runs';
+import type { Product } from '../vboards/products';
 import type { ChatService } from '../chat/service';
 import type { TriggerService } from '../chat/triggers';
 import type { WorktreeOps } from '../chat/types';
@@ -43,7 +45,7 @@ export const NOTIFY_NTFY_MAX = 200;
 export const NOTIFY_WA_MAX = 3000;
 const HOUR = 60 * 60_000;
 /** Ferramentas de leitura que devolvem texto de fora (embrulhado): contaminam o turno desde o início da chamada. */
-const UNTRUSTED_READS: ReadonlySet<string> = new Set(['memory_read', 'agents_list', 'agents_read', 'runs_get', 'vboards_me', 'vboards_projects', 'vboards_tasks_list', 'vboards_schedule_list', 'vboards_summary']);
+const UNTRUSTED_READS: ReadonlySet<string> = new Set(['projects_status', 'release_notes', 'memory_read','agents_list', 'agents_read', 'runs_get', 'vboards_me', 'vboards_projects', 'vboards_tasks_list', 'vboards_schedule_list', 'vboards_summary']);
 const READ_ITEMS = 30;
 const READ_TEXT = 600;
 const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'antigravity'];
@@ -104,6 +106,9 @@ export interface JarvisToolsDeps {
   writeFolderConfig: (folder: string, values: Partial<Record<FolderKey, string>>) => Promise<string | undefined>;
   accounts?: () => unknown[];
   metrics?: (since: number) => RunMetric[];
+  /** Registro por projeto (chat/journal.ts) desde `since`, e o registro de produtos (projects_status, release_notes). */
+  journal?: (since: number) => JournalEntry[];
+  products?: () => Product[];
   notify?: (text: string, channel: NotifyChannel) => Promise<{ ntfy?: boolean; whatsapp?: boolean; error?: string }>;
   triggers?: Pick<TriggerService, 'list' | 'create' | 'update' | 'remove' | 'test'>;
   vboards?: VBoardsApi;
@@ -220,7 +225,9 @@ export class JarvisTools {
       // --- projetos
       t('projects_list', 'SAFE. Known project folders and their VBoards settings.', obj({}), async () => ok(await this.projectsList())),
       t('projects_config_get', 'SAFE. Settings of a folder (git config vboards.*; the check command masked).', obj({ folder: S() }, ['folder']), async (a) => this.projectsConfigGet(a)),
-      t('projects_config_set', 'GATED. Changes settings of a folder (keys: card, auto, provider, budget, check, reviewer, reviewerModel, copy).', obj({ folder: S(), values: { type: 'object' }, ...REASON }, ['folder', 'values']), async (a) => this.projectsConfigSet(a)),
+      t('projects_status', 'SAFE. Per project (product or folder; empty = all), from the journal: done and stuck in the last 7 days, doing, to do. Wrapped as untrusted data.', obj({ project: S('Product id/name or folder (path or name)') }), async (a) => this.projectsStatus(a)),
+      t('release_notes', 'SAFE. What was merged or deployed in a folder or product since `since` (ms epoch; default 7 days): titles for release notes. Wrapped as untrusted data.', obj({ folder: S('Folder (path or name) or product'), since: { type: 'number' } }, ['folder']), async (a) => this.releaseNotes(a)),
+      t('projects_config_set','GATED. Changes settings of a folder (keys: card, auto, provider, budget, check, reviewer, reviewerModel, copy).', obj({ folder: S(), values: { type: 'object' }, ...REASON }, ['folder', 'values']), async (a) => this.projectsConfigSet(a)),
       // --- uso
       t('usage_accounts', 'SAFE. Accounts and their 5h/week quota.', obj({}), async () => ok(this.deps.accounts?.() ?? [])),
       t('usage_spend', 'SAFE. Spend (US$, tokens) of each chat agent.', obj({}), async () => ok(this.spend())),
@@ -521,6 +528,43 @@ export class JarvisTools {
     const folder = str(a.folder);
     const list = (this.deps.metrics?.(since) ?? []).filter((m) => !folder || normPath(m.folder) === normPath(folder) || basename(m.folder).toLowerCase() === folder.toLowerCase());
     return summarizeMetrics(list);
+  }
+
+  /** Projeto pelo produto (id, nome, card) ou pela pasta (caminho ou nome); vazio = todos. */
+  private projectMatch(want: string): (project: string, folder: string) => boolean {
+    const w = want.trim().toLowerCase();
+    const n = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const product = this.deps.products?.().find((p) => [p.id, p.name, p.cardName].some((x) => n(x) === n(w)));
+    return (project, folder) => !w || project.toLowerCase() === w || project === product?.id || normPath(folder) === normPath(w) || basename(folder).toLowerCase() === w;
+  }
+
+  /** projects_status: feito (7 dias), fazendo, a fazer e travado (7 dias) por projeto, do journal; dado de fora. */
+  private projectsStatus(a: Record<string, unknown>): Result {
+    if (!this.deps.journal) return fail(tr('Registro por projeto desligado.'));
+    const now = this.now();
+    const match = this.projectMatch(str(a.project));
+    const ledger = projectLedger(this.deps.journal(now - LEDGER_OPEN_MS), now - 7 * 24 * HOUR).filter((p) => p.folders.some((f) => match(p.project, f)));
+    return ok(wrapUntrusted('journal', str(a.project) || 'todos', JSON.stringify(ledger.map((p) => ({ ...p, done: p.done.slice(0, READ_ITEMS), doing: p.doing.slice(0, READ_ITEMS), todo: p.todo.slice(0, READ_ITEMS), stuck: p.stuck.slice(0, READ_ITEMS) })), null, 1)));
+  }
+
+  /** release_notes: o que foi juntado ou publicado numa pasta (ou produto) desde `since`; dado de fora. */
+  private releaseNotes(a: Record<string, unknown>): Result {
+    if (!this.deps.journal) return fail(tr('Registro por projeto desligado.'));
+    const target = str(a.folder);
+    if (!target) return fail(tr('Diga a pasta ou o produto.'));
+    const since = typeof a.since === 'number' && a.since > 0 ? a.since : this.now() - 7 * 24 * HOUR;
+    const match = this.projectMatch(target);
+    const seen = new Set<string>();
+    const notes = this.deps.journal(since)
+      .filter((e) => (e.stage === 'merged' || e.stage === 'deployed') && match(e.product ?? '', e.folder))
+      .reverse()
+      .filter((e) => {
+        const k = e.ref ?? e.title ?? '';
+        return !seen.has(k) && !!seen.add(k);
+      })
+      .slice(0, 100)
+      .map((e) => ({ title: e.title ?? '', stage: e.stage, at: new Date(e.at).toISOString(), folder: basename(e.folder) }));
+    return ok(wrapUntrusted('journal', target, JSON.stringify({ since: new Date(since).toISOString(), notes }, null, 1)));
   }
 
   // ------------------------------------------------------------------ aviso
