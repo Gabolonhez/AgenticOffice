@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Product } from '../vboards/products';
-import type { FolderConfig } from '../vboards/vboards';
+import { policyOf, type FolderConfig } from '../vboards/vboards';
 import { GitHub } from './github';
 import type { JournalEntry } from './journal';
-import { bumpVersion, parseTranslation, pinRequired, releaseCut, StoreService, storeStage, type StoreDeps } from './lojas';
+import { bumpVersion, parseTranslation, pinRequired, releaseCut, STORE_PENDING_MS, StoreService, storeStage, type StoreDeps } from './lojas';
 
 const TOKEN = `github_pat_${'T'.repeat(40)}`;
 const FOLDER = 'D:/Projects/peptpro/helix-app';
@@ -115,6 +115,36 @@ describe('StoreService', () => {
     expect(ev.state).toBe('pending');
     const r = await s.svc.approve(ev.id);
     expect('event' in r && r.event.state).toBe('running');
+    expect(dispatches(s.calls)).toHaveLength(1);
+  });
+
+  it('approve: dispara o workflow do pedido; recusa se a loja/workflow mudou e vence em 24 h', async () => {
+    let current: Partial<FolderConfig> = { otaChannel: 'production' };
+    const s = setup({}, { folderConfig: async () => cfg(current) });
+    await s.svc.afterDeployed(FOLDER);
+    const first = s.svc.list()[0];
+    current = { otaChannel: 'production', storeWorkflow: 'outro.yml' };
+    expect(await s.svc.approve(first.id)).toMatchObject({ status: 409 });
+    expect(s.svc.get(first.id)!.state).toBe('failed');
+    expect(dispatches(s.calls)).toHaveLength(0);
+    current = { otaChannel: 'production' };
+    await s.svc.afterDeployed(FOLDER);
+    const late = s.svc.list()[0];
+    s.tick(STORE_PENDING_MS + 1);
+    expect(await s.svc.approve(late.id)).toMatchObject({ status: 410 });
+    expect(dispatches(s.calls)).toHaveLength(0);
+    await s.svc.afterDeployed(FOLDER);
+    const ok = s.svc.list()[0];
+    expect(await s.svc.approve(ok.id)).toMatchObject({ event: { state: 'running', workflow: 'store.yml' } });
+    expect(dispatches(s.calls)[0].url).toContain('/workflows/store.yml/dispatches');
+  });
+
+  it('afterDeployed de lista automática: política congelada diferente (ou ausente) não dispara nada', async () => {
+    const s = setup();
+    await s.svc.afterDeployed(FOLDER, { ...policyOf(cfg()), storeWorkflow: 'evil.yml' } as Record<string, string>);
+    await s.svc.afterDeployed(FOLDER, null);
+    expect(s.calls).toHaveLength(0);
+    await s.svc.afterDeployed(FOLDER, policyOf(cfg()) as Record<string, string>);
     expect(dispatches(s.calls)).toHaveLength(1);
   });
 

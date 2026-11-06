@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createWorktreeOps, findSecrets, noPushEnv, riskyFiles } from './worktree';
+import { policyFile, writePolicy } from '../vboards/policy';
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
@@ -195,7 +196,10 @@ describe('chat: cópia isolada a partir do remoto (vboards.ship)', { timeout: 30
     git(bare, 'clone', '-q', '--bare', up, '.');
     const local = mkdtempSync(join(tmpdir(), 'hb-wt-local-'));
     git(local, 'clone', '-q', bare, '.');
-    for (const [k, v] of [['user.email', 't@t'], ['user.name', 't'], ['core.hooksPath', join(local, '.no-hooks')], ['core.autocrlf', 'false'], ['vboards.ship', ship]]) git(local, 'config', k, v);
+    for (const [k, v] of [['user.email', 't@t'], ['user.name', 't'], ['core.hooksPath', join(local, '.no-hooks')], ['core.autocrlf', 'false']]) git(local, 'config', k, v);
+    // vboards.ship é sensível: vale o folder-policy.json do Habblaud, nunca o git config (que a cópia compartilha).
+    const data = mkdtempSync(join(tmpdir(), 'hb-wt-data-'));
+    writePolicy(policyFile(data), local, { ship });
     writeFileSync(join(up, 'novo.txt'), 'remoto\n');
     git(up, 'add', '-A');
     git(up, 'commit', '-q', '-m', 'no remoto');
@@ -203,7 +207,7 @@ describe('chat: cópia isolada a partir do remoto (vboards.ship)', { timeout: 30
     writeFileSync(join(local, 'local.txt'), 'local\n');
     git(local, 'add', '-A');
     git(local, 'commit', '-q', '-m', 'só local');
-    return { local, bare, ops: createWorktreeOps(mkdtempSync(join(tmpdir(), 'hb-wt-data-'))) };
+    return { local, bare, data, ops: createWorktreeOps(data) };
   }
 
   it('ship off: nasce do HEAD local, como antes', async () => {
@@ -221,9 +225,16 @@ describe('chat: cópia isolada a partir do remoto (vboards.ship)', { timeout: 30
     expect(() => git(w.path, 'rev-parse', '--abbrev-ref', '@{upstream}')).toThrow();
   });
 
+  it('vboards.ship no git config (gravável por um agente) é ignorado: nasce do HEAD local', async () => {
+    const { local, ops } = withOrigin('off');
+    git(local, 'config', 'vboards.ship', 'pr');
+    const w = await made(ops, local);
+    expect(w.base).toBe(git(local, 'rev-parse', 'HEAD'));
+  });
+
   it('fetch que falha: erro claro, nada criado', async () => {
-    const { local, ops } = withOrigin('pr');
-    git(local, 'config', 'vboards.remote', 'nao-existe');
+    const { local, data, ops } = withOrigin('pr');
+    writePolicy(policyFile(data), local, { remote: 'nao-existe' });
     expect(await ops.create(local, 'chat:9', 'x')).toEqual({ error: expect.stringContaining('git fetch nao-existe main') });
   });
 });

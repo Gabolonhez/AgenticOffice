@@ -10,7 +10,8 @@ import { basename, dirname, join } from 'node:path';
 import { tr } from '../../shared/i18n';
 import { errMsg, log } from '../log';
 import { productOfFolder, type Product } from '../vboards/products';
-import { DEFAULT_OTA_CHANNEL, type FolderConfig, type VersionBump } from '../vboards/vboards';
+import { samePolicy } from '../vboards/policy';
+import { DEFAULT_OTA_CHANNEL, policyOf, type FolderConfig, type VersionBump } from '../vboards/vboards';
 import { deployVerdict, GitHubError, parseRemote, type GitHub } from './github';
 import type { JournalEntry, JournalStage } from './journal';
 
@@ -20,6 +21,8 @@ export const STORE_POLL_MS = 60_000;
 /** Build + fila do EAS demoram: prazo do run depois do disparo. */
 export const STORE_RUN_MINUTES = 90;
 export const STORE_KEEP = 100;
+/** Um 'pending' (espera o PIN) vence depois disto: aprovar tarde dispararia algo pensado para outro momento. */
+export const STORE_PENDING_MS = 24 * 60 * 60_000;
 
 export type StoreState = 'pending' | 'running' | 'success' | 'failed';
 
@@ -40,6 +43,8 @@ export interface StoreEvent {
   endedAt?: number;
   url?: string;
   note?: string;
+  /** O que valia ao pedir (loja, workflow, remoto, base, papel): aprovar com algo diferente agora é recusado. */
+  basis?: string;
 }
 
 /** OTA só pede PIN em production; build e submit (loja) sempre. */
@@ -216,12 +221,18 @@ export class StoreService {
     return { cfg, mode: cfg.store ?? repo?.store ?? 'off' };
   }
 
-  /** Chamado pelo ship.ts no deployed: OTA automático fora de production; em production espera o PIN. */
-  async afterDeployed(folder: string): Promise<void> {
+  /**
+   * Chamado pelo ship.ts no deployed: OTA automático fora de production; em production espera o PIN. `frozen` (lista
+   * automática): a política congelada ao criar a lista; diferente da de agora (ou ausente, null) = nada sai sozinho.
+   */
+  async afterDeployed(folder: string, frozen?: Record<string, string> | null): Promise<void> {
     try {
       if (!this.isApp(folder)) return;
       const { cfg, mode } = await this.mode(folder);
       if (mode === 'off' || !cfg.storeWorkflow) return;
+      if (frozen !== undefined && !samePolicy(frozen ?? undefined, policyOf(cfg))) {
+        return log.warnOnce(`lojas:policy:${folder}`, tr('Loja: a política de {0} mudou desde que a lista foi criada; o OTA não saiu sozinho.', [basename(folder) || folder]));
+      }
       const r = await this.request(folder, { kind: 'ota', channel: cfg.otaChannel ?? DEFAULT_OTA_CHANNEL }, false);
       if ('error' in r && r.status !== 403) log.warnOnce(`lojas:${folder}:${r.error}`, r.error);
     } catch (err) {
@@ -241,7 +252,7 @@ export class StoreService {
     if (!cfg.storeWorkflow) return { status: 409, error: tr('Defina vboards.storeWorkflow (o workflow do repo que faz o eas) antes.') };
     if (a.kind === 'submit' && !validVersion(a.version)) return { status: 400, error: tr('Versão inválida: use x.y.z.') };
     const channel = a.kind === 'ota' ? (a.channel ?? cfg.otaChannel ?? DEFAULT_OTA_CHANNEL) : 'production';
-    const ev: StoreEvent = { id: `st${this.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, folder, kind: a.kind, channel, ...(a.version ? { version: a.version } : {}), state: 'pending', workflow: cfg.storeWorkflow, requestedAt: this.now() };
+    const ev: StoreEvent = { id: `st${this.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, folder, kind: a.kind, channel, ...(a.version ? { version: a.version } : {}), state: 'pending', workflow: cfg.storeWorkflow, requestedAt: this.now(), basis: this.basis(folder, cfg, mode) };
     const product = productOfFolder(folder, this.deps.products?.() ?? []);
     if (product) ev.product = product.id;
     this.events.push(ev);
@@ -255,11 +266,28 @@ export class StoreService {
     return { event: ev };
   }
 
-  /** Aprova um 'pending' (PIN já conferido por quem chama). */
+  /** O que o pedido levou em conta: aprovar depois de mudar qualquer parte disto é recusado. */
+  private basis(folder: string, cfg: FolderConfig, mode: string): string {
+    return JSON.stringify([mode, cfg.storeWorkflow ?? '', cfg.remote ?? '', cfg.base ?? '', this.isApp(folder)]);
+  }
+
+  /**
+   * Aprova um 'pending' (PIN já conferido por quem chama): dispara exatamente o workflow do pedido, se a configuração
+   * (loja, workflow, remoto, base) e o papel do repo ainda forem os mesmos e o pedido não tiver vencido (STORE_PENDING_MS).
+   */
   async approve(id: string): Promise<{ event: StoreEvent } | Fail> {
     const ev = this.get(id);
     if (!ev || ev.state !== 'pending') return { status: 404, error: tr('Nada pendente com esse id.') };
-    await this.dispatch(ev, await this.deps.folderConfig(ev.folder));
+    if (this.now() - ev.requestedAt > STORE_PENDING_MS) {
+      this.fail(ev, tr('O pedido venceu (mais de 24 h esperando o PIN): peça de novo.'));
+      return { status: 410, error: ev.note! };
+    }
+    const { cfg, mode } = await this.mode(ev.folder);
+    if (!ev.basis || ev.basis !== this.basis(ev.folder, cfg, mode)) {
+      this.fail(ev, tr('A configuração da loja (ou o papel do repo) mudou desde o pedido: peça de novo.'));
+      return { status: 409, error: ev.note! };
+    }
+    await this.dispatch(ev, cfg);
     return { event: ev };
   }
 
@@ -281,7 +309,8 @@ export class StoreService {
       ev.owner = gh.owner;
       ev.repo = gh.repo;
       ev.ref = cfg.base ?? info.head ?? 'main';
-      ev.workflow = cfg.storeWorkflow;
+      // Exatamente o workflow do pedido (o que o cartão/PIN mostrou), nunca o que estiver na configuração agora.
+      ev.workflow ??= cfg.storeWorkflow;
       ev.dispatchedAt = this.now();
       await this.deps.github(token).dispatchWorkflow(gh, ev.workflow!, ev.ref, { kind: ev.kind, channel: ev.channel, ...(ev.version ? { version: ev.version } : {}) });
       ev.state = 'running';
@@ -294,6 +323,7 @@ export class StoreService {
 
   /** Acompanha os 'running': acha o run do dispatch e fecha pelo veredito. */
   async tick(): Promise<void> {
+    for (const ev of this.events.filter((e) => e.state === 'pending' && this.now() - e.requestedAt > STORE_PENDING_MS)) this.fail(ev, tr('O pedido venceu (mais de 24 h esperando o PIN): peça de novo.'));
     const token = this.deps.token();
     if (!token) return;
     const gh = this.deps.github(token);

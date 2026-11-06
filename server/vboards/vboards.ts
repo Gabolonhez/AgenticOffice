@@ -31,6 +31,8 @@ import type { NotifyEvent } from './ntfy';
 import type { RiskLevel } from '../../shared/runs';
 import { parseRisk } from '../chat/risk';
 import { pickRepo, productForCard, repoHint, type Product } from './products';
+import { pinError, type ApprovalPin } from '../permissions/pin';
+import { isSensitive, policyFile, policyNeedsPin, readPolicy, SENSITIVE_KEYS, writePolicy, type FolderPolicy, type SensitiveKey } from './policy';
 
 export const POLL_MS = 10_000;
 export const POLL_MAX_MS = 5 * 60_000;
@@ -217,8 +219,13 @@ export function taskFolders(t: { cardTitle: string; text?: string; repo?: string
 /** A pasta, se for uma só e sem ambiguidade. */
 const single = (m: { paths: string[]; error?: string }): string | undefined => (!m.error && m.paths.length === 1 ? m.paths[0] : undefined);
 
-/** Configuração de uma pasta no `git config --local` dela (a única fonte; a tela do escritório lê e grava lá). */
+/**
+ * Configuração de uma pasta: as chaves comuns no `git config --local` dela; as sensíveis (policy.ts SENSITIVE_KEYS:
+ * subir, merge sozinho, loja, risco) só em <dataDir>/chat/folder-policy.json, gravado pelo servidor.
+ */
 export interface FolderConfig {
+  /** Chaves sensíveis achadas no git config da pasta e ignoradas (sem valor no folder-policy.json): configurar de novo. */
+  legacy?: string[];
   card?: string;
   /** vboards.auto: abre sozinho as subtarefas desta pasta (padrão: não). */
   auto: boolean;
@@ -252,7 +259,7 @@ export interface FolderConfig {
   riskPaths: string[];
   /** vboards.riskLines: acima disto o diff é risco médio (padrão DEFAULT_RISK_LINES). */
   riskLines?: number;
-  /** vboards.store: off (padrão) | ota | ota+build. Vale depois do deployed de um repo app (chat/store.ts). */
+  /** vboards.store: off (padrão) | ota | ota+build. Vale depois do deployed de um repo app (chat/lojas.ts). */
   store?: StoreMode;
   /** vboards.storeWorkflow: o workflow (.yml) do repo que o Habblaud dispara com {kind, channel}. */
   storeWorkflow?: string;
@@ -290,13 +297,24 @@ export const PROVIDER_NAMES: Record<string, Provider> = { claude: 'claude', code
 /** Modelo do revisor quando a pasta não diz: sonnet no Claude; Codex e agy ficam com o padrão da CLI. */
 export const DEFAULT_REVIEWER_MODEL: Record<Provider, string | undefined> = { claude: 'sonnet', codex: undefined, antigravity: undefined };
 
-/** `git config --get-regexp ^vboards\.` (chaves em minúsculas) vira a configuração, com os padrões. */
-export function parseFolderConfig(out: string | undefined): FolderConfig {
+const SENSITIVE_LC = new Map<string, SensitiveKey>(SENSITIVE_KEYS.map((k) => [k.toLowerCase(), k]));
+
+/**
+ * `git config --get-regexp ^vboards\.` (chaves em minúsculas) mais a política sensível da pasta (policy.ts) viram a
+ * configuração, com os padrões. Chave sensível no git config NUNCA vale (um agente pode tê-la gravado): só vira aviso.
+ */
+export function parseFolderConfig(out: string | undefined, policy: FolderPolicy = {}): FolderConfig {
   const raw = new Map<string, string>();
+  const legacy: string[] = [];
   for (const line of (out ?? '').split(/\r?\n/)) {
     const m = /^vboards\.(\S+)(?: (.*))?$/i.exec(line.trim());
-    if (m) raw.set(m[1].toLowerCase(), (m[2] ?? '').trim());
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const sensitive = SENSITIVE_LC.get(key);
+    if (!sensitive) raw.set(key, (m[2] ?? '').trim());
+    else if (!policy[sensitive] && !legacy.includes(sensitive)) legacy.push(sensitive);
   }
+  for (const [k, v] of Object.entries(policy)) if (v && isSensitive(k)) raw.set(k.toLowerCase(), v);
   const provider = PROVIDER_NAMES[raw.get('provider')?.toLowerCase() ?? ''] ?? 'claude';
   const reviewer = PROVIDER_NAMES[raw.get('reviewer')?.toLowerCase() ?? ''] ?? 'claude';
   const budget = Number(raw.get('budget'));
@@ -322,7 +340,31 @@ export function parseFolderConfig(out: string | undefined): FolderConfig {
     ...(/^[\w.-]{1,100}\.ya?ml$/.test(raw.get('storeworkflow') ?? '') ? { storeWorkflow: raw.get('storeworkflow') } : {}),
     ...(validChannel(raw.get('otachannel')) ? { otaChannel: raw.get('otachannel') } : {}),
     ...((VERSION_BUMPS as readonly string[]).includes(raw.get('versionbump')?.toLowerCase() ?? '') ? { versionBump: raw.get('versionbump')!.toLowerCase() as VersionBump } : {}),
+    ...(legacy.length ? { legacy } : {}),
   };
+}
+
+/** As chaves sensíveis da configuração já lida (com os padrões): o que a lista congela e o que o PIN compara. */
+export function policyOf(c: FolderConfig): FolderPolicy {
+  const p: FolderPolicy = { autoMerge: c.autoMerge, ship: c.ship, ciMinutes: String(c.ciMinutes) };
+  if (c.base) p.base = c.base;
+  if (c.remote) p.remote = c.remote;
+  if (c.deploy) p.deploy = c.deploy;
+  if (c.riskPaths.length) p.riskPaths = c.riskPaths.join(',');
+  if (c.riskLines) p.riskLines = String(c.riskLines);
+  if (c.store) p.store = c.store;
+  if (c.storeWorkflow) p.storeWorkflow = c.storeWorkflow;
+  if (c.otaChannel) p.otaChannel = c.otaChannel;
+  if (c.versionBump) p.versionBump = c.versionBump;
+  return p;
+}
+
+/** Gravar `values` sobre a configuração atual liga (ou mexe, com ligado) algo que sobe/publica sem PIN a cada vez. */
+export function policyChangeNeedsPin(current: FolderConfig, values: Partial<Record<FolderKey, string>>): boolean {
+  const sensitive = Object.entries(values).filter(([k]) => isSensitive(k));
+  if (!sensitive.length) return false;
+  const before = policyOf(current);
+  return policyNeedsPin(policyOf(parseFolderConfig(undefined, { ...before, ...Object.fromEntries(sensitive) })), before);
 }
 
 /** Branch seguro como argumento do git: sem `-` no começo, sem `..`, sem espaço. */
@@ -335,8 +377,9 @@ export const validCopyPath = (p: string): boolean => !!p && p.length <= 200 && !
 /** vboards.copy (vírgulas) vira a lista; o que não passa no validCopyPath fica de fora. */
 export const parseCopyList = (raw: string | undefined): string[] => (raw ?? '').split(',').map((s) => s.trim()).filter(validCopyPath);
 
-export function readFolderConfig(folder: string): Promise<FolderConfig> {
-  return gitConfig(['--local', '--get-regexp', '^vboards\\.'], folder).then(parseFolderConfig);
+/** Sem `dataDir` (testes), as chaves sensíveis ficam nos padrões (desligadas). */
+export function readFolderConfig(folder: string, dataDir?: string): Promise<FolderConfig> {
+  return gitConfig(['--local', '--get-regexp', '^vboards\\.'], folder).then((out) => parseFolderConfig(out, dataDir ? readPolicy(policyFile(dataDir), folder) : {}));
 }
 
 /** A configuração como a tela mostra e grava: o Antigravity volta a ser `agy`, como no git config. */
@@ -386,13 +429,23 @@ export function validateFolderConfig(raw: unknown): { values: Partial<Record<Fol
   return { values };
 }
 
-/** Grava no git config --local da pasta (sem shell); valor vazio tira a chave. */
-export async function writeFolderConfig(folder: string, values: Partial<Record<FolderKey, string>>): Promise<string | undefined> {
+/**
+ * Grava (sem shell); valor vazio tira a chave. As comuns vão ao git config --local da pasta; as sensíveis ao
+ * folder-policy.json do `dataDir` (e a cópia antiga delas sai do git config, para o aviso sumir).
+ */
+export async function writeFolderConfig(folder: string, values: Partial<Record<FolderKey, string>>, dataDir?: string): Promise<string | undefined> {
+  const sensitive = Object.fromEntries(Object.entries(values).filter(([k]) => isSensitive(k))) as FolderPolicy;
+  if (Object.keys(sensitive).length) {
+    if (!dataDir) return tr('Sem a pasta de dados do Habblaud: as chaves de subir, merge e loja não podem ser gravadas.');
+    const err = writePolicy(policyFile(dataDir), folder, sensitive);
+    if (err) return err;
+  }
   for (const [key, value] of Object.entries(values)) {
+    const legacy = isSensitive(key);
     const err = await new Promise<string | undefined>((ok) =>
-      execFile('git', ['config', '--local', ...(value ? [`vboards.${key}`, value] : ['--unset', `vboards.${key}`])], { cwd: folder, timeout: 5_000, windowsHide: true, encoding: 'utf8' }, (e, _out, stderr) =>
-        // --unset de uma chave que não existe sai com 5: já está como pedido.
-        ok(e && !(value === '' && (e as { code?: unknown }).code === 5) ? stderr.trim() || e.message : undefined),
+      execFile('git', ['config', '--local', ...(value && !legacy ? [`vboards.${key}`, value] : ['--unset-all', `vboards.${key}`])], { cwd: folder, timeout: 5_000, windowsHide: true, encoding: 'utf8' }, (e, _out, stderr) =>
+        // --unset de uma chave que não existe sai com 5: já está como pedido. Sensível: tirar a cópia antiga é só limpeza.
+        ok(e && !legacy && !(value === '' && (e as { code?: unknown }).code === 5) ? stderr.trim() || e.message : undefined),
       ),
     );
     if (err) return err;
@@ -939,13 +992,20 @@ export class VBoardsService {
     return { folder: known.path, config: folderConfigView(await (this.opts.folderConfig ?? readFolderConfig)(known.path)) };
   }
 
-  /** Grava a configuração de uma pasta conhecida. A trava de quem pode (só local) fica na rota (http/app.ts). */
-  async saveFolderSettings(raw: unknown): Promise<{ folder: string; config: FolderConfigView } | { status: number; error: string }> {
+  /**
+   * Grava a configuração de uma pasta conhecida. A trava de quem pode (só local) fica na rota (http/app.ts). Ligar
+   * autoMerge=low, ship=merge ou store≠off (ou mexer na política com isso ligado) pede o PIN de aprovação no corpo.
+   */
+  async saveFolderSettings(raw: unknown, pin?: Pick<ApprovalPin, 'check' | 'triesLeft'>): Promise<{ folder: string; config: FolderConfigView } | { status: number; error: string; pin?: string }> {
     const body = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
     const known = typeof body.folder === 'string' ? (await this.knownFolders()).find((f) => samePath(f.path, body.folder as string)) : undefined;
     if (!known) return { status: 400, error: tr('Pasta desconhecida: abra uma sessão nela antes.') };
     const v = validateFolderConfig(body.config);
     if ('error' in v) return { status: 400, error: v.error };
+    if (policyChangeNeedsPin(await (this.opts.folderConfig ?? readFolderConfig)(known.path), v.values)) {
+      const c = pin ? await pin.check(body.pin) : 'unset';
+      if (c !== 'ok') return { ...pinError(c, pin?.triesLeft() ?? 0), pin: c };
+    }
     const err = await (this.opts.writeConfig ?? writeFolderConfig)(known.path, v.values);
     if (err) return { status: 409, error: tr('Não deu para gravar no git config da pasta: {0}', [maskSecrets(err)]) };
     this.cards.delete(known.path);

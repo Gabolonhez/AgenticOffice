@@ -29,7 +29,6 @@ import { openMainAgent, SessionHistory } from './sources/history';
 import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
 import { defaultProjectsRoot, ProjectsService } from './projects/create';
-import { loadGithubToken } from './projects/github-repo';
 import { createProjectRoutes } from './projects/http';
 import { PermissionRegistry } from './permissions/registry';
 import { ApprovalPin } from './permissions/pin';
@@ -64,7 +63,7 @@ import { OwnerSocial } from './world/social';
 import { BuildingTokens } from './world/tokens';
 import { BuildingUplink } from './world/uplink';
 import { WorldViewer } from './world/viewer';
-import { AUTO_TURN_MINUTES, lastReply, loadVBoardsConfig, readFolderConfig, VBoardsService, writeFolderConfig } from './vboards/vboards';
+import { AUTO_TURN_MINUTES, lastReply, loadVBoardsConfig, policyOf, readFolderConfig, VBoardsService, writeFolderConfig } from './vboards/vboards';
 import { VBoardsApi } from './vboards/api';
 import { JarvisInbox, JarvisService, JARVIS_ID } from './jarvis/service';
 import { JarvisTools } from './jarvis/tools';
@@ -417,6 +416,10 @@ const vboards =
           return path ? lastReply(path, agents.parserFor(id)) : undefined;
         },
         booting: () => office.isBooting(),
+        // Configuração por pasta: chaves comuns no git config; as sensíveis (subir, merge sozinho, loja) no
+        // <dataDir>/chat/folder-policy.json, que só o servidor grava (vboards/policy.ts).
+        folderConfig: (f) => readFolderConfig(f, config.dataDir),
+        writeConfig: (f, v) => writeFolderConfig(f, v, config.dataDir),
         // Opt-in por pasta (git config --local vboards.auto true): uma lista do chat por pasta, na cópia isolada, sem
         // push. Uma lista por pasta, até HABBLAUD_MAX_PARALLEL_RUNS ao mesmo tempo: sem vaga, espera a próxima busca
         // (o create devolve 409). Nunca junta sozinho.
@@ -432,7 +435,7 @@ const vboards =
                   isolated: true,
                   options: { folder, provider: cfg.provider, permission: 'auto', denyPush: true, limits: { maxCostUsd: cfg.budget, maxTurnMinutes: AUTO_TURN_MINUTES } },
                 },
-                { ...(cfg.check ? { check: cfg.check } : {}), ...(cfg.qa ? { qa: cfg.qa } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}), ...(cfg.riskPaths.length ? { riskPaths: cfg.riskPaths } : {}), ...(cfg.riskLines ? { riskLines: cfg.riskLines } : {}) },
+                { ...(cfg.check ? { check: cfg.check } : {}), ...(cfg.qa ? { qa: cfg.qa } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}), ...(cfg.riskPaths.length ? { riskPaths: cfg.riskPaths } : {}), ...(cfg.riskLines ? { riskLines: cfg.riskLines } : {}), policy: policyOf(cfg) },
               );
               if ('error' in r && r.status !== 409) log.warnOnce(`vboards:auto:${r.error}`, tr('VBoards: não abriu a lista automática de {0} ({1}).', [folder, r.error]));
             },
@@ -529,7 +532,7 @@ late.runs = runs;
 const githubToken = new GitHubTokenStore(join(config.dataDir, 'github.json'), { HABBLAUD_GITHUB_TOKEN: envSecrets.HABBLAUD_GITHUB_TOKEN });
 // Lojas (chat/lojas.ts): depois do deployed de um app, dispara o workflow de OTA/build/submit do próprio repo.
 const lojas = new StoreService({
-  folderConfig: (f) => readFolderConfig(f),
+  folderConfig: (f) => readFolderConfig(f, config.dataDir),
   products,
   token: () => githubToken.get(),
   github: (token) => new GitHub(token),
@@ -542,12 +545,12 @@ const lojas = new StoreService({
 });
 const ship = runs
   ? new ShipService({
-      onDeployed: (folder) => void lojas.afterDeployed(folder),
+      onDeployed: (folder, frozen) => void lojas.afterDeployed(folder, frozen),
       runs,
       worktrees: createWorktreeOps(config.dataDir),
       token: () => githubToken.get(),
       github: (token) => new GitHub(token),
-      folderConfig: (f) => readFolderConfig(f),
+      folderConfig: (f) => readFolderConfig(f, config.dataDir),
       products,
       vboards,
       // Subiu sozinha (vboards.autoMerge=low): o aviso leva o link do PR.
@@ -614,10 +617,11 @@ const projects = chatOff
       dataDir: config.dataDir,
       projectsRoot,
       templateDir,
-      githubToken: () => loadGithubToken(config.dataDir),
+      // O process.env já perdeu o HABBLAUD_GITHUB_TOKEN (takeSecrets): o token vem do mesmo lugar que o do "Subir".
+      githubToken: () => githubToken.get(),
       githubOwner: () => process.env.HABBLAUD_GITHUB_OWNER?.trim() || undefined,
       products: { load: () => loadProducts(productsFile), save: (raw) => saveProducts(productsFile, raw) },
-      writeFolderConfig: (f, v) => writeFolderConfig(f, v),
+      writeFolderConfig: (f, v) => writeFolderConfig(f, v, config.dataDir),
       vboards: vboardsApi,
       // O agente do projeto (Claude, pedindo aprovação a cada ação) faz a sala nova aparecer no escritório.
       openAgent: chat
@@ -657,8 +661,8 @@ const jarvisTools =
         ship,
         lojas,
         folders: () => chatFolders,
-        folderConfig: (f) => readFolderConfig(f),
-        writeFolderConfig: (f, v) => writeFolderConfig(f, v),
+        folderConfig: (f) => readFolderConfig(f, config.dataDir),
+        writeFolderConfig: (f, v) => writeFolderConfig(f, v, config.dataDir),
         accounts: () =>
           accounts.allEntries().map((a) => {
             const v = accounts.usageView(a.id);
