@@ -10,6 +10,21 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Projeto novo a partir do molde
+
+- **Novo projeto:** botão na barra do topo com um assistente em 4 etapas: a ideia, as perguntas do briefing (nome,
+  público, monetização, partes app/server/web, bundle id e cores), a revisão da spec e do plano (em
+  `~/.habblaud/projects/<slug>/spec.md`) e o checklist da criação, com o status de cada passo (feito, pendente, manual).
+  Criar pede o PIN de aprovação. O molde (`HABBLAUD_TEMPLATE_DIR`, padrão `app-base` na pasta dos projetos) é copiado
+  para `<HABBLAUD_PROJECTS_ROOT>/<slug>/<slug>-app|server|web` sem `node_modules`, `.git`, `.env`, pastas nativas nem
+  credenciais, e nunca por cima de uma pasta que já existe. Depois: nome, slug, bundle id, package e cores
+  personalizados, workflow de CI de pull request e `eas.json`, `git init` com o commit inicial, repositórios privados no
+  GitHub (opcional; sem a permissão Administration o passo vira manual com a instrução), o produto no registro com as
+  chaves `vboards.*` (ship desligado), o card no VBoards com os cards iniciais da spec (opcional) e um agente que abre a
+  sala nova no escritório. A criação é retomável: rodar de novo tenta só o que falta. Nada faz push nem deploy.
+- **Jarvis:** `projects_draft` conduz o briefing e grava a spec; `projects_create` cria o projeto sempre com cartão
+  crítico (PIN), mesmo num turno limpo.
+
 ### Escritório 3D
 
 - **Escritório 3D:** o botão **3D** da barra do topo troca o escritório 2D por um escritório em 3D, onde cada agente vira um
