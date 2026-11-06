@@ -12764,3 +12764,106 @@ html.has-jarvis {
     transition: none;
   }
 }
+
+/* Painel "Loja" (ui/loja-panel.ts): status do OTA, build e envio, e o pacote de versão. */
+.ui-loja {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-line-strong);
+  border-radius: var(--radius);
+  background: var(--ui-bg-soft);
+  min-width: 0;
+}
+
+.ui-loja__title {
+  margin: 0;
+  font-size: 13px;
+}
+
+.ui-loja__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 4px 0;
+  --dot: var(--st-offline);
+}
+
+.ui-loja__row--running,
+.ui-loja__row--pending {
+  --dot: var(--st-waiting);
+}
+
+.ui-loja__row--success {
+  --dot: var(--lv-ok);
+}
+
+.ui-loja__row--failed {
+  --dot: var(--lv-crit);
+}
+
+.ui-loja__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--dot);
+  flex: none;
+}
+
+.ui-loja__kind {
+  font-weight: 600;
+  min-width: 9em;
+}
+
+.ui-loja__what {
+  color: var(--ui-muted);
+  font-size: 12px;
+}
+
+.ui-loja__link {
+  color: var(--ui-accent);
+  font-size: 12px;
+}
+
+.ui-loja__cut {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--ui-accent-soft);
+}
+
+.ui-loja__ver {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 20px;
+}
+
+.ui-loja__from,
+.ui-loja__arrow {
+  color: var(--ui-muted);
+  font-size: 14px;
+}
+
+.ui-loja__to {
+  color: var(--ui-accent);
+}
+
+.ui-loja__items {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ui-loja__notes pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}

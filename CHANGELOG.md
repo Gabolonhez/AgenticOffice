@@ -10,6 +10,22 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Lojas para apps Expo
+
+- **OTA, build e envio à loja pelo CI do próprio app:** com `vboards.store` = `ota` ou `ota+build` e
+  `vboards.storeWorkflow`, depois do deploy de um repositório com papel `app` o Habblaud dispara o workflow do repo
+  (`workflow_dispatch` com `kind`, `channel` e `version`) e acompanha a execução. O OTA em canal que não é
+  `production` (`vboards.otaChannel`, padrão `preview`) sai sozinho; OTA em `production`, build e envio para revisão
+  da loja só saem com o PIN. Cada etapa vai ao registro (`ota_preview`, `ota_production`, `build`, `submitted`) e ao
+  celular. O token do GitHub precisa de Actions: Read and write.
+- **Pacote de versão (`release_cut`):** agrupa as tarefas no ar desde a última versão enviada, propõe a versão
+  (semver, `vboards.versionBump`) e o texto "o que há de novo" em pt/en/es, tratado como dado de fora. A ferramenta
+  `release_submit` do Jarvis abre o cartão crítico "Enviar para revisão da loja". O resumo semanal ganha a sugestão
+  de versão por app.
+- **Painel "Loja" em Configurações › VBoards:** status do último OTA, build e envio com o link da execução, e o botão
+  "Preparar versão".
+- **Modelos de workflow** em `docs/templates/expo/` (`pr.yml`, `store.yml` e um README com a Fase 0 de cada app).
+
 ### Subir: do PR ao deploy
 
 - **Botão "Subir" nas listas:** a cópia isolada de uma lista vira um PR no GitHub, com um cartão que mostra pasta,

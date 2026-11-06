@@ -41,6 +41,8 @@ export interface ShipDeps {
   notify?: (title: string, event: ShipEvent) => void;
   /** Agentes dos itens voltam à pasta do projeto quando a cópia some. */
   restoreCwd?: (agentId: string) => void;
+  /** Depois do deployed (chat/store.ts afterDeployed: OTA/build da loja nos apps). */
+  onDeployed?: (folder: string) => void;
   now?: () => number;
 }
 
@@ -265,6 +267,7 @@ export class ShipService {
     this.deps.runs.journalShipped(run, 'deployed');
     this.settle(run, 'done', 'deployed');
     this.notify(run, s, 'deployed');
+    this.deps.onDeployed?.(run.options.folder);
     const notes: string[] = [];
     const w = run.isolated;
     if (w && !w.discarded && !w.merged) {

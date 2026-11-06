@@ -34,6 +34,8 @@ export interface BriefingInput {
   failures: string[];
   /** Por projeto, do registro (chat/journal.ts projectLedger): feito, fazendo, a fazer, travado. */
   ledger?: readonly ProjectLedger[];
+  /** Semanal: a sugestão de versão por app (chat/lojas.ts releaseCut em modo leitura); só apps com tarefas novas. */
+  versions?: ReadonlyArray<{ app: string; version: string; count: number }>;
   /** Cards esperando a resposta do dono (vboards/triage.ts). */
   waiting?: ReadonlyArray<{ cardId: string; title: string; questions: readonly string[] }>;
 }
@@ -84,6 +86,7 @@ export function briefingMaterial(i: BriefingInput): string {
       some(tr('a fazer'), p.todo);
     }
   }
+  if (i.versions?.length) lines.push(tr('Sugestão de versão para a loja:'), ...i.versions.map((v) => `- ${v.app}: ${tr('{0} ({1} tarefas novas)', [v.version, v.count])}`));
   if (i.waiting?.length) lines.push(tr('Aguardando você (perguntas):'), ...i.waiting.slice(0, 10).map((w) => `- ${w.title} (${w.cardId}): ${tr('{0} perguntas', [w.questions.length])}`));
   if (i.quota.length) lines.push(tr('Cota:'), ...i.quota.map((q) => `- ${q}`));
   if (i.failures.length) lines.push(tr('Falhas:'), ...i.failures.slice(0, 10).map((f) => `- ${f}`));
@@ -93,7 +96,7 @@ export function briefingMaterial(i: BriefingInput): string {
 const REPORT_ASK: Record<ReportKind, string> = {
   briefing: 'A primeira linha é uma manchete de até 150 caracteres. Depois, no máximo 8 linhas curtas: o que terminou, o que espera a revisão dele, o que falhou, como está cada projeto e a cota. Sem markdown, sem tabelas.',
   closing: 'É o fechamento do dia. A primeira linha é uma manchete de até 150 caracteres. Depois, no máximo 10 linhas curtas: o que foi feito hoje por projeto (com os PRs, se houver), o que travou e por quê, e o que fica para amanhã. Sem markdown, sem tabelas.',
-  weekly: 'É o resumo da semana. A primeira linha é uma manchete de até 150 caracteres. Depois, no máximo 12 linhas curtas: um resumo por projeto (feito, travado, a fazer) e o custo dos agentes na semana. Sem markdown, sem tabelas.',
+  weekly: 'É o resumo da semana. A primeira linha é uma manchete de até 150 caracteres. Depois, no máximo 12 linhas curtas: um resumo por projeto (feito, travado, a fazer), a sugestão de versão para a loja de cada app (se houver no material) e o custo dos agentes na semana. Sem markdown, sem tabelas.',
 };
 
 export function briefingPrompt(material: string, kind: ReportKind = 'briefing'): string {

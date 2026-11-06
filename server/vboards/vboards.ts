@@ -234,11 +234,26 @@ export interface FolderConfig {
   deploy?: string;
   /** vboards.ciMinutes: prazo do CI e do deploy no "Subir" (padrão 30). */
   ciMinutes: number;
+  /** vboards.store: off (padrão) | ota | ota+build. Vale depois do deployed de um repo app (chat/store.ts). */
+  store?: StoreMode;
+  /** vboards.storeWorkflow: o workflow (.yml) do repo que o Habblaud dispara com {kind, channel}. */
+  storeWorkflow?: string;
+  /** vboards.otaChannel: canal do OTA automático (padrão preview). */
+  otaChannel?: string;
+  /** vboards.versionBump: como o release_cut sobe a versão (padrão auto). */
+  versionBump?: VersionBump;
 }
+
+export const STORE_MODES_CFG = ['off', 'ota', 'ota+build'] as const;
+export type StoreMode = (typeof STORE_MODES_CFG)[number];
+export const VERSION_BUMPS = ['auto', 'patch', 'minor', 'major'] as const;
+export type VersionBump = (typeof VERSION_BUMPS)[number];
+export const DEFAULT_OTA_CHANNEL = 'preview';
+const validChannel = (s: string | undefined): s is string => !!s && /^[\w][\w.-]{0,39}$/.test(s);
 
 export const SHIP_MODES = ['off', 'pr', 'merge'] as const;
 export type ShipMode = (typeof SHIP_MODES)[number];
-export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'qa', 'reviewer', 'reviewerModel', 'copy', 'ship', 'base', 'remote', 'deploy', 'ciMinutes'] as const;
+export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'qa', 'reviewer', 'reviewerModel', 'copy', 'ship', 'base', 'remote', 'deploy', 'ciMinutes', 'store', 'storeWorkflow', 'otaChannel', 'versionBump'] as const;
 export type FolderKey = (typeof FOLDER_KEYS)[number];
 export const DEFAULT_BUDGET_USD = 2;
 export const DEFAULT_CI_MINUTES = 30;
@@ -276,6 +291,10 @@ export function parseFolderConfig(out: string | undefined): FolderConfig {
     ...(validRemote(raw.get('remote')) ? { remote: raw.get('remote') } : {}),
     ...(validDeploy(raw.get('deploy')) ? { deploy: raw.get('deploy') } : {}),
     ciMinutes: validCiMinutes(raw.get('ciminutes')) ? Number(raw.get('ciminutes')) : DEFAULT_CI_MINUTES,
+    ...((STORE_MODES_CFG as readonly string[]).includes(raw.get('store')?.toLowerCase() ?? '') ? { store: raw.get('store')!.toLowerCase() as StoreMode } : {}),
+    ...(/^[\w.-]{1,100}\.ya?ml$/.test(raw.get('storeworkflow') ?? '') ? { storeWorkflow: raw.get('storeworkflow') } : {}),
+    ...(validChannel(raw.get('otachannel')) ? { otaChannel: raw.get('otachannel') } : {}),
+    ...((VERSION_BUMPS as readonly string[]).includes(raw.get('versionbump')?.toLowerCase() ?? '') ? { versionBump: raw.get('versionbump')!.toLowerCase() as VersionBump } : {}),
   };
 }
 
@@ -326,6 +345,10 @@ export function validateFolderConfig(raw: unknown): { values: Partial<Record<Fol
       : key === 'remote' ? validRemote(s)
       : key === 'deploy' ? validDeploy(s)
       : key === 'ciMinutes' ? validCiMinutes(s)
+      : key === 'store' ? (STORE_MODES_CFG as readonly string[]).includes(s)
+      : key === 'storeWorkflow' ? /^[\w.-]{1,100}\.ya?ml$/.test(s)
+      : key === 'otaChannel' ? validChannel(s)
+      : key === 'versionBump' ? (VERSION_BUMPS as readonly string[]).includes(s)
       : s.length <= 500; // check, qa
     if (!ok) return { error: tr('Valor inválido em vboards.{0}.', [key]) };
     values[key] = s;

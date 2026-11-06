@@ -1,0 +1,63 @@
+# Modelo do Habblaud: lojas de um app Expo. Copie para .github/workflows/store.yml do repo do app e
+# ponha `git config vboards.storeWorkflow store.yml` na pasta. O Habblaud só dispara (workflow_dispatch); quem roda o
+# eas é este workflow. Secrets do repo: EXPO_TOKEN (obrigatório); credenciais da loja ficam no EAS (eas credentials)
+# ou, para o submit, em eas.json (submit.production: ascAppId + chave ASC / serviceAccountKeyPath do Play).
+name: store
+
+on:
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: ota | build | submit
+        required: true
+        type: choice
+        options: [ota, build, submit]
+      channel:
+        description: canal do OTA (preview ou production); build e submit usam production
+        required: true
+        default: preview
+      version:
+        description: versão x.y.z (só no submit; confira com app.json)
+        required: false
+        default: ''
+
+concurrency:
+  group: store-${{ inputs.kind }}-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  eas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      KIND: ${{ inputs.kind }}
+      CHANNEL: ${{ inputs.channel }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: npm ci
+      # Os inputs entram só por variável de ambiente (nunca dentro do script), para não virar injeção de comando.
+      - name: Validar inputs
+        run: |
+          case "$KIND" in ota|build|submit) ;; *) echo "kind inválido"; exit 1;; esac
+          [[ "$CHANNEL" =~ ^[A-Za-z0-9._-]{1,40}$ ]] || { echo "canal inválido"; exit 1; }
+          if [ "$KIND" = submit ]; then [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "versão inválida"; exit 1; }; fi
+      - name: OTA
+        if: env.KIND == 'ota'
+        run: eas update --channel "$CHANNEL" --message "Habblaud: ${GITHUB_SHA::7}" --non-interactive
+      - name: Build e envio ao TestFlight / faixa interna
+        if: env.KIND == 'build'
+        run: eas build --platform all --profile production --non-interactive --auto-submit
+      - name: Enviar para revisão da loja (última build de production)
+        if: env.KIND == 'submit'
+        run: |
+          grep -q "\"version\": \"$VERSION\"" app.json || { echo "app.json não está na versão $VERSION"; exit 1; }
+          eas submit --platform all --profile production --latest --non-interactive

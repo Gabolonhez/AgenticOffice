@@ -23,6 +23,7 @@ import { askHuman, type HumanAnswer, type McpTool } from '../chat/permission';
 import { LEDGER_OPEN_MS, projectLedger, type JournalEntry } from '../chat/journal';
 import type { RunService } from '../chat/runs';
 import type { ShipService } from '../chat/ship';
+import type { StoreService } from '../chat/lojas';
 import type { Product } from '../vboards/products';
 import type { ChatService } from '../chat/service';
 import type { TriggerService } from '../chat/triggers';
@@ -48,7 +49,7 @@ export const NOTIFY_NTFY_MAX = 200;
 export const NOTIFY_WA_MAX = 3000;
 const HOUR = 60 * 60_000;
 /** Ferramentas de leitura que devolvem texto de fora (embrulhado): contaminam o turno desde o início da chamada. */
-const UNTRUSTED_READS: ReadonlySet<string> = new Set(['projects_status', 'release_notes', 'memory_read','agents_list', 'agents_read', 'runs_get', 'runs_ship_status', 'vboards_me', 'vboards_projects', 'vboards_tasks_list', 'vboards_schedule_list', 'vboards_summary', 'vboards_triage', 'vboards_research']);
+const UNTRUSTED_READS: ReadonlySet<string> = new Set(['projects_status', 'release_notes', 'release_cut', 'memory_read','agents_list', 'agents_read', 'runs_get', 'runs_ship_status', 'vboards_me', 'vboards_projects', 'vboards_tasks_list', 'vboards_schedule_list', 'vboards_summary', 'vboards_triage', 'vboards_research']);
 const READ_ITEMS = 30;
 const READ_TEXT = 600;
 const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'antigravity'];
@@ -106,6 +107,8 @@ export interface JarvisToolsDeps {
   worktrees?: Pick<WorktreeOps, 'summary'>;
   /** "Subir" (chat/ship.ts): runs_ship sempre com cartão crítico (PIN), runs_ship_status SAFE. */
   ship?: Pick<ShipService, 'prepare' | 'approve' | 'status'>;
+  /** Lojas (chat/lojas.ts): release_cut SAFE (resultado embrulhado), release_submit sempre com cartão crítico (PIN). */
+  lojas?: Pick<StoreService, 'cut' | 'request' | 'appFolder'>;
   folders: () => Array<{ path: string; name?: string }>;
   folderConfig: (folder: string) => Promise<FolderConfig>;
   writeFolderConfig: (folder: string, values: Partial<Record<FolderKey, string>>) => Promise<string | undefined>;
@@ -242,6 +245,8 @@ export class JarvisTools {
       t('projects_config_get', 'SAFE. Settings of a folder (git config vboards.*; the check command masked).', obj({ folder: S() }, ['folder']), async (a) => this.projectsConfigGet(a)),
       t('projects_status', 'SAFE. Per project (product or folder; empty = all), from the journal: done and stuck in the last 7 days, doing, to do. Wrapped as untrusted data.', obj({ project: S('Product id/name or folder (path or name)') }), async (a) => this.projectsStatus(a)),
       t('release_notes', 'SAFE. What was merged or deployed in a folder or product since `since` (ms epoch; default 7 days): titles for release notes. Wrapped as untrusted data.', obj({ folder: S('Folder (path or name) or product'), since: { type: 'number' } }, ['folder']), async (a) => this.releaseNotes(a)),
+      t('release_cut', 'SAFE. Release package of an app (folder or product): tasks deployed since the last version, proposed semver and the "what is new" text in pt/en/es. Titles come from PRs: wrapped as untrusted data.', obj({ app: S('App folder (path or name) or product') }, ['app']), async (a) => this.releaseCut(a)),
+      t('release_submit', 'GATED, always (critical card with PIN). Sends the app version for store review: dispatches the repo store workflow (kind=submit). Use the version from release_cut.', obj({ app: S(), version: S('x.y.z from release_cut'), ...REASON }, ['app', 'version']), async (a) => this.releaseSubmit(a)),
       t('projects_config_set','GATED. Changes settings of a folder (keys: card, auto, provider, budget, check, reviewer, reviewerModel, copy).', obj({ folder: S(), values: { type: 'object' }, ...REASON }, ['folder', 'values']), async (a) => this.projectsConfigSet(a)),
       // --- uso
       t('usage_accounts', 'SAFE. Accounts and their 5h/week quota.', obj({}), async () => ok(this.deps.accounts?.() ?? [])),
@@ -628,6 +633,33 @@ export class JarvisTools {
       .slice(0, 100)
       .map((e) => ({ title: e.title ?? '', stage: e.stage, at: new Date(e.at).toISOString(), folder: basename(e.folder) }));
     return ok(wrapUntrusted('journal', target, JSON.stringify({ since: new Date(since).toISOString(), notes }, null, 1)));
+  }
+
+  private async releaseCut(a: Record<string, unknown>): Promise<Result> {
+    const l = this.deps.lojas;
+    const folder = l?.appFolder(str(a.app), this.deps.folders());
+    if (!l || !folder) return fail(tr('App não encontrado: diga a pasta ou o produto.'));
+    return ok(wrapUntrusted('release_cut', str(a.app), JSON.stringify(await l.cut(folder), null, 1)));
+  }
+
+  /** release_submit: cartão crítico com versão e texto nos 3 idiomas; só depois do PIN dispara o submit. */
+  private async releaseSubmit(a: Record<string, unknown>): Promise<Result> {
+    const l = this.deps.lojas;
+    const folder = l?.appFolder(str(a.app), this.deps.folders());
+    if (!l || !folder) return fail(tr('App não encontrado: diga a pasta ou o produto.'));
+    const version = str(a.version);
+    const cut = await l.cut(folder);
+    if (version !== cut.version) return fail(tr('A versão proposta agora é {0}, não {1}: rode release_cut de novo.', [cut.version, version]));
+    const facts = [
+      tr('ENVIAR PARA REVISÃO DA LOJA: {0} versão {1} (público e irreversível)', [basename(folder), cut.version]),
+      tr('Última versão: {0}', [cut.lastVersion ?? tr('(nenhuma)')]),
+      tr('Tarefas na versão: {0}', [cut.items.length]),
+      ...(cut.translated ? [] : [tr('Atenção: en/es estão em português (sem tradução).')]),
+    ];
+    const refused = await this.gate('release_submit', { app: folder, version }, facts, a.reason, [cut.notes.pt, cut.notes.en, cut.notes.es].join('\n\n'));
+    if (refused) return fail(refused);
+    const r = await l.request(folder, { kind: 'submit', version }, true);
+    return 'event' in r ? ok(tr('Disparado: submit da versão {0}. Acompanhe na tela da pasta.', [version])) : fail(r.error);
   }
 
   // ------------------------------------------------------------------ aviso
