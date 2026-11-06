@@ -35,6 +35,21 @@ export interface VBoardsRefine {
   error?: string;
 }
 
+/** Triagem de uma ideia ou perguntas de um card (server/vboards/triage.ts TriageView). */
+export interface VBoardsTriage {
+  cardId: string;
+  kind: 'task' | 'card';
+  title: string;
+  state: 'running' | 'done' | 'failed';
+  result?: { valid: boolean; reason: string; duplicateOf?: string; alreadyDone?: boolean; product?: string; repo?: string; priority: 'low' | 'med' | 'high'; questions: string[] };
+  error?: string;
+  questions: string[];
+  waiting: boolean;
+}
+
+/** Quantas triagens já resolvidas aparecem (as que esperam o dono aparecem todas). */
+const TRIAGE_SHOWN = 5;
+
 function readIgnored(): string[] {
   try {
     const v: unknown = JSON.parse(localStorage.getItem(IGNORED_KEY) ?? '[]');
@@ -61,6 +76,9 @@ export class VBoardsPanel implements UiComponent {
   private readonly status: HTMLElement;
   private tasks: VBoardsTask[] = [];
   private refines: VBoardsRefine[] = [];
+  private triage: VBoardsTriage[] = [];
+  /** Rascunho da resposta por card (sobrevive às atualizações da lista). */
+  private readonly drafts = new Map<string, string>();
   /** O token foi recusado na última busca (escopo que falta, expirado/inválido): a frase do servidor. */
   private problem = '';
   private ignored = readIgnored();
@@ -113,7 +131,7 @@ export class VBoardsPanel implements UiComponent {
   }
 
   render(): void {
-    const n = this.enabled ? this.visible().length + this.refines.length : 0;
+    const n = this.enabled ? this.visible().length + this.refines.length + this.triageShown().length : 0;
     // Token recusado: o botão aparece (com "!") para a pessoa ver o motivo.
     setHidden(this.button, n === 0 && !(this.enabled && this.problem));
     this.button.classList.toggle('is-error', !!this.problem);
@@ -128,9 +146,10 @@ export class VBoardsPanel implements UiComponent {
       const res = await fetch('/api/vboards', { credentials: 'same-origin', cache: 'no-store' });
       if (res.status === 404) this.off = true;
       else if (res.ok) {
-        const body = (await res.json()) as { tasks?: VBoardsTask[]; refines?: VBoardsRefine[]; problem?: string };
+        const body = (await res.json()) as { tasks?: VBoardsTask[]; refines?: VBoardsRefine[]; triage?: VBoardsTriage[]; problem?: string };
         this.tasks = Array.isArray(body.tasks) ? body.tasks : [];
         this.refines = Array.isArray(body.refines) ? body.refines : [];
+        this.triage = Array.isArray(body.triage) ? body.triage : [];
         this.problem = typeof body.problem === 'string' ? body.problem : '';
       }
     } catch {
@@ -174,11 +193,11 @@ export class VBoardsPanel implements UiComponent {
   /** Redesenha só quando a lista mudou (a escolha da pasta e o foco não se perdem a cada atualização). */
   private renderList(force = false): void {
     const tasks = this.visible();
-    const sig = JSON.stringify([tasks, this.refines, this.busy, this.problem]);
+    const sig = JSON.stringify([tasks, this.refines, this.triageShown(), this.busy, this.problem]);
     if (!force && sig === this.shown) return;
     this.shown = sig;
     const problem = this.problem ? [h('li', { class: 'ui-vboards__item' }, h('p', { class: 'ui-vboards__text is-error', text: this.problem }))] : [];
-    this.list.replaceChildren(...problem, ...tasks.map((t) => this.item(t)), ...this.refines.map((r) => this.refineItem(r)));
+    this.list.replaceChildren(...problem, ...tasks.map((t) => this.item(t)), ...this.refines.map((r) => this.refineItem(r)), ...this.triageShown().map((r) => this.triageItem(r)));
     this.syncListBtn();
   }
 
@@ -238,6 +257,62 @@ export class VBoardsPanel implements UiComponent {
       open.length ? convo : null,
       open.length ? h('div', { class: 'ui-vboards__actions' }, link) : null,
     );
+  }
+
+  /** Os cards esperando o dono primeiro, depois as últimas triagens. */
+  private triageShown(): VBoardsTriage[] {
+    return [...this.triage.filter((r) => r.waiting), ...this.triage.filter((r) => !r.waiting).slice(0, TRIAGE_SHOWN)];
+  }
+
+  private chip(text: string, kind = ''): HTMLElement {
+    return h('span', { class: `ui-triage__chip${kind ? ` ui-triage__chip--${kind}` : ''}`, text });
+  }
+
+  /** Resultado da triagem (válida, duplicada, produto, prioridade) e as perguntas com o campo de resposta. */
+  private triageItem(r: VBoardsTriage): HTMLElement {
+    const x = r.result;
+    const priority = x ? { low: tr('baixa'), med: tr('média'), high: tr('alta') }[x.priority] : '';
+    const verdict =
+      r.state === 'running' ? this.chip(tr('Triando…')) : r.state === 'failed' ? this.chip(tr('Triagem falhou'), 'bad') : x?.alreadyDone ? this.chip(tr('Já feita'), 'warn') : x?.duplicateOf ? this.chip(tr('Duplicada'), 'warn') : x?.valid ? this.chip(tr('Válida'), 'ok') : this.chip(tr('Inválida'), 'bad');
+    const chips = [
+      r.waiting ? this.chip(tr('Aguardando você'), 'wait') : null,
+      verdict,
+      x?.product ? this.chip(x.repo ? `${x.product} / ${x.repo}` : x.product) : null,
+      x ? this.chip(tr('Prioridade {0}', [priority])) : null,
+      x?.duplicateOf ? this.chip(tr('igual ao card {0}', [x.duplicateOf])) : null,
+    ];
+    const answer = h('textarea', { class: 'ui-chat__input ui-triage__answer', attrs: { rows: 3, 'aria-label': tr('Sua resposta às perguntas'), placeholder: tr('Ex.: 1) sim 2) só no app') }, on: { input: () => this.drafts.set(r.cardId, answer.value) } });
+    answer.value = this.drafts.get(r.cardId) ?? '';
+    const send = h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow', type: 'button', on: { click: () => void this.sendAnswer(r, answer.value) } }, tr('Responder'));
+    return h(
+      'li',
+      { class: `ui-vboards__item ui-triage${r.waiting ? ' is-waiting' : ''}` },
+      h('span', { class: 'ui-spawn__folder-name', text: r.title || tr('(card sem título)') }),
+      h('div', { class: 'ui-triage__chips' }, ...chips),
+      x?.reason ? h('p', { class: 'ui-vboards__text', text: x.reason }) : null,
+      r.error ? h('p', { class: 'ui-vboards__text is-error', text: r.error }) : null,
+      r.waiting ? h('ol', { class: 'ui-triage__questions' }, ...r.questions.map((q) => h('li', { text: q }))) : null,
+      r.waiting ? answer : null,
+      r.waiting ? h('div', { class: 'ui-vboards__actions' }, send) : null,
+    );
+  }
+
+  private async sendAnswer(r: VBoardsTriage, text: string): Promise<void> {
+    if (this.busy || !text.trim()) return this.say(tr('Escreva a resposta.'), true);
+    this.busy = r.cardId;
+    this.renderList();
+    try {
+      const res = await fetch('/api/vboards/triage/answer', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: r.cardId, answer: text }) });
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(body.error ?? tr('erro {0}', [res.status]));
+      this.drafts.delete(r.cardId);
+      this.say(tr('Resposta enviada: o card vai ser refinado de novo.'));
+    } catch (err) {
+      this.say(tr('Não enviou: {0}', [(err as Error).message]), true);
+    } finally {
+      this.busy = undefined;
+      await this.load();
+    }
   }
 
   private refineItem(r: VBoardsRefine): HTMLElement {

@@ -23,7 +23,7 @@ interface NotifyView {
 const ROUTINES = ['briefing', 'closing', 'weekly'] as const;
 const routineLabel = (k: (typeof ROUTINES)[number]): string => (k === 'closing' ? tr('Horário do fechamento do dia') : k === 'weekly' ? tr('Horário do resumo semanal') : tr('Horário do briefing'));
 
-interface FolderConfig { card?: string; auto: boolean; provider: string; budget: number; check?: string; qa?: string; reviewer: string; reviewerModel?: string; copy?: string }
+interface FolderConfig { card?: string; auto: boolean; provider: string; budget: number; check?: string; qa?: string; reviewer: string; reviewerModel?: string; copy?: string; ship?: string; base?: string; remote?: string; deploy?: string; ciMinutes?: number }
 
 const PROVIDERS = ['claude', 'codex', 'agy'];
 
@@ -39,6 +39,11 @@ export class VBoardsConfigGroup {
   private readonly reviewerModel = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 60 } });
   private readonly qa = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 500, placeholder: 'npx playwright test --project=qa' } });
   private readonly copy = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 500, placeholder: '.env, apps/web/.env.local' } });
+  private readonly ship = h('select', { class: 'ui-rename__input' }, h('option', { attrs: { value: 'off' }, text: tr('off: nunca sobe') }), h('option', { attrs: { value: 'pr' }, text: tr('pr: abre só o PR') }), h('option', { attrs: { value: 'merge' }, text: tr('merge: com CI verde, faz o merge') }));
+  private readonly base = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 100, placeholder: 'main' } });
+  private readonly remote = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 100, placeholder: 'origin' } });
+  private readonly deploy = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 200, placeholder: tr('none ou workflow:deploy.yml') } });
+  private readonly ciMinutes = h('input', { class: 'ui-rename__input', type: 'number', attrs: { min: '1', max: '240', step: '1' } });
   private readonly ntfy = h('input', { class: 'ui-rename__input', type: 'url', attrs: { maxlength: 300, placeholder: 'https://ntfy.sh/<tópico>' } });
   private readonly channel = h('select', { class: 'ui-rename__input' }, h('option', { attrs: { value: 'ntfy' }, text: 'ntfy' }), h('option', { attrs: { value: 'whatsapp' }, text: 'WhatsApp' }), h('option', { attrs: { value: 'both' }, text: tr('os dois') }));
   private readonly waUrl = h('input', { class: 'ui-rename__input', type: 'url', attrs: { maxlength: 300, placeholder: 'https://wa.exemplo.com' } });
@@ -74,7 +79,7 @@ export class VBoardsConfigGroup {
   );
   private readonly save = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar na pasta'), on: { click: () => void this.store() } });
   private readonly status = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
-  private readonly fields = [this.card, this.auto, this.provider, this.budget, this.check, this.qa, this.reviewer, this.reviewerModel, this.copy];
+  private readonly fields = [this.card, this.auto, this.provider, this.budget, this.check, this.qa, this.reviewer, this.reviewerModel, this.copy, this.ship, this.base, this.remote, this.deploy, this.ciMinutes];
 
   constructor() {
     this.folder.addEventListener('change', () => void this.load());
@@ -93,6 +98,12 @@ export class VBoardsConfigGroup {
       row(tr('Revisor (vboards.reviewer)'), this.reviewer),
       row(tr('Modelo do revisor (vboards.reviewerModel)'), this.reviewerModel),
       row(tr('Copiar para a cópia isolada (vboards.copy): caminhos relativos separados por vírgula; ficam fora do Juntar'), this.copy),
+      row(tr('Subir (vboards.ship)'), this.ship),
+      h('p', { class: 'ui-set__hint', text: tr('Subir: off = nunca sobe; pr = abre só o PR; merge = com CI verde faz o merge (e o deploy do repo). Exige o token do GitHub e o PIN.') }),
+      row(tr('Branch base (vboards.base)'), this.base),
+      row(tr('Remoto (vboards.remote)'), this.remote),
+      row(tr('Deploy (vboards.deploy)'), this.deploy),
+      row(tr('Minutos de espera do CI (vboards.ciMinutes)'), this.ciMinutes),
       this.save,
       this.status,
       this.ntfyGroup,
@@ -187,13 +198,18 @@ export class VBoardsConfigGroup {
     this.reviewer.value = c.reviewer;
     this.reviewerModel.value = c.reviewerModel ?? '';
     this.copy.value = c.copy ?? '';
+    this.ship.value = c.ship ?? 'off';
+    this.base.value = c.base ?? '';
+    this.remote.value = c.remote ?? '';
+    this.deploy.value = c.deploy ?? '';
+    this.ciMinutes.value = String(c.ciMinutes ?? 30);
     for (const f of this.fields) f.disabled = !editable;
     setHidden(this.save, !editable);
     this.say(editable ? '' : tr('Só leitura pela porta do celular: mude no próprio computador.'));
   }
 
   private async store(): Promise<void> {
-    const config = { card: this.card.value, auto: this.auto.checked, provider: this.provider.value, budget: this.budget.value, check: this.check.value, qa: this.qa.value, reviewer: this.reviewer.value, reviewerModel: this.reviewerModel.value, copy: this.copy.value };
+    const config = { card: this.card.value, auto: this.auto.checked, provider: this.provider.value, budget: this.budget.value, check: this.check.value, qa: this.qa.value, reviewer: this.reviewer.value, reviewerModel: this.reviewerModel.value, copy: this.copy.value, ship: this.ship.value, base: this.base.value, remote: this.remote.value, deploy: this.deploy.value, ciMinutes: this.ciMinutes.value };
     try {
       const res = await fetch('/api/vboards/config', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: this.folder.value, config }) });
       const body = (await res.json().catch(() => ({}))) as { config?: FolderConfig; editable?: boolean; error?: string };
@@ -547,6 +563,74 @@ export class ApprovalPinGroup {
       for (const el of [this.pin, this.again, this.current]) el.value = '';
       this.show(v);
       setText(this.status, erase ? tr('PIN apagado.') : tr('Gravado.'));
+      this.status.classList.remove('is-error');
+    } catch (err) {
+      setText(this.status, tr('Não gravou: {0}', [(err as Error).message]));
+      this.status.classList.add('is-error');
+    }
+  }
+}
+
+interface GitHubView { set: boolean; source: 'env' | 'file' | null; editable: boolean; error?: string }
+
+/** Configurações › Token do GitHub (GET/PUT /api/chat/github): o token do "Subir"; nunca volta para a página. */
+export class GitHubTokenGroup {
+  readonly el: HTMLElement;
+  private readonly state = h('p', { class: 'ui-set__hint' });
+  private readonly token = h('input', { class: 'ui-rename__input', type: 'password', attrs: { autocomplete: 'off', maxlength: 300 } });
+  private readonly tokenRow = row(tr('Token novo'), this.token);
+  private readonly save = h('button', { class: 'ui-btn', type: 'button', text: tr('Salvar'), on: { click: () => void this.store(this.token.value) } });
+  private readonly clear = h('button', { class: 'ui-btn', type: 'button', text: tr('Remover'), on: { click: () => void this.store('') } });
+  private readonly status = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
+
+  constructor() {
+    this.token.addEventListener('keydown', (e) => e.stopPropagation());
+    this.token.addEventListener('keyup', (e) => e.stopPropagation());
+    this.el = h(
+      'div',
+      { class: 'ui-set-group', hidden: true },
+      h('h3', { text: tr('Token do GitHub') }),
+      h('p', { class: 'ui-set__hint', text: tr('Usado pelo "Subir" para abrir o PR, esperar o CI e fazer o merge. Crie um token fine-grained só para os repositórios que vão subir, com as permissões: Pull requests: leitura e escrita; Contents: leitura e escrita; Actions: leitura e escrita; Checks: leitura; Statuses: leitura (opcional: Administration leitura e escrita, para criar repositórios no futuro).') }),
+      h('p', { class: 'ui-set__hint', text: tr('Fica só neste computador (arquivo com permissão 600) e nunca é mostrado de novo.') }),
+      this.state,
+      this.tokenRow,
+      this.save,
+      this.clear,
+      this.status,
+    );
+    void this.load();
+  }
+
+  private async load(): Promise<void> {
+    try {
+      const res = await fetch('/api/chat/github', { credentials: 'same-origin', cache: 'no-store' });
+      if (!res.ok) return;
+      this.show((await res.json()) as GitHubView);
+      setHidden(this.el, false);
+    } catch {
+      // sem a rota: fica escondido
+    }
+  }
+
+  private show(v: GitHubView): void {
+    const where = v.source === 'env' ? tr('variável HABBLAUD_GITHUB_TOKEN') : tr('arquivo ~/.habblaud/github.json');
+    setText(this.state, v.set ? tr('Token definido ({0}).', [where]) : tr('Sem token: o "Subir" fica indisponível.'));
+    const edit = v.editable && v.source !== 'env';
+    setHidden(this.tokenRow, !edit);
+    setHidden(this.save, !edit);
+    setHidden(this.clear, !edit || !v.set);
+    if (!v.editable) setText(this.status, tr('Só muda pelo próprio computador.'));
+    else if (v.source === 'env') setText(this.status, tr('Definido pela variável de ambiente: mude por lá.'));
+  }
+
+  private async store(token: string): Promise<void> {
+    try {
+      const res = await fetch('/api/chat/github', { method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+      const v = (await res.json().catch(() => ({}))) as GitHubView;
+      if (!res.ok) throw new Error(v.error ?? tr('erro {0}', [res.status]));
+      this.token.value = '';
+      this.show(v);
+      setText(this.status, token ? tr('Gravado.') : tr('Token removido.'));
       this.status.classList.remove('is-error');
     } catch (err) {
       setText(this.status, tr('Não gravou: {0}', [(err as Error).message]));

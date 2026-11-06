@@ -81,6 +81,80 @@ export interface ChatRun {
   quotaOverride?: boolean;
   /** Rodada de comentários num item de uma lista que já tinha parado: o estado a que ela volta quando o item termina. */
   resumeTo?: RunState;
+  /** "Subir" (server/chat/ship.ts): push do branch, PR, CI, merge e deploy, preso ao SHA aprovado. */
+  ship?: RunShip;
+}
+
+/**
+ * Etapas do "Subir". 'waiting': produto com vários repos, espera o repo anterior (server → web → app) chegar a
+ * deployed. Com vboards.ship=pr a máquina para em 'pr' (o PR aberto é o fim).
+ */
+export type ShipStep = 'waiting' | 'pushing' | 'pr' | 'ci' | 'merging' | 'deploying' | 'deployed' | 'failed';
+export type CiVerdict = 'pending' | 'pass' | 'fail' | 'no-ci';
+
+export interface RunShip {
+  step: ShipStep;
+  mode: 'pr' | 'merge';
+  /** O SHA aprovado (com PIN): push e merge só dele. */
+  sha: string;
+  owner: string;
+  repo: string;
+  remote: string;
+  base: string;
+  branch: string;
+  /** `none` ou `workflow:<arquivo.yml>`. */
+  deploy: string;
+  ciMinutes: number;
+  startedAt: number;
+  /** Quando entrou na etapa atual (prazos do CI e do deploy). */
+  stepAt: number;
+  prNumber?: number;
+  prUrl?: string;
+  ci?: CiVerdict;
+  /** O commit do merge na base (o deploy espera o workflow dele). */
+  mergeSha?: string;
+  /** Repo sem CI de PR: o merge espera uma aprovação extra com PIN ("merge = deploy em produção"). */
+  needs?: 'no-ci';
+  noCiApproved?: boolean;
+  /** Etapa em que falhou. */
+  failedAt?: ShipStep;
+  /** Avisos (ntfy/WhatsApp) já mandados, para não repetir depois de um reinício. */
+  notified?: string[];
+  /** Por que falhou ou o que espera; o resultado do fast-forward do checkout local depois do deploy. */
+  note?: string;
+}
+
+/** O "Subir" está andando (Juntar e Descartar esperam). Com ship=pr, o PR aberto ('pr' com prUrl) já é o fim. */
+export const shipActive = (s: RunShip | undefined): boolean => !!s && s.step !== 'deployed' && s.step !== 'failed' && !(s.mode === 'pr' && s.step === 'pr' && !!s.prUrl);
+
+/** O que o cartão do "Subir" mostra antes do PIN (POST /api/chat/runs/:id/ship/prepare). */
+export interface ShipPreview {
+  folder: string;
+  owner: string;
+  repo: string;
+  remote: string;
+  base: string;
+  branch: string;
+  sha: string;
+  mode: 'pr' | 'merge';
+  deploy: string;
+  ciMinutes: number;
+  stat: string;
+  files: number;
+  added: number;
+  removed: number;
+  /** Resultado do portão (lista automática): pass/fail no último item, none sem portão. */
+  gate: 'pass' | 'fail' | 'none';
+  /** Arquivos mudados em .husky/, .githooks/ e .github/workflows/ (hooks e CI rodam com a credencial do dono). */
+  risky: string[];
+}
+
+/** GET/PUT /api/chat/github: o token do GitHub do "Subir" (nunca volta para a página). */
+export interface GitHubTokenView {
+  set: boolean;
+  source: 'env' | 'file' | null;
+  /** Só pelo próprio computador. */
+  editable: boolean;
 }
 
 /** POST /api/chat/runs: a lista aprovada na tela de confirmação. */

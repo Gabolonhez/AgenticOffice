@@ -196,23 +196,23 @@ export const REFINE_TIMEOUT_MS = 15 * 60_000;
  * edição, sem os MCPs do usuário) e com o orçamento; codex no sandbox read-only, efêmero; agy no modo plan. O codex e o
  * agy não têm limite de gasto por flag.
  */
-export function refineArgs(provider: Provider, budgetUsd: number, prompt: string): string[] {
+export function refineArgs(provider: Provider, budgetUsd: number, prompt: string, web = false): string[] {
   if (provider === 'codex') return ['exec', '--json', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '-'];
   if (provider === 'antigravity') return ['--output-format', 'stream-json', '--mode', 'plan', `--print=${prompt}`];
-  return ['-p', '--output-format', 'stream-json', '--verbose', '--tools', 'Read,Grep,Glob', '--strict-mcp-config', '--no-session-persistence', '--max-budget-usd', String(budgetUsd)];
+  return ['-p', '--output-format', 'stream-json', '--verbose', '--tools', web ? 'WebSearch,WebFetch' : 'Read,Grep,Glob', '--strict-mcp-config', '--no-session-persistence', '--max-budget-usd', String(budgetUsd)];
 }
 
 /**
  * "Refinar" um card: UMA rodada só de leitura NA PASTA do projeto (sem cópia isolada: nada é escrito), pelo
  * vboards.provider. Sem a CLI do codex/agy, cai no claude, como o reviewerFor.
  */
-export function refinerFor(provider: Provider, cwd: string, budgetUsd: number, bins: (p: Provider) => CliBin | undefined = (p) => resolveCliBin(p), timeoutMs = REFINE_TIMEOUT_MS): { run: AiRunner; by: string } {
+export function refinerFor(provider: Provider, cwd: string, budgetUsd: number, bins: (p: Provider) => CliBin | undefined = (p) => resolveCliBin(p), timeoutMs = REFINE_TIMEOUT_MS, web = false): { run: AiRunner; by: string } {
   const p: Provider = provider !== 'claude' && bins(provider) ? provider : 'claude';
   const bin = bins(p);
   const by = p === provider ? (p === 'antigravity' ? 'agy' : p) : `claude ${tr('(no lugar de {0}, não encontrado)', [provider === 'antigravity' ? 'agy' : provider])}`;
   if (!bin) return { run: () => Promise.reject(new Error(tr('Claude Code não encontrado'))), by };
   const parser = p === 'codex' ? codexDriver.parser : p === 'antigravity' ? agyDriver.parser : claudeDriver.parser;
-  return { run: streamRunner(bin, (prompt) => refineArgs(p, budgetUsd, prompt), p !== 'antigravity', parser, cwd, timeoutMs), by };
+  return { run: streamRunner(bin, (prompt) => refineArgs(p, budgetUsd, prompt, web), p !== 'antigravity', parser, cwd, timeoutMs), by };
 }
 
 /** Revisa o diff; erro da IA não derruba o portão (vira "revisão indisponível" no relatório). */

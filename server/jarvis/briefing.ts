@@ -34,6 +34,8 @@ export interface BriefingInput {
   failures: string[];
   /** Por projeto, do registro (chat/journal.ts projectLedger): feito, fazendo, a fazer, travado. */
   ledger?: readonly ProjectLedger[];
+  /** Cards esperando a resposta do dono (vboards/triage.ts). */
+  waiting?: ReadonlyArray<{ cardId: string; title: string; questions: readonly string[] }>;
 }
 
 /**
@@ -82,6 +84,7 @@ export function briefingMaterial(i: BriefingInput): string {
       some(tr('a fazer'), p.todo);
     }
   }
+  if (i.waiting?.length) lines.push(tr('Aguardando você (perguntas):'), ...i.waiting.slice(0, 10).map((w) => `- ${w.title} (${w.cardId}): ${tr('{0} perguntas', [w.questions.length])}`));
   if (i.quota.length) lines.push(tr('Cota:'), ...i.quota.map((q) => `- ${q}`));
   if (i.failures.length) lines.push(tr('Falhas:'), ...i.failures.slice(0, 10).map((f) => `- ${f}`));
   return maskSecrets(lines.join('\n'));

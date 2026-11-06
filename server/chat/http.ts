@@ -9,11 +9,13 @@ import type { DaySummary, SummaryMode } from '../../shared/summary';
 import type { Provider } from '../../shared/types';
 import { HttpError, readJson, sendJson } from '../http/app';
 import { ptyRequestProblem } from '../http/pty';
+import { pinError, type ApprovalPin } from '../permissions/pin';
 import type { PermissionRegistry } from '../permissions/registry';
 import type { Delegation } from './delegation';
 import { handleMcp, makeApprovalCall, type McpTool } from './permission';
 import type { RoleStore } from './roles';
 import type { RunService } from './runs';
+import type { ShipService } from './ship';
 import type { ChatService } from './service';
 import type { TriggerService } from './triggers';
 import type { WorktreeOps } from './types';
@@ -28,6 +30,14 @@ export interface ChatRouteDeps {
   delegation?: Pick<Delegation, 'tools' | 'links'>;
   /** Listas que rodam um agente por item (runs.ts); sem ela, 404. */
   runs?: Pick<RunService, 'list' | 'get' | 'create' | 'stop' | 'continue' | 'merge' | 'discard' | 'diff' | 'feedback' | 'shotPath'>;
+  /** "Subir" (ship.ts): o cartão (prepare) e a aprovação com PIN (approve); sem ele, 404. */
+  ship?: Pick<ShipService, 'prepare' | 'approve'>;
+  /** PIN de aprovação (permissions/pin.ts): o "Subir" sempre pede; sem PIN definido = 403. */
+  pin?: Pick<ApprovalPin, 'check' | 'triesLeft'>;
+  /** Token do GitHub do "Subir" (github.ts GitHubTokenStore): GET /api/chat/github; PUT só pelo próprio computador. */
+  github?: { view(editable: boolean): unknown; save(raw: unknown): string | undefined };
+  /** "Abrir no VS Code" a cópia de uma lista (`code <caminho>` sem shell): false = sem `code`, a página mostra o caminho. */
+  openEditor?: (path: string) => Promise<boolean>;
   /** Gatilhos (triggers.ts); sem eles, 404. */
   /** Resumo do dia (server/summary); sem ele, 404. */
   summary?: { generate(mode: SummaryMode): Promise<DaySummary>; last(): DaySummary | undefined };
@@ -44,7 +54,7 @@ const SSE_BEAT_MS = 15_000;
 const AGENT_ROUTE = /^\/api\/chat\/agents\/([^/]+)(?:\/(messages|stop|limits|merge|discard))?$/;
 const MCP_ROUTE = /^\/api\/chat\/mcp\/([^/]+)$/;
 const ROLE_ROUTE = /^\/api\/chat\/roles\/([^/]+)$/;
-const RUN_ROUTE = /^\/api\/chat\/runs\/([^/]+)(?:\/(stop|continue|merge|discard|diff))?$/;
+const RUN_ROUTE = /^\/api\/chat\/runs\/([^/]+)(?:\/(stop|continue|merge|discard|diff|ship|ship\/prepare|vscode))?$/;
 const FEEDBACK_ROUTE = /^\/api\/chat\/runs\/([^/]+)\/items\/(\d{1,4})\/feedback$/;
 const SHOT_ROUTE = /^\/api\/chat\/runs\/([^/]+)\/items\/(\d{1,4})\/shots\/([^/]+)$/;
 const TRIGGER_ROUTE = /^\/api\/chat\/triggers\/([^/]+)(?:\/(test))?$/;
@@ -242,7 +252,35 @@ export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
         return run ? sendJson(res, 200, run) : sendJson(res, 404, { error: tr('lista não encontrada') });
       }
       if (method !== 'POST') return notAllowed(res, 'POST');
+      if (action === 'ship' || action === 'ship/prepare') {
+        if (!d.ship) {
+          req.resume();
+          return sendJson(res, 404, { error: tr('rota desconhecida') });
+        }
+        if (action === 'ship/prepare') {
+          req.resume();
+          const p = await d.ship.prepare(id);
+          return 'error' in p ? sendJson(res, p.status, { error: p.error }) : sendJson(res, 200, p);
+        }
+        // Push, PR e merge: sempre com o PIN de aprovação (sem PIN definido, nada sobe).
+        const body = ((await readJson(req)) ?? {}) as { pin?: unknown; sha?: unknown; noCi?: unknown };
+        const c = d.pin ? await d.pin.check(body.pin) : 'unset';
+        if (c !== 'ok') {
+          const e = pinError(c, d.pin?.triesLeft() ?? 0);
+          return sendJson(res, e.status, { error: e.error, pin: c });
+        }
+        if (typeof body.sha !== 'string' || !/^[0-9a-f]{40}$/.test(body.sha)) return sendJson(res, 400, { error: tr('Mande o SHA exato do cartão.') });
+        const r = await d.ship.approve(id, { sha: body.sha, ...(body.noCi === true ? { noCi: true } : {}) });
+        return 'run' in r ? sendJson(res, 200, r.run) : sendJson(res, r.status, { error: r.error });
+      }
       req.resume();
+      if (action === 'vscode') {
+        const run = d.runs.get(id);
+        const w = run?.isolated;
+        if (!run) return sendJson(res, 404, { error: tr('lista não encontrada') });
+        if (!w || w.merged || w.discarded) return sendJson(res, 409, { error: tr('Esta lista não tem cópia isolada aberta.') });
+        return sendJson(res, 200, { opened: d.openEditor ? await d.openEditor(w.path) : false, path: w.path });
+      }
       if (action === 'stop' || action === 'continue') {
         const r = action === 'stop' ? d.runs.stop(id) : d.runs.continue(id);
         const status = { ok: 200, idle: 200, 'not-found': 404, invalid: 409, busy: 409 }[r];
@@ -251,6 +289,20 @@ export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
       }
       const r = await (action === 'merge' ? d.runs.merge(id) : d.runs.discard(id));
       return 'ok' in r ? sendJson(res, 200, {}) : sendJson(res, r.status, { error: r.error });
+    }
+
+    if (path === '/api/chat/github') {
+      if (!d.github) return sendJson(res, 404, { error: tr('rota desconhecida') });
+      if (method === 'GET') return sendJson(res, 200, d.github.view(!isRemote));
+      if (method !== 'PUT') return notAllowed(res, 'GET, PUT');
+      // O token só é gravado pelo próprio computador (nem pela porta do celular com login).
+      if (isRemote) {
+        req.resume();
+        return sendJson(res, 403, { error: tr('O token do GitHub só muda pelo próprio computador.') });
+      }
+      const body = ((await readJson(req)) ?? {}) as { token?: unknown };
+      const err = d.github.save(body.token);
+      return err ? sendJson(res, 400, { error: err }) : sendJson(res, 200, d.github.view(true));
     }
 
     // Gatilhos: "Testar agora" só cria o cartão de aprovação, como qualquer disparo.

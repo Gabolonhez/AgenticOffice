@@ -1,5 +1,6 @@
 // Onde está o executável de cada CLI do chat. No Windows o `claude` e o `codex` do npm são shims `.cmd`, que o spawn
 // sem shell não roda: usa o binário real ao lado (claude.exe, ou o codex.js rodado pelo próprio Node).
+import { spawn } from 'node:child_process';
 import { posix, win32 } from 'node:path';
 import type { Provider } from '../../shared/types';
 import { isExecutableFile } from '../claude-bin';
@@ -46,4 +47,32 @@ export function resolveCliBin(
     return exists(js) ? { file: process.execPath, prefix: [js] } : undefined;
   }
   return undefined;
+}
+
+/**
+ * O VS Code (`code`) para o "Abrir no VS Code" de uma lista. No Windows o `code` do PATH é `bin\code.cmd`, que o spawn
+ * sem shell não roda: usa o `Code.exe` da pasta de cima. Não achou = undefined (a página mostra o caminho).
+ */
+export function resolveCodeBin(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  exists: (p: string) => boolean = (p) => isExecutableFile(p, platform),
+): string | undefined {
+  const found = findInPath('code', env, platform, exists);
+  if (!found || platform !== 'win32' || !/\.(cmd|bat)$/i.test(found)) return found;
+  const exe = win32.join(win32.dirname(found), '..', 'Code.exe');
+  return exists(exe) ? exe : undefined;
+}
+
+/** `code <caminho>` sem shell, solto do servidor; false = sem VS Code ou não abriu. */
+export function openInVsCode(path: string, bin = resolveCodeBin()): Promise<boolean> {
+  if (!bin) return Promise.resolve(false);
+  return new Promise((ok) => {
+    const child = spawn(bin, [path], { detached: true, stdio: 'ignore', windowsHide: false });
+    child.once('error', () => ok(false));
+    child.once('spawn', () => {
+      child.unref();
+      ok(true);
+    });
+  });
 }
