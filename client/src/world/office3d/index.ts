@@ -22,6 +22,40 @@ import {
   type Seat,
 } from './office3d-model';
 
+/** Nome do escritório no idioma da página (os ids do pacote são fixos); outro id cai no nome do pacote. */
+function officeName(e: { id: string; nome: string }): string {
+  switch (e.id) {
+    case 'startup-enxuta':
+      return tr('Startup enxuta');
+    case 'agencia-criativa':
+      return tr('Agência criativa');
+    case 'comercial':
+      return tr('Comercial');
+    case 'diretoria-equipe':
+      return tr('Diretoria + equipe');
+    case 'sede-compacta':
+      return tr('Sede compacta');
+    case 'open-space':
+      return tr('Open space com lounge');
+    case 'open-space-grande':
+      return tr('Open space grande');
+    case 'central-operacoes':
+      return tr('Central de operações');
+    case 'edificio-3-andares':
+      return tr('Edifício 3 andares');
+    case 'edificio-compacto-3-andares':
+      return tr('Edifício compacto 3 andares');
+    case 'torre-5-andares':
+      return tr('Torre 5 andares');
+    case 'torre-compacta-5-andares':
+      return tr('Torre compacta 5 andares');
+    case 'sede-200':
+      return tr('Sede de 277 lugares (3 andares)');
+    default:
+      return e.nome;
+  }
+}
+
 export interface Office3dOptions {
   canvas: HTMLCanvasElement;
   /** Onde entram o painel, as etiquetas e os avisos (o #ui, com os estilos da interface). */
@@ -394,11 +428,11 @@ export function createOffice3dScene(o: Office3dOptions): Office3dScene {
 
   async function openOffice(entry: OfficeEntry): Promise<void> {
     const mine = ++token;
-    showMsg('loading', tr('Carregando {0}…', [entry.nome]));
+    showMsg('loading', tr('Carregando {0}…', [officeName(entry)]));
     try {
       const [gltf, data] = await Promise.all([
         loader.loadAsync(assetUrl(entry.arquivo), (ev) => {
-          if (mine === token && ev.total) showMsg('loading', tr('Carregando {0}… {1}%', [entry.nome, Math.round((ev.loaded / ev.total) * 100)]));
+          if (mine === token && ev.total) showMsg('loading', tr('Carregando {0}… {1}%', [officeName(entry), Math.round((ev.loaded / ev.total) * 100)]));
         }),
         getJson<{ assentos?: unknown }>(entry.dados),
       ]);
@@ -431,7 +465,7 @@ export function createOffice3dScene(o: Office3dOptions): Office3dScene {
       syncLabels(true);
     } catch (err) {
       console.error('[office3d]', err);
-      if (mine === token) showMsg('error', tr('Não consegui abrir {0}. Importe o pacote de novo nas configurações.', [entry.nome]));
+      if (mine === token) showMsg('error', tr('Não consegui abrir {0}. Importe o pacote de novo nas configurações.', [officeName(entry)]));
     }
   }
 
@@ -446,10 +480,11 @@ export function createOffice3dScene(o: Office3dOptions): Office3dScene {
   function fillOfficeSelect(): void {
     officeSel.replaceChildren(new Option(tr('Automático (pelo número de projetos)'), 'auto'));
     for (const e of [...entries].sort((a, b) => a.postos_de_trabalho - b.postos_de_trabalho || a.id.localeCompare(b.id))) {
-      officeSel.append(new Option(`${e.nome} · ${tr('{0} postos', [e.postos_de_trabalho])}`, e.id));
+      officeSel.append(new Option(`${officeName(e)} · ${tr('{0} postos', [e.postos_de_trabalho])}`, e.id));
     }
     const pref = readPref();
     officeSel.value = entries.some((e) => e.id === pref) ? pref : 'auto';
+    officeSel.title = officeSel.selectedOptions[0]?.text ?? '';
   }
 
   async function start(): Promise<void> {
@@ -730,6 +765,7 @@ export function createOffice3dScene(o: Office3dOptions): Office3dScene {
       offs.push(o.store.on('snapshot', onSnapshot), o.onSelection(syncSelection));
       officeSel.onchange = () => {
         writePref(officeSel.value);
+        officeSel.title = officeSel.selectedOptions[0]?.text ?? '';
         const e = chosenEntry();
         if (e) void openOffice(e);
       };

@@ -55,10 +55,10 @@ export class VBoardsConfigGroup {
   private readonly otaChannel = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 40, placeholder: 'preview' } });
   private readonly versionBump = select(['auto', 'patch', 'minor', 'major']);
   private readonly loja = new LojaPanel();
-  private readonly ntfy = h('input', { class: 'ui-rename__input', type: 'url', attrs: { maxlength: 300, placeholder: 'https://ntfy.sh/<tópico>' } });
+  private readonly ntfy = h('input', { class: 'ui-rename__input', type: 'url', attrs: { maxlength: 300, placeholder: 'https://ntfy.sh/topic' } });
   private readonly channel = h('select', { class: 'ui-rename__input' }, h('option', { attrs: { value: 'ntfy' }, text: 'ntfy' }), h('option', { attrs: { value: 'whatsapp' }, text: 'WhatsApp' }), h('option', { attrs: { value: 'both' }, text: tr('os dois') }));
-  private readonly waUrl = h('input', { class: 'ui-rename__input', type: 'url', attrs: { maxlength: 300, placeholder: 'https://wa.exemplo.com' } });
-  private readonly waSession = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 80, placeholder: 'pessoal' } });
+  private readonly waUrl = h('input', { class: 'ui-rename__input', type: 'url', attrs: { maxlength: 300, placeholder: 'https://wa.example.com' } });
+  private readonly waSession = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 80, placeholder: 'personal' } });
   private readonly waOwner = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 60, placeholder: '5511999999999@s.whatsapp.net' } });
   private readonly waKey = h('input', { class: 'ui-rename__input', type: 'password', attrs: { maxlength: 200, autocomplete: 'off' } });
   /** As rotinas do Jarvis com horário (server/vboards/ntfy.ts ROUTINES): briefing, fechamento do dia e semanal. */
@@ -84,7 +84,7 @@ export class VBoardsConfigGroup {
     row(tr('Avisos por'), this.channel),
     h('p', { class: 'ui-set__hint', text: tr('Briefing do Jarvis: um resumo no horário escolhido (vazio = desligado), na conversa dele, no ntfy (a manchete) e no WhatsApp (inteiro).') }),
     h('p', { class: 'ui-set__hint', text: tr('O fechamento do dia (feito, travado, o que fica para amanhã) e o resumo semanal (por projeto, com o custo) saem pelos mesmos canais; vêm desligados.') }),
-    ...this.routines.flatMap((r) => [row(r.label, r.time), h('div', { class: 'ui-chat__row' }, ...r.days.map((d) => h('label', { class: 'ui-spawn__check' }, d.box, h('span', { text: d.label }))))]),
+    ...this.routines.flatMap((r) => [h('label', { class: 'ui-set ui-set--routine' }, h('span', { class: 'ui-set__label', text: r.label }), r.time), h('div', { class: 'ui-set__days' }, ...r.days.map((d) => h('label', { class: 'ui-spawn__check' }, d.box, h('span', { text: d.label }))))]),
     this.ntfySave,
     this.ntfyStatus,
   );
