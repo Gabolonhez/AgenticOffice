@@ -11323,6 +11323,30 @@ html.is-replay #world {
   color: var(--ui-danger, #f85149);
 }
 
+/* Selo do risco (A4): a cor reforça, o texto diz. */
+.ui-risk {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ui-risk.is-low {
+  color: var(--lv-ok, #4fd18b);
+}
+
+.ui-risk.is-medium {
+  color: var(--lv-warn, #ffb547);
+}
+
+.ui-risk.is-high {
+  color: var(--ui-danger, #ff8a8a);
+}
+
 .ui-ship__sha {
   font-family: var(--font-mono);
   font-size: 11px;

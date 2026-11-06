@@ -3,7 +3,7 @@
 // confirmar (todos os itens, a pasta, o agente, o papel e a permissão; "Rodar lista" é a aprovação da lista inteira) e
 // acompanhar (cada item com o agente dele; Parar, Continuar, Juntar/Descartar; o diff da cópia com comentários por linha).
 import { tr } from '../../../shared/i18n';
-import { parseChecklist, shipActive, type ChatRun, type RunCreateRequest, type RunFeedbackComment, type RunShip, type ShipPreview, type ShipStep } from '../../../shared/runs';
+import { parseChecklist, shipActive, type ChatRun, type RunCreateRequest, type RunFeedbackComment, type RiskLevel, type RunShip, type ShipPreview, type ShipStep } from '../../../shared/runs';
 import { ChatOptionsFields } from './chat-options';
 import type { UiContext } from './context';
 import { h, iconButton, setHidden, setText } from './dom';
@@ -48,6 +48,9 @@ const SHIP_STEPS: Array<{ step: ShipStep; label: () => string }> = [
 ];
 
 /** Estado de cada etapa da barra: done, current, failed ou pending. */
+/** Selo do risco (server/chat/risk.ts): baixo, médio ou alto, com cor e texto (não só a cor). */
+const riskBadge = (r: RiskLevel): HTMLElement => h('span', { class: `ui-risk is-${r}`, text: r === 'low' ? tr('baixo') : r === 'medium' ? tr('médio') : tr('alto') });
+
 function shipStates(s: RunShip): Array<{ step: ShipStep; label: string; state: 'done' | 'current' | 'failed' | 'pending' }> {
   const steps = s.mode === 'pr' ? SHIP_STEPS.slice(0, 2) : SHIP_STEPS;
   const at = (st: ShipStep | undefined) => steps.findIndex((x) => x.step === st);
@@ -411,7 +414,9 @@ export class RunsPanel {
         row(tr('Modo'), p.mode === 'merge' ? tr('merge automático') : tr('só PR')),
         row(tr('Deploy'), p.deploy === 'none' ? tr('nenhum') : p.deploy),
         row(tr('Portão'), gate),
+        row(tr('Risco'), riskBadge(p.risk)),
       ),
+      p.riskWhy.length ? h('p', { class: 'ui-rename__hint', text: p.riskWhy.join('; ') }) : null,
       p.stat ? h('pre', { class: 'ui-ship__stat', text: p.stat }) : null,
       p.risky.length ? h('p', { class: 'ui-ship__warn', text: tr('Muda hooks/CI que rodam com a sua credencial: {0}', [p.risky.join(', ')]) }) : null,
       p.mode === 'merge' ? h('p', { class: 'ui-rename__hint', text: tr('Com CI verde, o merge vai para {0} e dispara o deploy.', [p.base]) }) : null,
@@ -438,6 +443,7 @@ export class RunsPanel {
             { class: 'ui-ship__bar', attrs: { 'aria-label': tr('Progresso do Subir') } },
             ...shipStates(s).map((x) => h('li', { class: `ui-ship__step is-${x.state}`, attrs: x.state === 'current' ? { 'aria-current': 'step' } : {} }, h('span', { class: 'ui-ship__dot' }), h('span', { text: x.label }))),
           ),
+      s.auto ? h('p', { class: 'ui-rename__hint', text: tr('Subiu sozinho, sem PIN (vboards.autoMerge=low, risco baixo).') }) : null,
       s.prUrl ? h('a', { class: 'ui-runs__link', text: tr('PR #{0}', [s.prNumber ?? '']), attrs: { href: s.prUrl, target: '_blank', rel: 'noopener' } }) : null,
       s.step === 'ci' && s.ci ? h('p', { class: 'ui-rename__hint', text: CI_TEXT[s.ci]?.() ?? '' }) : null,
       s.note ? h('p', { class: `ui-rename__hint${s.step === 'failed' ? ' is-error' : ''}`, text: s.note }) : null,
@@ -533,6 +539,7 @@ export class RunsPanel {
       u.vscodePath ? this.vscodeFallback(u.vscodePath) : null,
       canShip && u.preview ? this.shipConfirm(run, u.preview) : null,
       run.ship ? this.shipProgress(run, run.ship) : null,
+      !run.ship && run.autoShip?.blocked ? h('p', { class: 'ui-rename__hint', text: tr('Não subiu sozinho: {0}', [run.autoShip.blocked]) }) : null,
     );
   }
 }
