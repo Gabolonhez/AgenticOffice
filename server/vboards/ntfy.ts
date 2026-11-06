@@ -93,6 +93,8 @@ interface Stored extends Record<Routine, BriefingSettings> {
   channel: NotifyChannel;
   wa?: WaSettings;
   jarvis: JarvisSettings;
+  /** Triagem automática das ideias novas (vboards/triage.ts) a cada 2 min: desligada por padrão. */
+  triage?: boolean;
 }
 
 const CHANNELS: readonly NotifyChannel[] = ['ntfy', 'whatsapp', 'both'];
@@ -140,6 +142,7 @@ export class NotifySettings {
         closing: parseBriefing(raw?.closing) ?? OFF,
         weekly: parseBriefing(raw?.weekly) ?? OFF,
         jarvis: parseJarvis(raw?.jarvis),
+        ...(raw?.triage === true ? { triage: true } : {}),
       };
     } catch {
       // sem arquivo: tudo desligado, Jarvis no padrão
@@ -166,6 +169,11 @@ export class NotifySettings {
 
   jarvis(): JarvisSettings {
     return this.s.jarvis;
+  }
+
+  /** A triagem automática das ideias novas está ligada (Configurações)? */
+  triage(): boolean {
+    return this.s.triage === true;
   }
 
   /** Só o tópico do ntfy (compatível com a tela antiga). */
@@ -196,6 +204,11 @@ export class NotifySettings {
       if (w.wa) next.wa = w.wa;
       else delete next.wa;
     }
+    if (b.triage !== undefined) {
+      if (typeof b.triage !== 'boolean') return tr('Triagem automática: use verdadeiro ou falso.');
+      if (b.triage) next.triage = true;
+      else delete next.triage;
+    }
     for (const k of ROUTINES) {
       if (b[k] === undefined) continue;
       const br = parseBriefing(b[k]);
@@ -215,6 +228,7 @@ export class NotifySettings {
       briefing: this.s.briefing,
       closing: this.s.closing,
       weekly: this.s.weekly,
+      triage: this.triage(),
       ...(editable ? { url: ntfyUrl, wa: wa ? { url: wa.url, sessionId: wa.sessionId, ownerJid: wa.ownerJid, apiKeySet: true } : null } : {}),
       editable,
     };
@@ -260,7 +274,7 @@ export class NotifySettings {
   private write(next: Stored): string | undefined {
     try {
       mkdirSync(dirname(this.file), { recursive: true });
-      const { ntfyUrl, channel, wa, jarvis } = next;
+      const { ntfyUrl, channel, wa, jarvis, triage } = next;
       // Só o que difere do padrão: um notify.json antigo (só o tópico) continua igual.
       const out = {
         ntfyUrl,
@@ -268,6 +282,7 @@ export class NotifySettings {
         ...(wa ? { wa } : {}),
         ...Object.fromEntries(ROUTINES.filter((k) => next[k].time || next[k].days.length).map((k) => [k, next[k]])),
         ...(jarvis.provider !== JARVIS_DEFAULT.provider || jarvis.model !== JARVIS_DEFAULT.model ? { jarvis } : {}),
+        ...(triage ? { triage: true } : {}),
       };
       writeFileSync(`${this.file}.tmp`, JSON.stringify(out), { mode: 0o600 });
       renameSync(`${this.file}.tmp`, this.file);

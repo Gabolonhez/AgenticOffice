@@ -4523,4 +4523,6 @@ export const EN: Readonly<Record<string, string>> = {
   "Mudar a configuração de {0}:": "Change the settings of {0}:",
   "Não deu para gravar a configuração da pasta: {0}": "Could not save the folder settings: {0}",
   "Sem a pasta de dados do Habblaud: as chaves de subir, merge e loja não podem ser gravadas.": "No Habblaud data folder: the ship, merge and store keys cannot be saved.",
+  "Triagem automática: use verdadeiro ou falso.": "Automatic triage: use true or false.",
+  "Triagem automática das ideias novas do VBoards (a cada 2 min; vem desligada)": "Automatic triage of new VBoards ideas (every 2 min; off by default)",
 };

@@ -633,8 +633,8 @@ const projects = chatOff
           }
         : undefined,
     });
-// Triagem das ideias e laço de perguntas (vboards/triage.ts): uma rodada só de leitura, sem repositório (HABBLAUD_TRIAGE=0
-// desliga a varredura das ideias novas; as ferramentas e as respostas continuam).
+// Triagem das ideias e laço de perguntas (vboards/triage.ts): uma rodada só de leitura, sem repositório. A varredura das
+// ideias novas só roda ligada (Configurações ou HABBLAUD_TRIAGE=1); as ferramentas e as respostas continuam sempre.
 const triage =
   jarvis && vboardsApi?.enabled
     ? new TriageService({
@@ -649,6 +649,7 @@ const triage =
       })
     : undefined;
 late.triage = triage;
+let triageTimer: ReturnType<typeof setInterval> | undefined;
 const jarvisTools =
   chat && permissions && jarvis
     ? new JarvisTools({
@@ -763,7 +764,13 @@ if (chat) {
   lojas.start();
   triggers?.load();
   triggers?.start();
-  if (process.env.HABBLAUD_TRIAGE !== '0') setInterval(() => void triage?.scan().catch((err) => log.warnOnce(`triage:scan:${errMsg(err)}`, tr('Triagem: falha na varredura das ideias ({0}).', [errMsg(err)]))), 2 * 60_000).unref();
+  // Triagem automática das ideias novas: desligada por padrão; liga em Configurações (notify.json) ou com
+  // HABBLAUD_TRIAGE=1 (=0 desliga mesmo com a opção). Lida a cada volta: ligar na tela vale sem reiniciar.
+  const triageOn = () => process.env.HABBLAUD_TRIAGE === '1' || (process.env.HABBLAUD_TRIAGE !== '0' && ntfy.triage());
+  if (triage) {
+    triageTimer = setInterval(() => void (triageOn() ? triage.scan().catch((err) => log.warnOnce(`triage:scan:${errMsg(err)}`, tr('Triagem: falha na varredura das ideias ({0}).', [errMsg(err)]))) : undefined), 2 * 60_000);
+    triageTimer.unref();
+  }
   jarvisInbox?.start();
   briefing?.start();
   for (const r of extraRoutines) r.start();
@@ -994,6 +1001,9 @@ function shutdown(signal: string): void {
   terminals?.stop();
   runs?.freeze();
   triggers?.stop();
+  ship?.stop();
+  lojas.stop();
+  clearInterval(triageTimer);
   jarvisInbox?.stop();
   briefing?.stop();
   for (const r of extraRoutines) r.stop();

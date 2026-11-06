@@ -19,6 +19,7 @@ interface NotifyView {
   briefing?: { time: string; days: number[] };
   closing?: { time: string; days: number[] };
   weekly?: { time: string; days: number[] };
+  triage?: boolean;
   editable?: boolean;
 }
 
@@ -69,6 +70,7 @@ export class VBoardsConfigGroup {
     time: h('input', { class: 'ui-rename__input', type: 'time' }) as HTMLInputElement,
     days: [tr('dom'), tr('seg'), tr('ter'), tr('qua'), tr('qui'), tr('sex'), tr('sáb')].map((d) => ({ label: d, box: h('input', { type: 'checkbox' }) as HTMLInputElement })),
   }));
+  private readonly triage = h('input', { type: 'checkbox' });
   private readonly ntfySave = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar avisos'), on: { click: () => void this.storeNtfy() } });
   private readonly ntfyStatus = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
   private readonly ntfyGroup = h(
@@ -86,6 +88,7 @@ export class VBoardsConfigGroup {
     h('p', { class: 'ui-set__hint', text: tr('Briefing do Jarvis: um resumo no horário escolhido (vazio = desligado), na conversa dele, no ntfy (a manchete) e no WhatsApp (inteiro).') }),
     h('p', { class: 'ui-set__hint', text: tr('O fechamento do dia (feito, travado, o que fica para amanhã) e o resumo semanal (por projeto, com o custo) saem pelos mesmos canais; vêm desligados.') }),
     ...this.routines.flatMap((r) => [row(r.label, r.time), h('div', { class: 'ui-chat__row' }, ...r.days.map((d) => h('label', { class: 'ui-spawn__check' }, d.box, h('span', { text: d.label }))))]),
+    h('label', { class: 'ui-spawn__check' }, this.triage, h('span', { text: tr('Triagem automática das ideias novas do VBoards (a cada 2 min; vem desligada)') })),
     this.ntfySave,
     this.ntfyStatus,
   );
@@ -161,11 +164,12 @@ export class VBoardsConfigGroup {
     this.waKey.value = '';
     this.waKey.placeholder = b.wa?.apiKeySet ? tr('guardada (deixe vazio para manter)') : '';
     this.channel.value = b.channel ?? 'ntfy';
+    this.triage.checked = b.triage === true;
     for (const r of this.routines) {
       r.time.value = b[r.key]?.time ?? '';
       r.days.forEach((d, i) => (d.box.checked = !!b[r.key]?.days.includes(i)));
     }
-    for (const f of [this.ntfy, this.waUrl, this.waSession, this.waOwner, this.waKey, this.channel, ...this.routines.flatMap((r) => [r.time, ...r.days.map((d) => d.box)])]) f.disabled = !editable;
+    for (const f of [this.ntfy, this.waUrl, this.waSession, this.waOwner, this.waKey, this.channel, this.triage, ...this.routines.flatMap((r) => [r.time, ...r.days.map((d) => d.box)])]) f.disabled = !editable;
     setHidden(this.ntfySave, !editable);
     if (!editable) {
       const on = [b.configured ? 'ntfy' : '', b.waConfigured ? 'WhatsApp' : ''].filter(Boolean).join(', ');
@@ -177,7 +181,7 @@ export class VBoardsConfigGroup {
     try {
       const wa = this.waUrl.value.trim() ? { url: this.waUrl.value, sessionId: this.waSession.value, ownerJid: this.waOwner.value, ...(this.waKey.value ? { apiKey: this.waKey.value } : {}) } : { url: '' };
       const schedules = Object.fromEntries(this.routines.map((r) => [r.key, { time: r.time.value, days: r.days.flatMap((d, i) => (d.box.checked ? [i] : [])) }]));
-      const res = await fetch('/api/vboards/notify', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: this.ntfy.value, channel: this.channel.value, wa, ...schedules }) });
+      const res = await fetch('/api/vboards/notify', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: this.ntfy.value, channel: this.channel.value, wa, triage: this.triage.checked, ...schedules }) });
       const body = (await res.json().catch(() => ({}))) as NotifyView & { error?: string };
       if (!res.ok) throw new Error(body.error ?? tr('erro {0}', [res.status]));
       this.showNtfy(body);
