@@ -20,7 +20,7 @@ import { truncate } from '../../shared/activity';
 import { CHAT_TEXT_MAX } from '../../shared/chat';
 import { tr } from '../../shared/i18n';
 import { parseDiff } from '../../shared/diff';
-import { RUN_CONTEXT_MAX, RUN_FEEDBACK_MAX, RUN_FEEDBACK_TEXT_MAX, RUN_ITEMS_MAX, type ChatRun, type RunAgentOptions, type RunAuto, type RunFeedbackComment, type RunItem, type RunMetric } from '../../shared/runs';
+import { RUN_CONTEXT_MAX, RUN_FEEDBACK_MAX, RUN_FEEDBACK_TEXT_MAX, RUN_ITEMS_MAX, shipActive, type ChatRun, type RunAgentOptions, type RunAuto, type RunFeedbackComment, type RunItem, type RunMetric } from '../../shared/runs';
 import { errMsg, log } from '../log';
 import type { Provider } from '../../shared/types';
 import type { ChatOpener } from '../vboards/vboards';
@@ -45,7 +45,7 @@ export interface RunDeps {
   vboards?: {
     begin(raw: unknown, open: ChatOpener): Promise<{ agentId: string } | { spawn: unknown } | { status: number; error: string }>;
     reopen?(agentId: string): boolean;
-    settle?(id: string, s: { state: 'done' | 'failed'; stage?: string; summary?: string }): boolean;
+    settle?(id: string, s: { state: 'done' | 'failed' | 'review'; stage?: string; summary?: string; prUrl?: string }): boolean;
   };
   worktrees?: WorktreeOps;
   /** Portão das listas automáticas (gate.ts runChecks/reviewDiff); ausente = o item vai para 'review' sem checar. */
@@ -440,6 +440,16 @@ export class RunService {
     return this.closeCopy(id, 'discard');
   }
 
+  /** Grava runs.json (o "Subir", chat/ship.ts, muda ChatRun.ship). */
+  persist(): void {
+    this.save();
+  }
+
+  /** Uma etapa do "Subir" no registro, para cada item que terminou (os que foram no PR). */
+  journalShipped(run: ChatRun, stage: JournalStage): void {
+    for (const i of run.items) if (i.state === 'done' || i.state === 'review') this.journal(run, i, stage);
+  }
+
   // --- interno ---
 
   private quotaOf(o: RunAgentOptions): QuotaBlock | undefined {
@@ -490,6 +500,9 @@ export class RunService {
     const w = run.isolated;
     if (!w || !this.deps.worktrees || w.merged || w.discarded) return { status: 409, error: tr('Esta lista não tem cópia isolada aberta.') };
     if (run.state === 'running') return { status: 409, error: tr('Pare a lista ou espere ela terminar antes.') };
+    // Juntar × Subir: um ou outro por lista. Subida em andamento trava os dois; depois de subir, Juntar não cabe mais.
+    if (shipActive(run.ship)) return { status: 409, error: tr('O "Subir" desta lista está em andamento: espere terminar (ou falhar) antes.') };
+    if (how === 'merge' && run.ship && run.ship.step !== 'failed') return { status: 409, error: tr('Esta lista já subiu por PR: não dá para juntar também.') };
     const r = how === 'merge' ? await this.deps.worktrees.merge(run.options.folder, w, mergeMessage(run.items)) : await this.deps.worktrees.discard(run.options.folder, w);
     if (!r.ok) return { status: 409, error: r.reason };
     if (how === 'merge') w.merged = true;

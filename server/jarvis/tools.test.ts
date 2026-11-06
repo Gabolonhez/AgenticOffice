@@ -13,7 +13,7 @@ import { CARD_TEXT_MAX, JarvisTools, NOTIFY_PER_HOUR, RUNS_PER_HOUR, SPAWN_PER_H
 const JID = 'chat:jarvis';
 type Answer = 'allow' | 'deny' | 'timeout';
 
-const cfg = (o: Partial<FolderConfig> = {}): FolderConfig => ({ auto: false, provider: 'claude', budget: 3, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off', ...o });
+const cfg = (o: Partial<FolderConfig> = {}): FolderConfig => ({ auto: false, provider: 'claude', budget: 3, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off', ciMinutes: 30, ...o });
 
 function run(o: Partial<ChatRun> = {}): ChatRun {
   return {
