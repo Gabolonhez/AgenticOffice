@@ -28,6 +28,7 @@ import { hasCodexPermission } from './provider';
 import { Notifier } from './notify';
 import { ConnectionBanner, EmptyState, Splash } from './overlays';
 import { focusPermission, nextPermissionAgent } from './permission';
+import { JarvisOverlay } from './jarvis';
 import { loadPrefs, safeLocalStorage, savePrefs, worldOptionsFrom, type UiPrefs } from './prefs';
 import { SettingsPopover } from './settings';
 import { Sidebar } from './sidebar';
@@ -166,9 +167,12 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
       timelapse.toggle();
     },
     isTimelapseOpen: () => timelapse.isOpen,
+    openJarvis: () => jarvis.toggle(),
   };
 
   // ---------------------------------------------------------------- componentes
+  // Jarvis em tela cheia (ui/jarvis.ts): pela barra de cima ou pela tecla J.
+  const jarvis = new JarvisOverlay(ctx);
   const sound = new SoundControl(ctx);
   const notifier = new Notifier(ctx, sound.board);
   topbar = new TopBar(ctx);
@@ -295,7 +299,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   const scrim = h('div', { class: 'ui-scrim', attrs: { 'aria-hidden': 'true' }, on: { click: () => ctx.togglePanel('sidebar', false) } });
 
   root.classList.add('ui-root');
-  root.append(timelapse.vignette, canvas.el, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, invite.el, tip.el, settings.el, history.el, deliveries.el, help.el, renamer.el, live, splash.el);
+  root.append(timelapse.vignette, canvas.el, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, invite.el, tip.el, settings.el, history.el, deliveries.el, help.el, renamer.el, live, splash.el, jarvis.el);
   area = new FreeArea(world, { root, topbar: topbar.el, sidebar: sidebar.el, drawer: drawer.el, feed: feed.el }, () => ({
     sidebar: panels.sidebar,
     feed: panels.feed,
@@ -304,7 +308,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   }));
   drawer.onLayoutChange = () => applyLayout();
 
-  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, summary, updateToaster, invite, worldChip, vboards, canvas];
+  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, summary, updateToaster, invite, worldChip, vboards, canvas, jarvis];
   if (scene) components.push(scene);
   root.append(worldSocial.el);
   components.push(worldSocial);
@@ -389,6 +393,8 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
 
   function onKey(e: KeyboardEvent): void {
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    // Jarvis em tela cheia: ele trata as próprias teclas (Esc, Espaço); os atalhos do escritório ficam desligados.
+    if (jarvis.isOpen) return;
     // Na cidade os atalhos do escritório ficam desligados: Esc fecha o cartão aberto ou volta ao escritório.
     if (inCity()) {
       if (e.key === 'Escape') {
@@ -452,6 +458,12 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
         else ctx.announce(tr('Nenhum pedido de permissão ou pergunta para responder agora.'));
         break;
       }
+      case 'j':
+      case 'J':
+        if (!topbar.jarvisAvailable) break;
+        e.preventDefault();
+        jarvis.toggle();
+        break;
       case 'o':
       case 'O':
         e.preventDefault();

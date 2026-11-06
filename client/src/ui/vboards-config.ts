@@ -260,6 +260,113 @@ export class JarvisConfigGroup {
   }
 }
 
+interface VoiceView {
+  engine: string;
+  configured?: string;
+  provider: string;
+  voice?: string;
+  keySet: Record<string, boolean>;
+  ttsUrl?: string;
+  ttsVoice?: string;
+  ttsModel?: string;
+  editable?: boolean;
+  error?: string;
+}
+
+/**
+ * Voz do Jarvis em tela cheia (GET/POST /api/chat/jarvis/voice): o motor, a chave do realtime (gravada no computador, em
+ * ~/.habblaud/voice.json; nunca volta para a página) e o TTS local. Só muda pelo próprio computador.
+ */
+export class JarvisVoiceGroup {
+  readonly el: HTMLElement;
+  private readonly engine = h(
+    'select',
+    { class: 'ui-rename__input', attrs: { 'aria-label': tr('Motor de voz') } },
+    h('option', { attrs: { value: '' }, text: tr('Automático (realtime se houver chave)') }),
+    h('option', { attrs: { value: 'realtime' }, text: tr('Realtime (OpenAI): conversa natural, pago') }),
+    h('option', { attrs: { value: 'browser' }, text: tr('Navegador: grátis') }),
+    h('option', { attrs: { value: 'local' }, text: tr('Local: Whisper + TTS do computador') }),
+  );
+  private readonly provider = h(
+    'select',
+    { class: 'ui-rename__input', attrs: { 'aria-label': tr('Provedor realtime') } },
+    h('option', { attrs: { value: 'openai' }, text: 'OpenAI Realtime' }),
+    h('option', { attrs: { value: 'gemini' }, text: tr('Gemini Live (em breve)') }),
+  );
+  private readonly key = h('input', { class: 'ui-rename__input', type: 'password', attrs: { maxlength: 300, autocomplete: 'off' } });
+  private readonly voice = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 60, placeholder: 'marin' } });
+  private readonly ttsUrl = h('input', { class: 'ui-rename__input', type: 'url', attrs: { maxlength: 300, placeholder: 'http://127.0.0.1:8880/v1/audio/speech' } });
+  private readonly ttsVoice = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 60, placeholder: 'alloy' } });
+  private readonly ttsModel = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 60, placeholder: 'tts-1' } });
+  private readonly save = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar a voz'), on: { click: () => void this.store() } });
+  private readonly forget = h('button', { class: 'ui-btn', type: 'button', text: tr('Apagar a chave'), on: { click: () => void this.store(true) } });
+  private readonly status = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
+  private readonly fields = [this.engine, this.provider, this.key, this.voice, this.ttsUrl, this.ttsVoice, this.ttsModel];
+
+  constructor() {
+    this.el = h(
+      'div',
+      { class: 'ui-set-group', hidden: true },
+      h('h3', { text: tr('Voz do Jarvis') }),
+      h('p', { class: 'ui-set__hint', text: tr('A tela cheia do Jarvis (tecla J). Pedidos por voz contam como de fora (o microfone ouve o ambiente): ações pedem cartão, e o PIN é sempre digitado, nunca falado. A chave fica só neste computador; o navegador recebe um token que vale por 2 minutos.') }),
+      row(tr('Motor'), this.engine),
+      row(tr('Provedor realtime'), this.provider),
+      row(tr('Chave da API (vazio = manter)'), this.key),
+      row(tr('Voz do realtime'), this.voice),
+      row(tr('TTS local: URL (OpenAI-compatível, /v1/audio/speech)'), this.ttsUrl),
+      row(tr('TTS local: voz'), this.ttsVoice),
+      row(tr('TTS local: modelo'), this.ttsModel),
+      h('div', { class: 'ui-chat__row' }, this.save, this.forget),
+      this.status,
+    );
+    void this.load();
+  }
+
+  private async load(): Promise<void> {
+    try {
+      const res = await fetch('/api/chat/jarvis/voice', { credentials: 'same-origin', cache: 'no-store' });
+      if (!res.ok) return;
+      this.show((await res.json()) as VoiceView);
+      setHidden(this.el, false);
+    } catch {
+      // chat desligado: fica escondido
+    }
+  }
+
+  private show(v: VoiceView): void {
+    this.engine.value = v.configured ?? '';
+    this.provider.value = v.provider;
+    this.key.value = '';
+    this.key.placeholder = v.keySet[v.provider] ? tr('guardada neste computador') : tr('sem chave');
+    this.voice.value = v.voice ?? '';
+    this.ttsUrl.value = v.ttsUrl ?? '';
+    this.ttsVoice.value = v.ttsVoice ?? '';
+    this.ttsModel.value = v.ttsModel ?? '';
+    const editable = v.editable !== false;
+    for (const f of this.fields) f.disabled = !editable;
+    setHidden(this.save, !editable);
+    setHidden(this.forget, !editable || !v.keySet[v.provider]);
+    setText(this.status, editable ? tr('Em uso: {0}.', [v.engine]) : tr('Só muda pelo próprio computador.'));
+  }
+
+  private async store(forget = false): Promise<void> {
+    const keyField = this.provider.value === 'gemini' ? 'geminiKey' : 'openaiKey';
+    const body = forget
+      ? { [keyField]: null }
+      : { engine: this.engine.value, provider: this.provider.value, voice: this.voice.value, ttsUrl: this.ttsUrl.value, ttsVoice: this.ttsVoice.value, ttsModel: this.ttsModel.value, ...(this.key.value.trim() ? { [keyField]: this.key.value.trim() } : {}) };
+    try {
+      const res = await fetch('/api/chat/jarvis/voice', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const v = (await res.json().catch(() => ({}))) as VoiceView;
+      if (!res.ok) throw new Error(v.error ?? tr('erro {0}', [res.status]));
+      this.show(v);
+      this.status.classList.remove('is-error');
+    } catch (err) {
+      setText(this.status, tr('Não gravou: {0}', [(err as Error).message]));
+      this.status.classList.add('is-error');
+    }
+  }
+}
+
 function select(values: string[]): HTMLSelectElement {
   return h('select', { class: 'ui-rename__input' }, ...values.map((v) => h('option', { attrs: { value: v }, text: v })));
 }

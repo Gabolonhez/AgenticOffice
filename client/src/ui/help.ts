@@ -85,6 +85,7 @@ const SHORTCUTS: [string[], string][] = [
   [['T'], tr('Abrir ou fechar o terminal do agente selecionado')],
   [['Ctrl+F'], tr('Com o terminal em foco: buscar na conversa (⌘F no Mac); Enter e Shift+Enter navegam')],
   [['L'], tr('Abrir ou fechar o timelapse do dia')],
+  [['J'], tr('Abrir ou fechar o Jarvis em tela cheia (voz)')],
   [['P'], tr('Ir até o próximo pedido de permissão ou pergunta para responder pelo escritório')],
   [['V'], tr('Alternar entre o escritório e o quadro (cartões, linhas e notas)')],
   [['M'], tr('Meu dia: para onde foi o tempo (trabalhando, esperando você...)')],
