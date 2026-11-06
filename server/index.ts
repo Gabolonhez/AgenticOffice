@@ -75,7 +75,7 @@ import { ChatService, chatOffReason } from './chat/service';
 import { createWorktreeOps } from './chat/worktree';
 import { quotaBlock } from './chat/quota';
 import { readMetrics, RunService } from './chat/runs';
-import { refinerFor, reviewDiff, runChecks } from './chat/gate';
+import { refinerFor, reviewDiff, runChecks, runQa } from './chat/gate';
 import { NotifySettings } from './vboards/ntfy';
 import { loadProducts, productOfFolder, saveProducts, type Product } from './vboards/products';
 import { LEDGER_OPEN_MS, projectLedger, readJournal } from './chat/journal';
@@ -418,7 +418,7 @@ const vboards =
                   isolated: true,
                   options: { folder, provider: cfg.provider, permission: 'auto', denyPush: true, limits: { maxCostUsd: cfg.budget, maxTurnMinutes: AUTO_TURN_MINUTES } },
                 },
-                { ...(cfg.check ? { check: cfg.check } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}) },
+                { ...(cfg.check ? { check: cfg.check } : {}), ...(cfg.qa ? { qa: cfg.qa } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}) },
               );
               if ('error' in r && r.status !== 409) log.warnOnce(`vboards:auto:${r.error}`, tr('VBoards: não abriu a lista automática de {0} ({1}).', [folder, r.error]));
             },
@@ -491,7 +491,8 @@ const runs = chat
       vboards,
       worktrees: createWorktreeOps(config.dataDir),
       // Portão das listas automáticas do VBoards: checagens na cópia e revisão só do diff, numa pasta neutra.
-      gate: { checks: (cmd, cwd) => runChecks(cmd, cwd), review: (auto, diff) => reviewDiff(auto, diff, join(config.dataDir, 'review')) },
+      gate: { checks: (cmd, cwd) => runChecks(cmd, cwd), qa: (cmd, cwd, dir) => runQa(cmd, cwd, dir), review: (auto, diff) => reviewDiff(auto, diff, join(config.dataDir, 'review')) },
+      qaDir: join(config.dataDir, 'chat', 'qa'),
       file: join(config.dataDir, 'chat', 'runs.json'),
       metricsFile: join(config.dataDir, 'chat', 'run-metrics.jsonl'),
       journalFile,

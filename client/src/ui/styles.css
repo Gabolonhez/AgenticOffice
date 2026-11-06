@@ -11229,6 +11229,38 @@ html.is-replay #world {
   overflow-wrap: anywhere;
 }
 
+.ui-runs__shots {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ui-runs__shot {
+  display: block;
+  width: 96px;
+  height: 64px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--ui-border, rgba(255, 255, 255, 0.15));
+  background: rgba(0, 0, 0, 0.25);
+  transition: transform 0.12s, border-color 0.12s;
+}
+
+.ui-runs__shot:hover,
+.ui-runs__shot:focus-visible {
+  transform: translateY(-1px) scale(1.04);
+  border-color: var(--ui-accent, #6ea8fe);
+}
+
+.ui-runs__shot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+  display: block;
+}
+
 .ui-runs__comment {
   grid-column: 2;
   justify-self: start;

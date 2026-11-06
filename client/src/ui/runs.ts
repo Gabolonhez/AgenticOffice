@@ -319,6 +319,19 @@ export class RunsPanel {
               ? h('button', { class: 'ui-runs__link', type: 'button', text: i.text, attrs: { title: tr('Ver o agente deste item') }, on: { click: () => this.ctx.select({ type: 'agent', id: i.agentId! }, { focus: true }) } })
               : h('span', { class: 'ui-runs__text', text: i.text }),
             i.summary ? h('span', { class: 'ui-runs__summary-text', text: i.summary }) : null,
+            i.shots?.length
+              ? h(
+                  'span',
+                  { class: 'ui-runs__shots' },
+                  ...i.shots.map((n) =>
+                    h(
+                      'a',
+                      { class: 'ui-runs__shot', attrs: { href: `/api/chat/runs/${encodeURIComponent(run.id)}/items/${index}/shots/${encodeURIComponent(n)}`, target: '_blank', rel: 'noopener', title: n } },
+                      h('img', { attrs: { src: `/api/chat/runs/${encodeURIComponent(run.id)}/items/${index}/shots/${encodeURIComponent(n)}`, alt: tr('Captura do QA visual: {0}', [n]), loading: 'lazy' } }),
+                    ),
+                  ),
+                )
+              : null,
             canComment && i.agentId && (i.state === 'review' || i.state === 'done')
               ? h('button', { class: 'ui-runs__link ui-runs__comment', type: 'button', text: tr('Ver o diff e comentar'), on: { click: () => void this.diff.open(run.id, index, i.text) } })
               : null,

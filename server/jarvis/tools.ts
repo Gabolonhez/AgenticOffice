@@ -440,7 +440,7 @@ export class JarvisTools {
     const cfg = await this.deps.folderConfig(f.path);
     // Sempre cópia isolada, sem push e com o orçamento da pasta, aprovada ou não.
     const body = { items: items.map((text) => ({ text })), isolated: true, ...(context ? { context } : {}), options: { folder: f.path, provider: cfg.provider, permission: 'auto', denyPush: true, limits: { maxCostUsd: cfg.budget, maxTurnMinutes: AUTO_TURN_MINUTES } } };
-    const auto = { ...(cfg.check ? { check: cfg.check } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}) };
+    const auto = { ...(cfg.check ? { check: cfg.check } : {}), ...(cfg.qa ? { qa: cfg.qa } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}) };
     const tainted = this.tainted();
     if (cfg.auto && !tainted && this.runsWindow.take(this.now())) {
       const r = runs.create(body, auto);
@@ -495,7 +495,7 @@ export class JarvisTools {
     const f = this.folder(str(a.folder));
     if (!f) return fail(tr('Pasta desconhecida: abra uma sessão nela antes.'));
     const v = folderConfigView(await this.deps.folderConfig(f.path));
-    return ok({ folder: f.path, config: { ...v, ...(v.check ? { check: maskSecrets(v.check) } : {}) } });
+    return ok({ folder: f.path, config: { ...v, ...(v.check ? { check: maskSecrets(v.check) } : {}), ...(v.qa ? { qa: maskSecrets(v.qa) } : {}) } });
   }
 
   private async projectsConfigSet(a: Record<string, unknown>): Promise<Result> {

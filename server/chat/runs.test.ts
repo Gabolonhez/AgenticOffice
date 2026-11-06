@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -280,6 +280,37 @@ describe('chat: lista que roda um agente por item', () => {
     expect(svc.get('r1')?.state).toBe('done');
     expect(worktrees.merge).not.toHaveBeenCalled();
     expect(worktrees.discard).not.toHaveBeenCalled();
+  });
+
+  it('QA visual: roda depois do check, registra os PNGs no item; falhar só avisa; a rota só serve o que o item registrou, dentro da pasta', async () => {
+    const worktrees = { create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(), discard: vi.fn(), summary: vi.fn(), diff: vi.fn(async () => '') };
+    const qaDir = mkdtempSync(join(tmpdir(), 'hb-qa-'));
+    const order: string[] = [];
+    const gate = {
+      checks: vi.fn(async () => (order.push('check'), { ok: true, tail: '' })),
+      review: vi.fn(),
+      qa: vi.fn(async (_c: string, _w: string, dir: string) => {
+        order.push('qa');
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'home.png'), 'png');
+        return { ok: false, tail: 'timeout no passo 3', shots: ['home.png'] };
+      }),
+    };
+    const { svc, end } = setup({ worktrees, gate, qaDir });
+    svc.create({ items: items('a'), options, isolated: true }, { check: 'npm test', qa: 'npx playwright test', reviewer: 'claude' });
+    await flush();
+    end('chat:1', 'done', 'Feito.');
+    await flush();
+    expect(order).toEqual(['check', 'qa']);
+    expect(gate.qa).toHaveBeenCalledWith('npx playwright test', 'C:\wt', join(qaDir, 'r1', '0'));
+    const item = svc.get('r1')!.items[0];
+    expect(item).toMatchObject({ state: 'review', gate: 'pass', shots: ['home.png'] });
+    expect(item.report).toContain('QA visual: FALHOU');
+    writeFileSync(join(qaDir, 'r1', 'secret.png'), 'x');
+    expect(svc.shotPath('r1', 0, 'home.png')).toContain('home.png');
+    for (const name of ['secret.png', '../secret.png', '..\secret.png', 'home.png/../../secret.png']) expect(svc.shotPath('r1', 0, name)).toBeUndefined();
+    expect(svc.shotPath('r1', 3, 'home.png')).toBeUndefined();
+    expect(svc.shotPath('nope', 0, 'home.png')).toBeUndefined();
   });
 
   it('lista automática que passa no portão: review direto, sem mandar nada ao agente', async () => {

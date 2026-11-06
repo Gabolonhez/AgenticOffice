@@ -308,9 +308,7 @@ export class JarvisInbox {
       const t = await this.transcribe(m);
       if ('error' in t) return this.answer(wa, t.error, send, ack);
       text = t.text;
-      heard = `${tr('Entendi: «{0}»', [t.text])}
-
-`;
+      heard = `${tr('Entendi: «{0}»', [t.text])}\n\n`;
     }
     const r = await this.deps.say(text, 'whatsapp', m.id).result;
     await this.answer(wa, heard + (r.ok ? r.reply || tr('(sem resposta)') : tr('Não consegui responder: {0}', [r.error])), send, ack);
