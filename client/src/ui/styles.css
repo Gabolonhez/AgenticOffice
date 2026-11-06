@@ -2687,9 +2687,14 @@
 
 /* Horários das rotinas do Jarvis: rótulo acima da hora; dias numa grade que quebra limpo. */
 .ui-set--routine {
+  text-align: left;
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
+}
+
+.ui-set--routine > .ui-set__label {
+  align-self: flex-start;
 }
 
 .ui-set__days {
