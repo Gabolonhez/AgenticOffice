@@ -59,6 +59,8 @@ interface Person {
   stateEl: HTMLElement;
   lx: number;
   ly: number;
+  x: number;
+  y: number;
 }
 
 interface Loaded {
@@ -320,7 +322,9 @@ export function createOffice3dScene(o: Office3dOptions): Office3dScene {
     const bar = o.uiRoot.querySelector('.ui-topbar')?.getBoundingClientRect().bottom ?? 0;
     const side = o.uiRoot.querySelector('.ui-sidebar')?.getBoundingClientRect();
     const left = side && side.width > 0 && side.left < 40 ? side.right : 0;
-    camera.setViewOffset(innerWidth, innerHeight, -left / 2, -bar / 2, innerWidth, innerHeight);
+    const dr = o.uiRoot.querySelector('.ui-drawer.is-open')?.getBoundingClientRect();
+    const right = dr && dr.width > 0 ? innerWidth - dr.left : 0;
+    camera.setViewOffset(innerWidth, innerHeight, (right - left) / 2, -bar / 2, innerWidth, innerHeight);
     camera.updateProjectionMatrix();
   }
 
@@ -531,7 +535,6 @@ export function createOffice3dScene(o: Office3dOptions): Office3dScene {
     const plan_ = plan();
     const ids = new Set(agents.map((a) => a.id));
     for (const p of [...people.values()]) if (!ids.has(p.agentId) || !plan_.seats.has(p.agentId)) removePerson(p);
-    labels.classList.toggle('is-crowded', agents.length > 10);
     note.hidden = plan_.missing.length === 0;
     if (plan_.missing.length) note.textContent = tr('{0} agentes sem lugar neste escritório. Escolha um maior.', [plan_.missing.length]);
     const now = snap?.serverTime ?? Date.now();
@@ -568,7 +571,7 @@ export function createOffice3dScene(o: Office3dOptions): Office3dScene {
               }
             });
             const parts = makeLabel(cur);
-            const p: Person = { agentId: cur.id, obj, mixer: new THREE.AnimationMixer(obj), gltf: g, action: null, clip: '', standing: false, seat, born: reducedMq.matches ? 1 : 0, ...parts, lx: -1, ly: -1 };
+            const p: Person = { agentId: cur.id, obj, mixer: new THREE.AnimationMixer(obj), gltf: g, action: null, clip: '', standing: false, seat, born: reducedMq.matches ? 1 : 0, ...parts, lx: -1, ly: -1, x: 0, y: 0 };
             obj.scale.setScalar(p.born ? 1 : 0.001);
             (target.floors.get(seat.andar) ?? target.obj).add(obj);
             people.set(cur.id, p);
@@ -583,9 +586,14 @@ export function createOffice3dScene(o: Office3dOptions): Office3dScene {
   }
 
   const tmp = new THREE.Vector3();
+  /**
+   * Etiquetas: cada funcionário é um pino colorido; nome e estado só em quem está selecionado ou precisa de você (o
+   * hover expande pelo CSS). As etiquetas completas que se encostam na tela sobem até achar espaço livre.
+   */
   function syncLabels(force = false): void {
     const w = innerWidth;
     const hgt = innerHeight;
+    const shownFull: { p: Person; x: number; y: number; w: number }[] = [];
     for (const p of people.values()) {
       const shown = p.obj.parent?.visible !== false;
       p.obj.getWorldPosition(tmp);
@@ -594,14 +602,28 @@ export function createOffice3dScene(o: Office3dOptions): Office3dScene {
       const on = shown && tmp.z < 1 && Math.abs(tmp.x) < 1.1 && Math.abs(tmp.y) < 1.1;
       if (p.label.hidden === on) p.label.hidden = !on;
       if (!on) continue;
-      const x = Math.round(((tmp.x + 1) / 2) * w);
-      const y = Math.round(((1 - tmp.y) / 2) * hgt);
-      if (force || x !== p.lx || y !== p.ly) {
-        p.lx = x;
-        p.ly = y;
-        p.label.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
-      }
+      p.x = Math.round(((tmp.x + 1) / 2) * w);
+      p.y = Math.round(((1 - tmp.y) / 2) * hgt);
+      const full = p.agentId === selectedId || p.label.classList.contains('is-waiting');
       p.label.classList.toggle('is-selected', p.agentId === selectedId);
+      p.label.classList.toggle('is-full', full);
+      if (full) shownFull.push({ p, x: p.x, y: p.y, w: 40 + (p.nameEl.textContent!.length + p.stateEl.textContent!.length) * 6.5 });
+      else place(p, p.x, p.y, force);
+    }
+    const placed: { x: number; y: number; w: number }[] = [];
+    for (const f of shownFull.sort((a, c) => c.y - a.y)) {
+      let y = f.y;
+      for (let k = 0; k < 8 && placed.some((r) => Math.abs(r.x - f.x) < (r.w + f.w) / 2 && Math.abs(r.y - y) < 28); k++) y -= 30;
+      placed.push({ x: f.x, y, w: f.w });
+      place(f.p, f.x, y, force);
+    }
+  }
+
+  function place(p: Person, x: number, y: number, force: boolean): void {
+    if (force || x !== p.lx || y !== p.ly) {
+      p.lx = x;
+      p.ly = y;
+      p.label.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
     }
   }
 
@@ -609,6 +631,8 @@ export function createOffice3dScene(o: Office3dOptions): Office3dScene {
     const sel = o.selection();
     selectedId = sel?.type === 'agent' ? sel.id : null;
     dirty = true;
+    // a gaveta desliza por ~0,35 s: recentra a imagem na área livre quando ela termina de abrir ou fechar
+    setTimeout(() => void (visible && (applyInsets(), (dirty = true))), 400);
   }
 
   // ---- laço ----

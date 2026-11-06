@@ -11908,56 +11908,84 @@ button.ui-diff__line:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: 220px;
-  padding: 4px 9px 4px 7px;
+  max-width: 240px;
+  padding: 4px;
   border: 1px solid var(--ui-line-strong);
   border-radius: 999px;
-  background: rgba(20, 24, 33, 0.82);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
+  background: rgba(20, 24, 33, 0.88);
   color: var(--ui-text);
   font: 600 12px/1.2 var(--font-ui);
   white-space: nowrap;
   cursor: pointer;
   pointer-events: auto;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   will-change: transform;
+}
+
+/* pino: só a bolinha de estado; o nome aparece no hover, no selecionado e em quem precisa de você */
+.ui-o3d-label b,
+.ui-o3d-label span {
+  display: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-o3d-label:hover,
+.ui-o3d-label.is-full,
+.ui-o3d-label:focus-visible {
+  z-index: 3;
+  padding: 4px 10px 4px 7px;
+}
+
+.ui-o3d-label:hover b,
+.ui-o3d-label:hover span,
+.ui-o3d-label.is-full b,
+.ui-o3d-label.is-full span,
+.ui-o3d-label:focus-visible b,
+.ui-o3d-label:focus-visible span {
+  display: inline;
 }
 
 .ui-o3d-label i {
   flex: none;
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: var(--ui-muted);
 }
 
 .ui-o3d-label b {
-  overflow: hidden;
-  text-overflow: ellipsis;
   font-weight: 700;
 }
 
 .ui-o3d-label span {
-  overflow: hidden;
-  text-overflow: ellipsis;
   color: var(--ui-muted);
   font-weight: 500;
 }
 
-.ui-o3d-label.is-working i,
+/* verde = trabalhando; âmbar = esperando o shell; vermelho pulsando = precisa de você; azul = concluiu */
+.ui-o3d-label.is-working i {
+  background: #5fe08e;
+}
+
 .ui-o3d-label.is-shell i {
-  background: #6fe39a;
+  background: #f2c744;
 }
 
 .ui-o3d-label.is-waiting {
-  border-color: rgba(255, 190, 90, 0.7);
-  background: rgba(70, 44, 8, 0.88);
+  z-index: 2;
+  border-color: #ff7a45;
+  background: rgba(86, 28, 10, 0.94);
+  box-shadow: 0 0 0 2px rgba(255, 122, 69, 0.28), 0 4px 14px rgba(0, 0, 0, 0.4);
 }
 
 .ui-o3d-label.is-waiting i {
-  background: #ffbe5a;
-  animation: ui-o3d-pulse 1.1s ease-in-out infinite;
+  background: #ff7a45;
+  animation: ui-o3d-pulse 1s ease-in-out infinite;
+}
+
+.ui-o3d-label.is-waiting span {
+  color: #ffc4a8;
 }
 
 .ui-o3d-label.is-done i {
@@ -11965,9 +11993,9 @@ button.ui-diff__line:focus-visible {
 }
 
 .ui-o3d-label.is-selected {
-  z-index: 2;
+  z-index: 4;
   border-color: var(--ui-accent);
-  background: rgba(16, 38, 58, 0.94);
+  background: rgba(16, 38, 58, 0.96);
   box-shadow: 0 0 0 2px var(--ui-accent-soft), 0 6px 18px rgba(0, 0, 0, 0.4);
 }
 
@@ -11978,7 +12006,8 @@ button.ui-diff__line:focus-visible {
 
 @keyframes ui-o3d-pulse {
   50% {
-    opacity: 0.35;
+    opacity: 0.3;
+    transform: scale(1.35);
   }
 }
 
@@ -12033,18 +12062,17 @@ button.ui-diff__line:focus-visible {
 
 .ui-o3d-floors {
   flex: 0 1 auto;
-  grid-auto-flow: column;
+  display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
 }
 
 .ui-o3d-floors .ui-seg__opt {
-  padding-inline: 10px;
+  flex: 0 0 auto;
+  padding: 4px 10px;
   white-space: nowrap;
 }
 
-/* Muita gente: só o nome; o estado aparece em quem precisa de você e em quem está selecionado */
-.ui-o3d-labels.is-crowded .ui-o3d-label:not(.is-selected):not(.is-waiting) span {
-  display: none;
-}
 
 .ui-o3d-note {
   flex: 1 1 100%;
@@ -12114,5 +12142,17 @@ button.ui-diff__line:focus-visible {
 @media (max-width: 760px) {
   .ui-o3d-hint {
     display: none;
+  }
+
+  .ui-o3d-panel {
+    left: 12px;
+    right: 12px;
+    transform: none;
+    width: auto;
+    max-width: none;
+  }
+
+  .ui-o3d-field {
+    flex: 1 1 100%;
   }
 }
