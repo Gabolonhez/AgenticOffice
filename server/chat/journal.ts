@@ -7,7 +7,7 @@ import { basename, dirname } from 'node:path';
 import { tr } from '../../shared/i18n';
 import { errMsg, log } from '../log';
 
-export const JOURNAL_STAGES = ['queued', 'running', 'review', 'pr', 'ci_fail', 'merged', 'deployed', 'failed', 'discarded', 'triaged'] as const;
+export const JOURNAL_STAGES = ['queued', 'running', 'review', 'pr', 'ci_fail', 'merged', 'deployed', 'failed', 'discarded', 'triaged', 'auto'] as const;
 export type JournalStage = (typeof JOURNAL_STAGES)[number];
 
 export interface JournalEntry {
@@ -94,6 +94,8 @@ const BUCKET: Record<JournalStage, keyof Pick<ProjectLedger, 'done' | 'doing' | 
   failed: 'stuck',
   discarded: undefined,
   triaged: undefined,
+  // Subida sem PIN (vboards.autoMerge=low): as etapas seguintes (pr, merged, deployed) dizem onde está.
+  auto: undefined,
 };
 
 /** Quanto do registro conta para o que está em aberto (fazendo, a fazer). */

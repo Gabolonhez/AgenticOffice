@@ -272,6 +272,8 @@ describe('chat: lista que roda um agente por item', () => {
     expect(item).toMatchObject({ state: 'review', retried: true });
     expect(item.report).toContain('agentic/lista-1');
     expect(item.report).toContain('teste quebrou');
+    // Volta de correção e sem risco da IA: médio, com os motivos no relatório.
+    expect(item.report).toMatch(/Risco: médio \(.*corrigir/);
     expect(svc.gateState('chat:1')).toBe('review');
     expect(svc.reportOf('chat:1')).toBe(item.report);
     expect(opened).toHaveLength(2);
@@ -280,6 +282,17 @@ describe('chat: lista que roda um agente por item', () => {
     expect(svc.get('r1')?.state).toBe('done');
     expect(worktrees.merge).not.toHaveBeenCalled();
     expect(worktrees.discard).not.toHaveBeenCalled();
+  });
+
+  it('risco e approvedAt do item só vêm da abertura automática (servidor), nunca do corpo do pedido', async () => {
+    const raw = { text: 'a', vboardsTaskId: 'c:1', risk: 'low', riskWhy: 'estilo', approvedAt: '2026-11-06T10:00:00.000Z' };
+    const vb = { vboards: { begin: vi.fn(async () => ({ agentId: 'chat:1' })) } };
+    const fromBody = setup(vb).svc.create({ items: [raw], options });
+    const plain = 'run' in fromBody ? fromBody.run.items[0] : undefined;
+    expect(plain).toMatchObject({ text: 'a', vboardsTaskId: 'c:1' });
+    for (const k of ['risk', 'riskWhy', 'approvedAt']) expect(plain).not.toHaveProperty(k);
+    const fromAuto = setup(vb).svc.create({ items: [raw], options }, { reviewer: 'claude' });
+    expect('run' in fromAuto && fromAuto.run.items[0]).toMatchObject({ risk: 'low', riskWhy: 'estilo', approvedAt: '2026-11-06T10:00:00.000Z' });
   });
 
   it('QA visual: roda depois do check, registra os PNGs no item; falhar só avisa; a rota só serve o que o item registrou, dentro da pasta', async () => {

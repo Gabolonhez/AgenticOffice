@@ -20,6 +20,7 @@ import { claudeDriver } from './drivers/claude';
 import { codexDriver } from './drivers/codex';
 import { defaultKill } from './service';
 import type { StreamParser } from './types';
+import { riskLabel, type RiskVerdict } from './risk';
 import { noPushEnv } from './worktree';
 
 export const CHECK_TIMEOUT_MS = 10 * 60_000;
@@ -237,7 +238,7 @@ export function fixRequest(checks: CheckResult | undefined, review: ReviewResult
 }
 
 /** Relatório para o VBoards (até REPORT_MAX): branch, checagens, revisão e resumo do agente. */
-export function gateReport(r: { branch: string; checks?: CheckResult; qa?: QaResult; review?: ReviewResult; summary?: string; retried?: boolean; missing?: string[] }): string {
+export function gateReport(r: { branch: string; checks?: CheckResult; qa?: QaResult; review?: ReviewResult; summary?: string; retried?: boolean; missing?: string[]; risk?: RiskVerdict }): string {
   const checks = !r.checks ? tr('Checagens: sem vboards.check.') : r.checks.ok ? tr('Checagens: OK.') : `${tr('Checagens: FALHARAM.')}\n${cut(r.checks.tail, 500)}`;
   const review = !r.review
     ? tr('Revisão: sem mudanças no diff.')
@@ -245,8 +246,9 @@ export function gateReport(r: { branch: string; checks?: CheckResult; qa?: QaRes
       ? tr('Revisão ({0}): indisponível ({1}).', [r.review.by, r.review.error])
       : `${tr('Revisão ({0}): {1}', [r.review.by, r.review.ok ? 'OK' : tr('PROBLEMAS')])}${r.review.ok ? '' : `\n${cut(r.review.findings, 600)}`}`;
   const qa = r.qa ? [r.qa.ok ? tr('QA visual: {0} captura(s).', [r.qa.shots.length]) : `${tr('QA visual: FALHOU (só aviso, não reprova).')}\n${cut(r.qa.tail, 300)}`] : [];
+  const risk = r.risk ? [cut(tr('Risco: {0}{1}', [riskLabel(r.risk.level), r.risk.why.length ? ` (${r.risk.why.join('; ')})` : '']), 400)] : [];
   const missing = r.missing?.length ? [tr('vboards.copy: não existem na pasta (não copiados): {0}.', [r.missing.join(', ')])] : [];
-  const head = [tr('Branch: {0} (falta revisar e Juntar no Habblaud).', [r.branch]), checks, ...qa, review, ...missing, ...(r.retried ? [tr('O erro voltou uma vez ao agente para correção.')] : [])].join('\n');
+  const head = [tr('Branch: {0} (falta revisar e Juntar no Habblaud).', [r.branch]), checks, ...qa, review, ...risk, ...missing, ...(r.retried ? [tr('O erro voltou uma vez ao agente para correção.')] : [])].join('\n');
   const summary = r.summary?.trim() ? `\n${tr('Resumo do agente:')}\n${r.summary.trim()}` : '';
   return cut(maskSecrets(`${head}${summary}`), REPORT_MAX);
 }

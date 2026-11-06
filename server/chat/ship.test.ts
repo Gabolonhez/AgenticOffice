@@ -3,7 +3,7 @@ import type { ChatRun } from '../../shared/runs';
 import type { Product } from '../vboards/products';
 import type { FolderConfig } from '../vboards/vboards';
 import { GitHubError } from './github';
-import { NO_CI_GRACE_MS, ShipService, type ShipDeps, type ShipGitHub } from './ship';
+import { autoShipBlock, NO_CI_GRACE_MS, ShipService, type ShipDeps, type ShipGitHub } from './ship';
 import type { ShipWorktreeOps } from './types';
 
 const SHA = 'a'.repeat(40);
@@ -11,7 +11,7 @@ const MERGE = 'm'.repeat(40);
 const TOKEN = `github_pat_${'T'.repeat(40)}`;
 const MIN = 60_000;
 
-const cfg = (o: Partial<FolderConfig> = {}): FolderConfig => ({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', copy: [], ship: 'merge', ciMinutes: 30, ...o });
+const cfg = (o: Partial<FolderConfig> = {}): FolderConfig => ({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', copy: [], ship: 'merge', ciMinutes: 30, autoMerge: 'off', riskPaths: [], ...o });
 
 function makeRun(id: string, folder: string): ChatRun {
   return {
@@ -292,5 +292,102 @@ describe('ship: máquina de estados', () => {
     expect(server.ship!.step).toBe('failed');
     await t.ship.tick();
     expect(web.ship).toMatchObject({ step: 'failed', failedAt: 'waiting' });
+  });
+});
+
+describe('ship: merge automático (vboards.autoMerge=low, sem PIN)', () => {
+  const LOW = { autoMerge: 'low', ship: 'merge' } as const;
+  /** Lista automática do VBoards pronta para subir sozinha: plano aprovado, portão ok sem volta, risco baixo. */
+  function autoRun(item: Partial<ChatRun['items'][number]> = {}): ChatRun {
+    const r = makeRun('r1', '/p/api');
+    r.auto = { reviewer: 'claude' };
+    r.items = [{ ...r.items[0], risk: 'low', riskWhy: 'só estilo', approvedAt: '2026-11-06T10:00:00.000Z', ...item }];
+    return r;
+  }
+  function autoSetup(o: { config?: Partial<FolderConfig>; item?: Partial<ChatRun['items'][number]>; files?: string[] } = {}) {
+    const t = setup({ config: { ...LOW, ...o.config }, runs: [autoRun(o.item)] });
+    const files = o.files ?? ['src/ui/button.tsx'];
+    t.worktrees.changedFiles.mockResolvedValue(files);
+    t.worktrees.diff.mockResolvedValue(files.map((f) => `diff --git a/${f} b/${f}\n--- a/${f}\n+++ b/${f}\n@@ -1 +1 @@\n-a\n+b`).join('\n'));
+    return t;
+  }
+
+  it('todas as condições: sobe sem PIN, journal "auto", aviso com o PR e merge só com CI verde', async () => {
+    const t = autoSetup();
+    await t.ship.tick();
+    await flush();
+    const run = t.runs[0];
+    expect(run.ship).toMatchObject({ auto: true, step: 'ci', sha: SHA });
+    expect(run.autoShip?.blocked).toBeUndefined();
+    expect(t.worktrees.push).toHaveBeenCalled();
+    expect(t.journal).toContain('r1:auto');
+    expect(t.notes).toEqual(['api:auto']);
+    expect(t.gh.mergePr).not.toHaveBeenCalled();
+    t.st.checkRuns = [{ status: 'completed', conclusion: 'success' }];
+    await t.ship.tick();
+    expect(t.gh.mergePr).toHaveBeenCalledWith({ owner: 'acme', repo: 'api' }, 7, SHA);
+    expect(run.ship!.step).toBe('deployed');
+  });
+
+  it('avalia uma vez só por lista', async () => {
+    const t = autoSetup({ item: { approvedAt: undefined } });
+    await t.ship.tick();
+    await t.ship.tick();
+    expect(t.worktrees.commit).not.toHaveBeenCalled();
+    expect(t.runs[0].autoShip?.blocked).toMatch(/approvedAt/);
+  });
+
+  it.each([
+    ['sem approvedAt do VBoards', { item: { approvedAt: undefined } }, /approvedAt/],
+    ['risco da IA medium', { item: { risk: 'medium' as const } }, /Risco médio/],
+    ['risco da IA ausente (conta medium)', { item: { risk: undefined } }, /Risco médio/],
+    ['volta de correção no portão', { item: { retried: true } }, /volta de correção/],
+    ['portão reprovado', { item: { gate: 'fail' as const } }, /portão/],
+    ['ship=pr', { config: { ship: 'pr' as const } }, /ship não é merge/],
+    ['diff de risco alto (o calculado não é rebaixado)', { files: ['src/ui/button.tsx', '.github/workflows/deploy.yml'] }, /Risco alto/],
+    ['diff de risco alto por vboards.riskPaths', { config: { riskPaths: ['src/ui/**'] } }, /Risco alto/],
+  ])('bloqueia: %s', async (_name, o, why) => {
+    const t = autoSetup(o);
+    await t.ship.tick();
+    await flush();
+    expect(t.runs[0].ship).toBeUndefined();
+    expect(t.worktrees.push).not.toHaveBeenCalled();
+    expect(t.runs[0].autoShip?.blocked).toMatch(why);
+  });
+
+  it('autoMerge off (padrão): nada sobe e nada é cobrado; ligar depois não sobe a lista antiga', async () => {
+    const t = autoSetup({ config: { autoMerge: 'off' } });
+    await t.ship.tick();
+    expect(t.runs[0]).toMatchObject({ autoShip: { at: expect.any(Number) } });
+    expect(t.runs[0].autoShip!.blocked).toBeUndefined();
+    expect(t.worktrees.commit).not.toHaveBeenCalled();
+  });
+
+  it('lista que não é a automática do VBoards (sem portão) não sobe sozinha', async () => {
+    const t = autoSetup();
+    delete t.runs[0].auto;
+    await t.ship.tick();
+    expect(t.runs[0].ship).toBeUndefined();
+    expect(autoShipBlock({ ...t.runs[0] }, { ...LOW }, 'low')).toMatch(/automática/);
+  });
+
+  it('no-ci NUNCA faz merge sozinho: espera a aprovação com PIN', async () => {
+    const t = autoSetup();
+    await t.ship.tick();
+    await flush();
+    const run = t.runs[0];
+    t.clock(NO_CI_GRACE_MS + 1);
+    await t.ship.tick();
+    expect(run.ship).toMatchObject({ step: 'ci', ci: 'no-ci', needs: 'no-ci', auto: true });
+    await t.ship.tick();
+    expect(t.gh.mergePr).not.toHaveBeenCalled();
+  });
+
+  it('autoShipBlock (pura): ok só com todas', () => {
+    const r = autoRun();
+    expect(autoShipBlock(r, LOW, 'low')).toBeUndefined();
+    expect(autoShipBlock(r, LOW, 'medium')).toMatch(/médio/);
+    expect(autoShipBlock(r, { ...LOW, autoMerge: 'off' }, 'low')).toMatch(/autoMerge/);
+    expect(autoShipBlock({ ...r, items: [...r.items, { text: 'manual', state: 'review', gate: 'pass' }] }, LOW, 'low')).toMatch(/approvedAt/);
   });
 });

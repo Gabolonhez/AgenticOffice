@@ -28,6 +28,8 @@ import type { TerminalParser } from '../sources/terminal';
 import { sessionName, type SpawnInfo, type SpawnSubmit } from '../spawn/spawn';
 import { apiErrorText } from './api';
 import type { NotifyEvent } from './ntfy';
+import type { RiskLevel } from '../../shared/runs';
+import { parseRisk } from '../chat/risk';
 import { pickRepo, productForCard, repoHint, type Product } from './products';
 
 export const POLL_MS = 10_000;
@@ -62,6 +64,11 @@ export interface AgentTask {
   date?: string;
   /** Repo da subtarefa (papel ou nome da pasta), se o VBoards mandar; senão vale a etiqueta "[repo]" do texto. */
   repo?: string;
+  /** Risco que o Refinar deu à subtarefa (chat/risk.ts parseRisk; ausente = medium) e o motivo. */
+  risk?: RiskLevel;
+  riskWhy?: string;
+  /** Quando o plano do card foi aprovado no VBoards. Sem ele, a lista nunca sobe sozinha (vboards.autoMerge). */
+  approvedAt?: string;
 }
 
 /** O que a página vê: a subtarefa, a pasta escolhida (se só uma combina) e as pastas para escolher. */
@@ -127,6 +134,8 @@ export interface RefineResult {
   plan: string;
   questions: string[];
   subtasks: string[];
+  /** Um por subtarefa, na mesma ordem (campo extra: um VBoards antigo ignora). */
+  risks: Array<{ risk: RiskLevel; riskWhy?: string }>;
 }
 
 export type RefineStatus = 'running' | 'ready' | 'failed';
@@ -140,7 +149,7 @@ export interface RefineView {
 }
 
 /** Limites do POST /api/agent-tasks/refine (o VBoards também corta). */
-export const REFINE_LIMITS = { plan: 8_000, questions: 10, question: 500, subtasks: 20, subtask: 300, error: 2_000 } as const;
+export const REFINE_LIMITS = { plan: 8_000, questions: 10, question: 500, subtasks: 20, subtask: 300, riskWhy: 300, error: 2_000 } as const;
 /** Rodadas do "Refinar" ao mesmo tempo (cada uma é uma CLI lendo o repositório). */
 export const REFINE_PARALLEL = 2;
 /** Tentativas de mandar o resultado final do "Refinar" (uma por busca da fila). */
@@ -234,16 +243,31 @@ export interface FolderConfig {
   deploy?: string;
   /** vboards.ciMinutes: prazo do CI e do deploy no "Subir" (padrão 30). */
   ciMinutes: number;
+  /**
+   * vboards.autoMerge: off (padrão) | low. Com low, a lista automática de risco baixo sobe sozinha, SEM PIN (ship.ts
+   * autoShipBlock). Só liga pela tela local ou pelo cartão com PIN do Jarvis.
+   */
+  autoMerge: AutoMergeMode;
+  /** vboards.riskPaths: globs (vírgulas) que contam como risco alto (chat/risk.ts). */
+  riskPaths: string[];
+  /** vboards.riskLines: acima disto o diff é risco médio (padrão DEFAULT_RISK_LINES). */
+  riskLines?: number;
 }
 
 export const SHIP_MODES = ['off', 'pr', 'merge'] as const;
 export type ShipMode = (typeof SHIP_MODES)[number];
-export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'qa', 'reviewer', 'reviewerModel', 'copy', 'ship', 'base', 'remote', 'deploy', 'ciMinutes'] as const;
+export const AUTO_MERGE_MODES = ['off', 'low'] as const;
+export type AutoMergeMode = (typeof AUTO_MERGE_MODES)[number];
+export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'qa', 'reviewer', 'reviewerModel', 'copy', 'ship', 'base', 'remote', 'deploy', 'ciMinutes', 'autoMerge', 'riskPaths', 'riskLines'] as const;
 export type FolderKey = (typeof FOLDER_KEYS)[number];
 export const DEFAULT_BUDGET_USD = 2;
 export const DEFAULT_CI_MINUTES = 30;
 export const validDeploy = (s: string | undefined): s is string => !!s && /^(none|workflow:[\w.-]{1,100}\.ya?ml)$/.test(s);
 const validCiMinutes = (s: string | undefined): boolean => !!s && /^\d{1,3}$/.test(s) && Number(s) >= 1 && Number(s) <= 240;
+const validRiskLines = (s: string | undefined): boolean => !!s && /^\d{1,5}$/.test(s) && Number(s) >= 1;
+/** Glob do vboards.riskPaths: sem quebra de linha nem vírgula (o separador). */
+const validRiskGlob = (g: string): boolean => !!g && g.length <= 200 && !/[\r\n\0,]/.test(g);
+export const parseRiskPaths = (raw: string | undefined): string[] => (raw ?? '').split(',').map((s) => s.trim()).filter(validRiskGlob);
 /** Prazo de cada rodada de um item da lista automática. */
 export const AUTO_TURN_MINUTES = 30;
 /** No git config o Antigravity é `agy` (o nome da CLI). */
@@ -276,6 +300,9 @@ export function parseFolderConfig(out: string | undefined): FolderConfig {
     ...(validRemote(raw.get('remote')) ? { remote: raw.get('remote') } : {}),
     ...(validDeploy(raw.get('deploy')) ? { deploy: raw.get('deploy') } : {}),
     ciMinutes: validCiMinutes(raw.get('ciminutes')) ? Number(raw.get('ciminutes')) : DEFAULT_CI_MINUTES,
+    autoMerge: raw.get('automerge')?.toLowerCase() === 'low' ? 'low' : 'off',
+    riskPaths: parseRiskPaths(raw.get('riskpaths')),
+    ...(validRiskLines(raw.get('risklines')) ? { riskLines: Number(raw.get('risklines')) } : {}),
   };
 }
 
@@ -294,9 +321,9 @@ export function readFolderConfig(folder: string): Promise<FolderConfig> {
 }
 
 /** A configuração como a tela mostra e grava: o Antigravity volta a ser `agy`, como no git config. */
-export type FolderConfigView = Omit<FolderConfig, 'provider' | 'reviewer' | 'copy'> & { provider: string; reviewer: string; copy: string };
+export type FolderConfigView = Omit<FolderConfig, 'provider' | 'reviewer' | 'copy' | 'riskPaths'> & { provider: string; reviewer: string; copy: string; riskPaths: string };
 const providerName = (p: Provider): string => (p === 'antigravity' ? 'agy' : p);
-export const folderConfigView = (c: FolderConfig): FolderConfigView => ({ ...c, provider: providerName(c.provider), reviewer: providerName(c.reviewer), copy: c.copy.join(', ') });
+export const folderConfigView = (c: FolderConfig): FolderConfigView => ({ ...c, provider: providerName(c.provider), reviewer: providerName(c.reviewer), copy: c.copy.join(', '), riskPaths: c.riskPaths.join(', ') });
 
 /**
  * Valida o que a tela manda gravar (só as chaves presentes). Texto vazio = tirar a chave (volta ao padrão). Nada de
@@ -326,6 +353,9 @@ export function validateFolderConfig(raw: unknown): { values: Partial<Record<Fol
       : key === 'remote' ? validRemote(s)
       : key === 'deploy' ? validDeploy(s)
       : key === 'ciMinutes' ? validCiMinutes(s)
+      : key === 'autoMerge' ? (AUTO_MERGE_MODES as readonly string[]).includes(s)
+      : key === 'riskPaths' ? s.length <= 1000 && s.split(',').every((x) => validRiskGlob(x.trim()))
+      : key === 'riskLines' ? validRiskLines(s)
       : s.length <= 500; // check, qa
     if (!ok) return { error: tr('Valor inválido em vboards.{0}.', [key]) };
     values[key] = s;
@@ -353,6 +383,21 @@ export const taskPrompt = (t: Pick<AgentTask, 'cardTitle' | 'text'>): string => 
 const cutText = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
 const str = (v: unknown): string => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
 
+/**
+ * risk/riskWhy/approvedAt de uma tarefa da fila (campos novos; um VBoards antigo não manda). risk ausente fica
+ * ausente (conta como medium); approvedAt só se for uma data de verdade.
+ */
+export function taskRisk(t: Record<string, unknown>): Pick<AgentTask, 'risk' | 'riskWhy' | 'approvedAt'> {
+  const why = typeof t.riskWhy === 'string' ? cutText(maskSecrets(t.riskWhy.trim()), REFINE_LIMITS.riskWhy) : '';
+  const at = t.approvedAt;
+  const ms = typeof at === 'number' ? at : typeof at === 'string' && at.trim() ? Date.parse(at) : NaN;
+  return {
+    ...(typeof t.risk === 'string' && t.risk.trim() ? { risk: parseRisk(t.risk) } : {}),
+    ...(why ? { riskWhy: why } : {}),
+    ...(Number.isFinite(ms) && ms > 0 ? { approvedAt: new Date(ms).toISOString() } : {}),
+  };
+}
+
 /** `refines` da fila; ausente ou estragado (VBoards antigo) = nenhum. */
 export function parseRefines(raw: unknown): RefineRequest[] {
   if (!Array.isArray(raw)) return [];
@@ -376,7 +421,8 @@ export function refinePrompt(r: Pick<RefineRequest, 'cardTitle' | 'description' 
   return [
     'Você planeja um card do quadro do time, em português do Brasil. Só leia: não edite arquivos, não rode comandos que mudem nada, não faça commit.',
     'Leia o repositório desta pasta o quanto precisar para entender o pedido e responda com UM único bloco ```json, sem mais nada depois dele:',
-    '{"plan": "escopo, arquivos afetados e critérios de aceite", "questions": ["o que falta decidir"], "subtasks": ["itens pequenos, de um propósito só, implementáveis"]}',
+    '{"plan": "escopo, arquivos afetados e critérios de aceite", "questions": ["o que falta decidir"], "subtasks": [{"text": "item pequeno, de um propósito só, implementável", "risk": "low|medium|high", "riskWhy": "por quê, em uma frase"}]}',
+    'risk: high se mexer em login, pagamento, assinatura, dados de usuário, banco/migration, CI, dependências ou build da loja; medium se mexer em regra de negócio ou em muitos arquivos; low só para mudança pequena, isolada e fácil de desfazer (texto, estilo, ajuste local). Na dúvida, medium.',
     `Limites: plan até ${REFINE_LIMITS.plan} caracteres; até ${REFINE_LIMITS.questions} perguntas; até ${REFINE_LIMITS.subtasks} subtarefas, sem repetir as que já existem.`,
     'Cada subtarefa vira um agente que implementa e já faz o próprio commit: não crie subtarefa só de commit, push, PR, merge ou revisão. Para o pedido pequeno, uma subtarefa basta.',
     '',
@@ -401,9 +447,16 @@ export function parseRefineOutput(text: string): RefineResult | undefined {
     v === undefined ? [] : Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x.trim()).slice(0, max).map((x) => cutText(maskSecrets(x.trim()), each)) : undefined;
   const plan = typeof o.plan === 'string' ? maskSecrets(o.plan.trim()) : '';
   const questions = list(o.questions, REFINE_LIMITS.questions, REFINE_LIMITS.question);
-  const subtasks = list(o.subtasks, REFINE_LIMITS.subtasks, REFINE_LIMITS.subtask);
-  if (!plan || !questions || !subtasks) return undefined;
-  return { plan: cutText(plan, REFINE_LIMITS.plan), questions, subtasks };
+  // Subtarefa: texto (formato antigo, risco medium) ou {text, risk, riskWhy}.
+  const subs = o.subtasks === undefined ? [] : Array.isArray(o.subtasks) ? o.subtasks.map((x) => (typeof x === 'string' ? { text: x } : ((x && typeof x === 'object' ? x : {}) as Record<string, unknown>))) : undefined;
+  if (!plan || !questions || !subs) return undefined;
+  const kept = subs.filter((x) => typeof x.text === 'string' && !!x.text.trim()).slice(0, REFINE_LIMITS.subtasks);
+  const subtasks = kept.map((x) => cutText(maskSecrets(String(x.text).trim()), REFINE_LIMITS.subtask));
+  const risks = kept.map((x) => {
+    const why = typeof x.riskWhy === 'string' ? x.riskWhy.trim() : '';
+    return { risk: parseRisk(x.risk), ...(why ? { riskWhy: cutText(maskSecrets(why), REFINE_LIMITS.riskWhy) } : {}) };
+  });
+  return { plan: cutText(plan, REFINE_LIMITS.plan), questions, subtasks, risks };
 }
 
 /** Nome do card para uma pasta: o vboards.card dela ou o nome da pasta. */
@@ -542,7 +595,7 @@ export interface VBoardsServiceOptions {
    * Abertura automática: chamada a cada busca da fila com as subtarefas soltas de uma pasta com vboards.auto=true (a
    * única pasta que combina com o card). Ausente (chat desligado) = nada abre sozinho.
    */
-  auto?: (folder: string, tasks: Array<{ id: string; prompt: string }>, config: FolderConfig) => void;
+  auto?: (folder: string, tasks: Array<{ id: string; prompt: string } & Pick<AgentTask, 'risk' | 'riskWhy' | 'approvedAt'>>, config: FolderConfig) => void;
   /**
    * "Refinar": uma rodada só de leitura na pasta (gate.ts refinerFor) que devolve o texto da resposta. Ausente (chat
    * desligado) = os pedidos de refinar ficam para outro Habblaud.
@@ -627,7 +680,7 @@ export class VBoardsService {
       this.tasks = list.flatMap((x) => {
         const t = x as Record<string, unknown>;
         const s = (v: unknown) => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
-        return s(t.cardId) && s(t.subtaskId) && s(t.text) ? [{ cardId: s(t.cardId), subtaskId: s(t.subtaskId), text: s(t.text), cardTitle: s(t.cardTitle), date: s(t.date) || undefined, ...(s(t.repo) ? { repo: s(t.repo) } : {}) }] : [];
+        return s(t.cardId) && s(t.subtaskId) && s(t.text) ? [{ cardId: s(t.cardId), subtaskId: s(t.subtaskId), text: s(t.text), cardTitle: s(t.cardTitle), date: s(t.date) || undefined, ...(s(t.repo) ? { repo: s(t.repo) } : {}), ...taskRisk(t) }] : [];
       });
       this.delay = POLL_MS;
       this.lastError = undefined;
@@ -662,7 +715,7 @@ export class VBoardsService {
     }
     for (const [folder, tasks] of byFolder) {
       const config = await (this.opts.folderConfig ?? readFolderConfig)(folder);
-      if (config.auto) this.opts.auto(folder, tasks.map((t) => ({ id: taskId(t), prompt: taskPrompt(t) })), config);
+      if (config.auto) this.opts.auto(folder, tasks.map((t) => ({ id: taskId(t), prompt: taskPrompt(t), ...(t.risk ? { risk: t.risk } : {}), ...(t.riskWhy ? { riskWhy: t.riskWhy } : {}), ...(t.approvedAt ? { approvedAt: t.approvedAt } : {}) })), config);
     }
   }
 

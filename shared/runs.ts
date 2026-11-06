@@ -29,7 +29,15 @@ export interface RunItem {
   gate?: 'pass' | 'fail';
   /** Lista automática: nomes dos PNGs do QA visual (GET /api/chat/runs/:id/items/:n/shots/:nome). */
   shots?: string[];
+  /** Lista automática: o risco que a IA do Refinar deu à subtarefa (VBoards); ausente conta como 'medium'. */
+  risk?: RiskLevel;
+  riskWhy?: string;
+  /** Lista automática: quando o plano do card foi aprovado no VBoards (sem isso, nada sobe sozinho). */
+  approvedAt?: string;
 }
+
+/** Risco de uma tarefa (server/chat/risk.ts): o final é o maior entre o da IA e o calculado do diff. */
+export type RiskLevel = 'low' | 'medium' | 'high';
 
 /** Uma linha de <dataDir>/chat/run-metrics.jsonl: um item de lista que terminou (briefing e usage_metrics do Jarvis). */
 export interface RunMetric {
@@ -52,6 +60,9 @@ export interface RunAuto {
   check?: string;
   /** vboards.qa: comando do QA visual, depois do check; os PNGs vão em $HABBLAUD_QA_DIR. */
   qa?: string;
+  /** vboards.riskPaths (globs) e vboards.riskLines: o risco do diff no relatório do portão. */
+  riskPaths?: string[];
+  riskLines?: number;
   reviewer: Provider;
   reviewerModel?: string;
 }
@@ -83,6 +94,8 @@ export interface ChatRun {
   resumeTo?: RunState;
   /** "Subir" (server/chat/ship.ts): push do branch, PR, CI, merge e deploy, preso ao SHA aprovado. */
   ship?: RunShip;
+  /** vboards.autoMerge=low: a lista automática já foi avaliada para subir sozinha (uma vez); `blocked` = por que não. */
+  autoShip?: { at: number; blocked?: string };
 }
 
 /**
@@ -122,6 +135,8 @@ export interface RunShip {
   notified?: string[];
   /** Por que falhou ou o que espera; o resultado do fast-forward do checkout local depois do deploy. */
   note?: string;
+  /** Subiu sozinha, sem PIN (vboards.autoMerge=low e risco baixo). */
+  auto?: boolean;
 }
 
 /** O "Subir" está andando (Juntar e Descartar esperam). Com ship=pr, o PR aberto ('pr' com prUrl) já é o fim. */
@@ -147,6 +162,9 @@ export interface ShipPreview {
   gate: 'pass' | 'fail' | 'none';
   /** Arquivos mudados em .husky/, .githooks/ e .github/workflows/ (hooks e CI rodam com a credencial do dono). */
   risky: string[];
+  /** Risco final (server/chat/risk.ts): o maior entre o da IA e o do diff, com os motivos. */
+  risk: RiskLevel;
+  riskWhy: string[];
 }
 
 /** GET/PUT /api/chat/github: o token do GitHub do "Subir" (nunca volta para a página). */
