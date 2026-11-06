@@ -386,6 +386,38 @@ describe('Jarvis: projects_status e release_notes (do journal)', () => {
   });
 });
 
+describe('Jarvis: projeto novo', () => {
+  const plan = { v: 1, slug: 'treino', name: 'Treino', root: 'D:/P', template: 'D:/P/app-base', repos: [{ role: 'app', path: 'D:/P/treino/treino-app' }], options: { github: false, vboards: false, agent: false }, steps: [], startedAt: 0, updatedAt: 0 };
+  const projects = () => ({
+    draft: vi.fn(() => ({ questions: [{ key: 'name', question: 'Qual é o nome do produto?' }], errors: [] })),
+    plan: vi.fn(() => plan),
+    facts: vi.fn(() => ['Criar o projeto Treino', 'Repo app: D:/P/treino/treino-app']),
+    get: vi.fn(() => ({ spec: '# Treino' })),
+    start: vi.fn(() => ({ state: plan, done: Promise.resolve({ ...plan, steps: [{ id: 'copy', status: 'done' }] }) })),
+  });
+
+  for (const answer of ['deny', 'allow'] as const) {
+    it(`projects_create pede SEMPRE o cartão crítico, mesmo em turno limpo (${answer})`, async () => {
+      const p = projects();
+      const s = setup(answer, { projects: p as never });
+      const r = await s.call('projects_create', { slug: 'treino' });
+      expect(s.cards).toHaveLength(1);
+      expect(s.cards[0].critical).toBe(true);
+      expect(s.cards[0].body).toContain('D:/P/treino/treino-app');
+      expect(s.cards[0].body).toContain('# Treino');
+      expect(p.start).toHaveBeenCalledTimes(answer === 'allow' ? 1 : 0);
+      expect(r.isError).toBe(answer === 'deny' ? true : undefined);
+    });
+  }
+
+  it('projects_draft devolve as perguntas sem cartão', async () => {
+    const s = setup('deny', { projects: projects() as never });
+    const r = await s.call('projects_draft', { idea: 'app de treino' });
+    expect(r.text).toContain('Qual é o nome do produto?');
+    expect(s.cards).toHaveLength(0);
+  });
+});
+
 describe('Jarvis: runs_ship (sempre cartão crítico)', () => {
   const SHA = 'a'.repeat(40);
   const preview = { folder: 'C:\\proj', owner: 'acme', repo: 'api', remote: 'origin', base: 'main', branch: 'agentic/lista-r1', sha: SHA, mode: 'merge' as const, deploy: 'workflow:deploy.yml', ciMinutes: 30, stat: ' a.ts | 2 ++', files: 2, added: 2, removed: 0, gate: 'pass' as const, risky: ['.husky/pre-push'] };
