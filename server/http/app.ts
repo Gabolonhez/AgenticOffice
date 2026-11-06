@@ -24,10 +24,17 @@ import { AUDIO_BODY_MAX, type DictationService } from '../dictation/dictation';
 import type { DeliveryIndex } from '../deliveries/deliveries';
 import type { FileFetcher } from '../deliveries/fetcher';
 import { HOST_WAIT_MS } from '../host-wait';
+import { importPack, packStatus } from '../assets3d/pack';
+import { ZipError } from '../assets3d/zip';
+import { serveAsset } from './assets3d';
 import { ptyRequestProblem } from './pty';
+import type { TriageService } from '../vboards/triage';
+import type { PinCheck } from '../permissions/pin';
 import type { VBoardsService } from '../vboards/vboards';
 
 export interface ApiDeps {
+  /** Pasta do pacote 3D importado (GET /api/assets3d, /api/assets3d/file/*, POST /api/assets3d/import; server/assets3d). */
+  assets3dRoot?: string;
   office: Office;
   hub: Hub;
   accounts: AccountsService;
@@ -54,7 +61,7 @@ export interface ApiDeps {
    * PIN de aprovação dos cartões críticos (server/permissions/pin.ts): GET /api/approval-pin {set, all, lockedUntil?}
    * (local, ou o celular com "permissions"); POST {pin?, current?, all?} só pelo próprio computador.
    */
-  approvalPin?: { view(): unknown; update(b: { pin?: unknown; current?: unknown; all?: unknown }): Promise<string | undefined> };
+  approvalPin?: { view(): unknown; update(b: { pin?: unknown; current?: unknown; all?: unknown }): Promise<string | undefined>; check?(pin: unknown): Promise<PinCheck>; triesLeft?(): number };
   /**
    * Rotas das mensagens pelo escritório (/api/messages, a caixa de entrada do plugin em /api/mod/inbox e a do auxiliar
    * do Codex em /api/codex/bridge/*, server/messages/http.ts). Só existem com ServerConfig.messages (a trava do
@@ -112,13 +119,25 @@ export interface ApiDeps {
    * {folder, config}). Ausente = desligado.
    */
   vboards?: Pick<VBoardsService, 'list' | 'refineList' | 'begin' | 'attach' | 'configFolders' | 'folderSettings' | 'saveFolderSettings'> & Partial<Pick<VBoardsService, 'problem'>>;
+  /** Triagem e perguntas (vboards/triage.ts): vai junto do GET /api/vboards; POST /api/vboards/triage/answer {id, answer} e /run {id}. */
+  triage?: Pick<TriageService, 'list' | 'answer' | 'triage'>;
   /**
    * Avisos ao dono (vboards/ntfy.ts NotifySettings), GET/POST /api/vboards/notify {url?, channel?, wa?, briefing?}: o
    * tópico do ntfy, o WhatsApp (WA-AKG), o canal e o horário do briefing do Jarvis. Pela porta remota só se sabe se está
    * ligado (o tópico e a chave não saem); gravar, só pelo próprio computador.
    */
   ntfy?: { view(editable: boolean): Record<string, unknown>; update(raw: unknown): string | undefined };
+  /**
+   * Registro de produtos (vboards/products.ts), GET/POST /api/vboards/products {products}: produto -> repos. Pela porta
+   * remota só leitura, como a configuração das pastas.
+   */
+  products?: { load(): { products: unknown[]; error?: string }; save(raw: unknown): { products: unknown[] } | { error: string } };
+  /** Assistente "Novo projeto" (projects/http.ts): /api/projects/*. Só pelo próprio computador. */
+  projects?: (req: IncomingMessage, res: ServerResponse, path: string) => void;
 }
+
+/** Corpo do POST /api/assets3d/import: o zip (~10 MB) em base64. */
+const ZIP_BODY_MAX = 170 * 1024 * 1024;
 
 /** GET /api/agents/:id/terminal (ids nunca contêm '/'). */
 const TERMINAL_ROUTE = /^\/api\/agents\/([^/]+)\/terminal$/;
@@ -374,6 +393,33 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       } else deps.world(req, res, url);
       return true;
     }
+    if (path === '/api/assets3d' || path.startsWith('/api/assets3d/')) {
+      const root = deps.assets3dRoot;
+      if (!root) sendJson(res, 404, { error: tr('rota desconhecida') });
+      else if (path === '/api/assets3d' && isRead) sendJson(res, 200, packStatus(root));
+      else if (path.startsWith('/api/assets3d/file/') && isRead) serveAsset(root, path.slice('/api/assets3d/file/'.length), req, res);
+      else if (path === '/api/assets3d/import' && method === 'POST') {
+        // grava no disco do computador: só pelo próprio computador. O corpo é JSON ({data: zip em base64}) por causa da trava de CSRF.
+        if (!trusted(req)) {
+          req.resume();
+          sendJson(res, 403, { error: denied(req, tr('o pacote 3D só é importado pelo próprio computador (http://localhost)')) });
+        } else
+          readJson(req, ZIP_BODY_MAX)
+            .then((body) => {
+              const data = (body as { data?: unknown })?.data;
+              if (typeof data !== 'string' || !data) throw new HttpError(400, tr('esperado {data: zip em base64}'));
+              try {
+                importPack(Buffer.from(data, 'base64'), root);
+              } catch (err) {
+                if (err instanceof ZipError) throw new HttpError(400, err.message);
+                throw err;
+              }
+              sendJson(res, 200, packStatus(root));
+            })
+            .catch((err) => fail(res, err));
+      } else methodNotAllowed(res, 'GET, POST');
+      return true;
+    }
     if (path === '/api/stream') {
       if (method !== 'GET') methodNotAllowed(res, 'GET');
       else hub.attach(req, res);
@@ -593,11 +639,12 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       // A configuração das pastas pode ser LIDA pela porta remota (com login); gravar, nunca: vboards.check é um comando
       // de shell e vboards.auto abre agentes sozinho.
       const vb = deps.vboards;
-      const remoteConfigRead = (path === '/api/vboards/config' || path === '/api/vboards/notify') && isRead && isRemote(req);
+      const configPath = path === '/api/vboards/config' || path === '/api/vboards/notify' || path === '/api/vboards/products';
+      const remoteConfigRead = configPath && isRead && isRemote(req);
       const problem = remoteConfigRead
         ? undefined
         : isRemote(req)
-          ? path === '/api/vboards/config' || path === '/api/vboards/notify'
+          ? configPath
             ? tr('a configuração do VBoards só muda pelo próprio computador: pela porta remota ela é só leitura')
             : tr('o VBoards só é usado pelo próprio computador (http://localhost)')
           : ptyRequestProblem(req);
@@ -608,8 +655,22 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
         else {
           // `problem`: o token foi recusado (escopo que falta, expirado): o painel mostra a frase.
           const problem = vb.problem?.();
-          vb.list().then((tasks) => sendJson(res, 200, { tasks, refines: vb.refineList(), ...(problem ? { problem } : {}) }), (err) => fail(res, err));
+          vb.list().then((tasks) => sendJson(res, 200, { tasks, refines: vb.refineList(), triage: deps.triage?.list() ?? [], ...(problem ? { problem } : {}) }), (err) => fail(res, err));
         }
+      } else if ((path === '/api/vboards/triage/answer' || path === '/api/vboards/triage/run') && deps.triage) {
+        const triage = deps.triage;
+        if (method !== 'POST') methodNotAllowed(res, 'POST');
+        else
+          readJson(req)
+            .then(async (body) => {
+              const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+              const id = typeof b.id === 'string' ? b.id : '';
+              if (!id) return sendJson(res, 400, { error: tr('Diga o card.') });
+              // Pela página: é o dono (a trava de cima só deixa o próprio computador), então a resposta é confiável.
+              const r = path.endsWith('/run') ? await triage.triage(id) : await triage.answer(id, typeof b.answer === 'string' ? b.answer : '', true);
+              sendJson(res, 'error' in r && !('cardId' in r) ? 400 : 200, r);
+            })
+            .catch((err) => fail(res, err));
       } else if (path === '/api/vboards/start') {
         if (method !== 'POST') methodNotAllowed(res, 'POST');
         else
@@ -619,15 +680,16 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
             .catch((err) => fail(res, err));
       } else if (path === '/api/vboards/config') {
         const editable = !isRemote(req);
-        const masked = <T extends { config: { check?: string } }>(r: T): T => (editable || !r.config.check ? r : { ...r, config: { ...r.config, check: maskSecrets(r.config.check) } });
-        const answer = (r: Awaited<ReturnType<typeof vb.folderSettings>>) => ('error' in r ? sendJson(res, r.status, { error: r.error }) : sendJson(res, 200, { ...masked(r), editable }));
+        const masked = <T extends { config: { check?: string; qa?: string } }>(r: T): T => (editable ? r : { ...r, config: { ...r.config, ...(r.config.check ? { check: maskSecrets(r.config.check) } : {}), ...(r.config.qa ? { qa: maskSecrets(r.config.qa) } : {}) } });
+        const answer = (r: Awaited<ReturnType<typeof vb.saveFolderSettings>>) => ('error' in r ? sendJson(res, r.status, { error: r.error, ...(r.pin ? { pin: r.pin } : {}) }) : sendJson(res, 200, { ...masked(r), editable }));
         if (isRead) {
           const folder = url.searchParams.get('folder');
           if (folder === null) vb.configFolders().then((folders) => sendJson(res, 200, { folders, editable }), (err) => fail(res, err));
           else vb.folderSettings(folder).then(answer, (err) => fail(res, err));
         } else if (method === 'POST') {
           readJson(req)
-            .then((body) => vb.saveFolderSettings(body))
+            // Ligar o que sobe ou publica sem PIN a cada vez (autoMerge=low, ship=merge, store≠off) pede o PIN no corpo.
+            .then((body) => vb.saveFolderSettings(body, deps.approvalPin?.check && deps.approvalPin.triesLeft ? { check: (p) => deps.approvalPin!.check!(p), triesLeft: () => deps.approvalPin!.triesLeft!() } : undefined))
             .then(answer)
             .catch((err) => fail(res, err));
         } else methodNotAllowed(res, 'GET, POST');
@@ -647,6 +709,18 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
             })
             .catch((err) => fail(res, err));
         } else methodNotAllowed(res, 'GET, POST');
+      } else if (path === '/api/vboards/products' && deps.products) {
+        const reg = deps.products;
+        const editable = !isRemote(req);
+        if (isRead) sendJson(res, 200, { ...reg.load(), editable });
+        else if (method === 'POST') {
+          readJson(req)
+            .then((body) => {
+              const r = reg.save(body);
+              sendJson(res, 'error' in r ? 400 : 200, 'error' in r ? r : { ...r, editable });
+            })
+            .catch((err) => fail(res, err));
+        } else methodNotAllowed(res, 'GET, POST');
       } else if (path === '/api/vboards/attach') {
         if (method !== 'POST') methodNotAllowed(res, 'POST');
         else
@@ -656,6 +730,18 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
             .catch((err) => fail(res, err));
       } else sendJson(res, 404, { error: tr('rota desconhecida') });
       if (!vb || problem) req.resume();
+      return true;
+    }
+    if (path === '/api/projects' || path.startsWith('/api/projects/')) {
+      // Copia o molde, roda git e cria repositórios: só pelo próprio computador (a trava do terminal interativo).
+      const problem = isRemote(req) ? tr('o assistente de projeto novo só funciona pelo próprio computador (http://localhost)') : ptyRequestProblem(req);
+      if (!deps.projects) {
+        req.resume();
+        sendJson(res, 404, { error: tr('rota desconhecida') });
+      } else if (problem) {
+        req.resume();
+        sendJson(res, 403, { error: problem });
+      } else deps.projects(req, res, path);
       return true;
     }
     if (path === '/api/dictation' || path.startsWith('/api/dictation/')) {

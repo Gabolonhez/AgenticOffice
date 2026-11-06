@@ -14,6 +14,7 @@ import type { Selection, WorldApi } from '../world/api';
 import type { PanelName, TerminalRouter, UiComponent, UiContext } from './context';
 import { DayLauncher } from './daystats-launcher';
 import { SummaryPanel } from './summary';
+import { ProjectWizard } from './projects';
 import { RoomRenamer } from './roomrename';
 import { h } from './dom';
 import { CanvasView } from './canvas';
@@ -28,6 +29,7 @@ import { hasCodexPermission } from './provider';
 import { Notifier } from './notify';
 import { ConnectionBanner, EmptyState, Splash } from './overlays';
 import { focusPermission, nextPermissionAgent } from './permission';
+import { JarvisOverlay } from './jarvis';
 import { loadPrefs, safeLocalStorage, savePrefs, worldOptionsFrom, type UiPrefs } from './prefs';
 import { SettingsPopover } from './settings';
 import { Sidebar } from './sidebar';
@@ -46,6 +48,7 @@ import { WorldSocialNotifier } from './world/away-summary';
 import { worldGate } from './world/settings-world';
 import { worldSectionMode } from './world/world-model';
 import { SceneSwitch, type CitySceneHost } from './world/scene-switch';
+import { Office3dSwitch, type Office3dHost } from './world/office3d-switch';
 import { worldSource } from '../net/world';
 import { FreeArea } from './viewport';
 import { tr } from '../../../shared/i18n';
@@ -61,7 +64,7 @@ function isTypingTarget(t: EventTarget | null): boolean {
   return t.isContentEditable || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
 }
 
-export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi, city?: CitySceneHost): void {
+export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi, city?: CitySceneHost, office3d?: Office3dHost): void {
   const storage = safeLocalStorage();
   let prefs: UiPrefs = loadPrefs(storage);
   let selection: Selection = world.getSelection();
@@ -87,6 +90,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   /** Botão Mundo e a ida e volta da cidade (só quando app.ts monta a cena). */
   let scene: SceneSwitch | null = null;
   const inCity = () => !!scene?.inCity;
+  /** Botão 3D e a ida e volta do escritório 3D. */
+  let scene3d: Office3dSwitch | null = null;
+  const in3d = () => !!scene3d?.is3d;
 
   const ctx: UiContext = {
     store,
@@ -133,6 +139,11 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
         else city.zoomBy(action === 'zoomIn' ? 1.25 : 1 / 1.25);
         return;
       }
+      if (in3d() && office3d) {
+        if (action === 'overview') office3d.recenter();
+        else office3d.zoomBy(action === 'zoomIn' ? 1.25 : 1 / 1.25);
+        return;
+      }
       if (canvas.open) return canvas.camera(action);
       area.clearIntent();
       if (action === 'overview') world.overview();
@@ -166,9 +177,12 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
       timelapse.toggle();
     },
     isTimelapseOpen: () => timelapse.isOpen,
+    openJarvis: () => jarvis.toggle(),
   };
 
   // ---------------------------------------------------------------- componentes
+  // Jarvis em tela cheia (ui/jarvis.ts): pela barra de cima ou pela tecla J.
+  const jarvis = new JarvisOverlay(ctx);
   const sound = new SoundControl(ctx);
   const notifier = new Notifier(ctx, sound.board);
   topbar = new TopBar(ctx);
@@ -269,6 +283,29 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
       void sw.visitOwn();
     };
   }
+  // Botão 3D: o escritório em 3D (pacote importado nas Configurações), carregado sob demanda por app.ts.
+  if (office3d) {
+    office3d.bind({
+      pick: (id) => ctx.select(id ? { type: 'agent', id } : null),
+      openSettings: () => settings.toggle(topbar.settingsBtn),
+    });
+    scene3d = new Office3dSwitch(
+      ctx,
+      office3d,
+      () => {
+        if (inCity()) scene?.close();
+      },
+      inCity,
+      () => {
+        if (in3d()) {
+          canvas.toggle(false);
+          if (ctx.isNarrow() && panels.sidebar) ctx.togglePanel('sidebar', false);
+        }
+        invalidate();
+      },
+    );
+    topbar.addSceneButton(scene3d.button);
+  }
   help = new HelpDialog();
   // Fila do VBoards: subtarefas do quadro do time esperando um agente (contador ao lado do "precisa de você").
   const vboards = new VBoardsPanel(ctx);
@@ -279,6 +316,10 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   root.append(summary.el);
   const day = new DayLauncher(ctx, (el) => root.append(el));
   topbar.addPanelButton(day.button);
+  // Novo projeto a partir do molde (server/projects): briefing, spec e criação com o PIN.
+  const projects = new ProjectWizard(ctx);
+  topbar.addPanelButton(projects.button);
+  root.append(projects.el);
   // Quadro: os agentes em cartões, alternando com a pixel art (atalho V).
   canvas = new CanvasView(ctx);
   topbar.addPanelButton(canvas.button);
@@ -295,7 +336,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   const scrim = h('div', { class: 'ui-scrim', attrs: { 'aria-hidden': 'true' }, on: { click: () => ctx.togglePanel('sidebar', false) } });
 
   root.classList.add('ui-root');
-  root.append(timelapse.vignette, canvas.el, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, invite.el, tip.el, settings.el, history.el, deliveries.el, help.el, renamer.el, live, splash.el);
+  root.append(timelapse.vignette, canvas.el, topbar.el, sidebar.el, scrim, feed.el, drawer.el, terminal.el, pty.el, timelapse.el, timelapse.badge, toasts.el, banner.el, update.el, empty.el, invite.el, tip.el, settings.el, history.el, deliveries.el, help.el, renamer.el, live, splash.el, jarvis.el);
   area = new FreeArea(world, { root, topbar: topbar.el, sidebar: sidebar.el, drawer: drawer.el, feed: feed.el }, () => ({
     sidebar: panels.sidebar,
     feed: panels.feed,
@@ -304,8 +345,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   }));
   drawer.onLayoutChange = () => applyLayout();
 
-  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, summary, updateToaster, invite, worldChip, vboards, canvas];
+  const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, summary, projects, updateToaster, invite, worldChip, vboards, canvas, jarvis];
   if (scene) components.push(scene);
+  if (scene3d) components.push(scene3d);
   root.append(worldSocial.el);
   components.push(worldSocial);
 
@@ -389,6 +431,8 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
 
   function onKey(e: KeyboardEvent): void {
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    // Jarvis em tela cheia: ele trata as próprias teclas (Esc, Espaço); os atalhos do escritório ficam desligados.
+    if (jarvis.isOpen) return;
     // Na cidade os atalhos do escritório ficam desligados: Esc fecha o cartão aberto ou volta ao escritório.
     if (inCity()) {
       if (e.key === 'Escape') {
@@ -412,6 +456,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
         e.preventDefault();
       } else if (selection) {
         ctx.select(null);
+        e.preventDefault();
+      } else if (in3d()) {
+        scene3d?.close();
         e.preventDefault();
       }
       return;
@@ -452,6 +499,12 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
         else ctx.announce(tr('Nenhum pedido de permissão ou pergunta para responder agora.'));
         break;
       }
+      case 'j':
+      case 'J':
+        if (!topbar.jarvisAvailable) break;
+        e.preventDefault();
+        jarvis.toggle();
+        break;
       case 'o':
       case 'O':
         e.preventDefault();

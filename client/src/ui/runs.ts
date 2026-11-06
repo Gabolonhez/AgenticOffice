@@ -3,7 +3,7 @@
 // confirmar (todos os itens, a pasta, o agente, o papel e a permissão; "Rodar lista" é a aprovação da lista inteira) e
 // acompanhar (cada item com o agente dele; Parar, Continuar, Juntar/Descartar; o diff da cópia com comentários por linha).
 import { tr } from '../../../shared/i18n';
-import { parseChecklist, type ChatRun, type RunCreateRequest, type RunFeedbackComment } from '../../../shared/runs';
+import { parseChecklist, shipActive, shipApprovalOf, type ChatRun, type ShipApproval, type RunCreateRequest, type RunFeedbackComment, type RiskLevel, type RunShip, type ShipPreview, type ShipStep } from '../../../shared/runs';
 import { ChatOptionsFields } from './chat-options';
 import type { UiContext } from './context';
 import { h, iconButton, setHidden, setText } from './dom';
@@ -15,13 +15,13 @@ import { providerLabel } from './spawn-model';
 
 const POLL_MS = 2_000;
 
-async function api<T>(path: string, body?: unknown): Promise<T> {
+async function api<T>(path: string, body?: unknown, method = 'POST'): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, {
       credentials: 'same-origin',
       cache: 'no-store',
-      ...(body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+      ...(body === undefined ? {} : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
     });
   } catch {
     throw new Error(tr('o Habblaud não respondeu'));
@@ -37,6 +37,45 @@ const textarea = (rows: number, placeholder: string) => {
   el.addEventListener('keyup', (e) => e.stopPropagation());
   return el;
 };
+
+/** Etapas da barra do "Subir" (com mode 'pr' só as duas primeiras). */
+const SHIP_STEPS: Array<{ step: ShipStep; label: () => string }> = [
+  { step: 'pushing', label: () => tr('Push') },
+  { step: 'pr', label: () => tr('PR') },
+  { step: 'ci', label: () => tr('CI') },
+  { step: 'merging', label: () => tr('Merge') },
+  { step: 'deploying', label: () => tr('Deploy') },
+];
+
+/** Estado de cada etapa da barra: done, current, failed ou pending. */
+/** Selo do risco (server/chat/risk.ts): baixo, médio ou alto, com cor e texto (não só a cor). */
+const riskBadge = (r: RiskLevel): HTMLElement => h('span', { class: `ui-risk is-${r}`, text: r === 'low' ? tr('baixo') : r === 'medium' ? tr('médio') : tr('alto') });
+
+function shipStates(s: RunShip): Array<{ step: ShipStep; label: string; state: 'done' | 'current' | 'failed' | 'pending' }> {
+  const steps = s.mode === 'pr' ? SHIP_STEPS.slice(0, 2) : SHIP_STEPS;
+  const at = (st: ShipStep | undefined) => steps.findIndex((x) => x.step === st);
+  const cur = s.step === 'failed' ? at(s.failedAt) : at(s.step);
+  return steps.map((x, i) => {
+    const state = s.step === 'deployed' || (!shipActive(s) && s.step !== 'failed') ? 'done' : i < cur ? 'done' : i === cur ? (s.step === 'failed' ? 'failed' : 'current') : 'pending';
+    return { step: x.step, label: x.label(), state };
+  });
+}
+
+const CI_TEXT: Record<string, () => string> = {
+  pending: () => tr('CI rodando…'),
+  pass: () => tr('CI verde'),
+  fail: () => tr('CI falhou'),
+  'no-ci': () => tr('Repo sem CI de PR'),
+};
+
+/** Estado de tela de um cartão que não vem do servidor (sobrevive ao redesenho de cada consulta). */
+interface CardUi {
+  preview?: ShipPreview;
+  loading?: boolean;
+  pin: string;
+  noCiPin: string;
+  vscodePath?: string;
+}
 
 export class RunsPanel {
   readonly el: HTMLElement;
@@ -62,6 +101,7 @@ export class RunsPanel {
   private timer?: ReturnType<typeof setInterval>;
   private busy = false;
   private readonly diff: RunDiffView;
+  private readonly ui = new Map<string, CardUi>();
 
   constructor(private readonly ctx: UiContext) {
     this.folder = h('select', { class: 'ui-rename__input', attrs: { 'aria-label': tr('Pasta do projeto') } });
@@ -288,9 +328,153 @@ export class RunsPanel {
   private renderRuns(force = false): void {
     const sig = JSON.stringify(this.runs);
     if (!force && sig === this.shown) return;
+    // Digitando o PIN: não redesenha (o foco e o texto ficam); a próxima consulta tenta de novo.
+    if (!force && document.activeElement instanceof HTMLInputElement && this.runsList.contains(document.activeElement)) return;
     this.shown = sig;
     if (!this.runs.length) return void this.runsList.replaceChildren(h('li', { class: 'ui-rename__hint', text: tr('Nenhuma lista ainda.') }));
     this.runsList.replaceChildren(...this.runs.map((r) => this.card(r)));
+  }
+
+  private cardUi(id: string): CardUi {
+    let u = this.ui.get(id);
+    if (!u) this.ui.set(id, (u = { pin: '', noCiPin: '' }));
+    return u;
+  }
+
+  /** "Subir": só prepara (commit local, sem rede) e abre a caixa de confirmação no cartão. */
+  private async prepareShip(run: ChatRun): Promise<void> {
+    const u = this.cardUi(run.id);
+    u.loading = true;
+    this.renderRuns(true);
+    try {
+      u.preview = await api<ShipPreview>(`/api/chat/runs/${encodeURIComponent(run.id)}/ship/prepare`, {});
+      u.pin = '';
+      this.say('');
+    } catch (err) {
+      this.say((err as Error).message, true);
+    }
+    u.loading = false;
+    this.renderRuns(true);
+  }
+
+  /** Manda o cartão inteiro que a pessoa viu: o servidor recusa se qualquer campo mudou. */
+  private async sendShip(run: ChatRun, approval: ShipApproval): Promise<void> {
+    const u = this.cardUi(run.id);
+    const noCi = !!approval.noCi;
+    const pin = noCi ? u.noCiPin : u.pin;
+    if (!pin) return this.say(tr('Digite o PIN de aprovação.'), true);
+    try {
+      await api(`/api/chat/runs/${encodeURIComponent(run.id)}/ship`, { pin, ...approval });
+      u.preview = undefined;
+      u.pin = u.noCiPin = '';
+      this.say('');
+    } catch (err) {
+      this.say((err as Error).message, true);
+    }
+    await this.refresh();
+    this.renderRuns(true);
+  }
+
+  private async openVscode(run: ChatRun): Promise<void> {
+    try {
+      const r = await api<{ opened: boolean; path: string }>(`/api/chat/runs/${encodeURIComponent(run.id)}/vscode`, {});
+      this.cardUi(run.id).vscodePath = r.opened ? undefined : r.path;
+      this.say('');
+    } catch (err) {
+      this.say((err as Error).message, true);
+    }
+    this.renderRuns(true);
+  }
+
+  private pinInput(get: () => string, set: (v: string) => void, enter: () => void): HTMLInputElement {
+    const el = h('input', { class: 'ui-rename__input', type: 'password', attrs: { autocomplete: 'off', maxlength: 200, placeholder: tr('PIN de aprovação'), 'aria-label': tr('PIN de aprovação') } });
+    el.value = get();
+    el.addEventListener('input', () => set(el.value));
+    el.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') enter();
+    });
+    el.addEventListener('keyup', (e) => e.stopPropagation());
+    return el;
+  }
+
+  private shipConfirm(run: ChatRun, p: ShipPreview): HTMLElement {
+    const u = this.cardUi(run.id);
+    const row = (k: string, v: string | HTMLElement) => h('div', { class: 'ui-runs__row' }, h('dt', { text: k }), h('dd', {}, v));
+    const gate = p.gate === 'pass' ? tr('passou') : p.gate === 'fail' ? tr('falhou') : tr('sem portão');
+    const go = () => void this.sendShip(run, shipApprovalOf(p));
+    return h(
+      'div',
+      { class: 'ui-ship__box' },
+      h(
+        'dl',
+        { class: 'ui-runs__summary' },
+        row(tr('Pasta'), shortPath(p.folder)),
+        row(tr('Repositório'), `${p.owner}/${p.repo}`),
+        row(tr('Base'), `${p.base} ← ${p.branch}`),
+        row('SHA', h('code', { class: 'ui-ship__sha', text: p.sha })),
+        row(tr('Modo'), p.mode === 'merge' ? tr('merge automático') : tr('só PR')),
+        row(tr('Deploy'), p.deploy === 'none' ? tr('nenhum') : p.deploy),
+        row(tr('Portão'), gate),
+        row(tr('Risco'), riskBadge(p.risk)),
+      ),
+      p.riskWhy.length ? h('p', { class: 'ui-rename__hint', text: p.riskWhy.join('; ') }) : null,
+      p.stat ? h('pre', { class: 'ui-ship__stat', text: p.stat }) : null,
+      p.risky.length ? h('p', { class: 'ui-ship__warn', text: tr('Muda hooks/CI que rodam com a sua credencial: {0}', [p.risky.join(', ')]) }) : null,
+      p.mode === 'merge' ? h('p', { class: 'ui-rename__hint', text: tr('Com CI verde, o merge vai para {0} e dispara o deploy.', [p.base]) }) : null,
+      this.pinInput(() => u.pin, (v) => (u.pin = v), go),
+      h(
+        'div',
+        { class: 'ui-vboards__actions' },
+        h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow', type: 'button', on: { click: go } }, tr('Subir com PIN')),
+        h('button', { class: 'ui-btn ui-perm__btn', type: 'button', on: { click: () => { u.preview = undefined; u.pin = ''; this.renderRuns(true); } } }, tr('Cancelar')),
+      ),
+    );
+  }
+
+  private shipProgress(run: ChatRun, s: RunShip): HTMLElement {
+    const u = this.cardUi(run.id);
+    const go = () => void this.sendShip(run, shipApprovalOf(s, true));
+    return h(
+      'div',
+      { class: 'ui-ship' },
+      s.step === 'waiting'
+        ? h('p', { class: 'ui-rename__hint', text: tr('Esperando o repo anterior do produto') })
+        : h(
+            'ol',
+            { class: 'ui-ship__bar', attrs: { 'aria-label': tr('Progresso do Subir') } },
+            ...shipStates(s).map((x) => h('li', { class: `ui-ship__step is-${x.state}`, attrs: x.state === 'current' ? { 'aria-current': 'step' } : {} }, h('span', { class: 'ui-ship__dot' }), h('span', { text: x.label }))),
+          ),
+      s.auto ? h('p', { class: 'ui-rename__hint', text: tr('Subiu sozinho, sem PIN (vboards.autoMerge=low, risco baixo).') }) : null,
+      s.prUrl ? h('a', { class: 'ui-runs__link', text: tr('PR #{0}', [s.prNumber ?? '']), attrs: { href: s.prUrl, target: '_blank', rel: 'noopener' } }) : null,
+      s.step === 'ci' && s.ci ? h('p', { class: 'ui-rename__hint', text: CI_TEXT[s.ci]?.() ?? '' }) : null,
+      s.note ? h('p', { class: `ui-rename__hint${s.step === 'failed' ? ' is-error' : ''}`, text: s.note }) : null,
+      s.needs === 'no-ci'
+        ? h(
+            'div',
+            { class: 'ui-ship__box ui-ship__box--danger' },
+            h('p', { class: 'ui-ship__warn', text: s.risky?.length ? tr('O diff muda workflows ou hooks ({0}): CI verde não prova nada; merge = deploy em produção.', [s.risky.join(', ')]) : tr('Este repo não tem CI de PR; merge = deploy em produção.') }),
+            h('p', { class: 'ui-rename__hint', text: `${s.owner}/${s.repo} · ${s.base} ← ${s.branch} · ${s.remote} · ${s.deploy}` }),
+            h('code', { class: 'ui-ship__sha', text: s.sha }),
+            this.pinInput(() => u.noCiPin, (v) => (u.noCiPin = v), go),
+            h('div', { class: 'ui-vboards__actions' }, h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow', type: 'button', on: { click: go } }, tr('Aprovar merge sem CI'))),
+          )
+        : null,
+    );
+  }
+
+  private vscodeFallback(path: string): HTMLElement {
+    const field = h('input', { class: 'ui-rename__input', type: 'text', attrs: { readonly: true, 'aria-label': tr('Caminho da cópia') } });
+    field.value = path;
+    field.addEventListener('focus', () => field.select());
+    field.addEventListener('keydown', (e) => e.stopPropagation());
+    return h(
+      'div',
+      { class: 'ui-ship__path' },
+      h('p', { class: 'ui-rename__hint', text: tr('VS Code (comando code) não encontrado: copie o caminho') }),
+      field,
+      h('button', { class: 'ui-btn ui-perm__btn', type: 'button', on: { click: () => { field.select(); void navigator.clipboard?.writeText(path).catch(() => undefined); } } }, tr('Copiar')),
+    );
   }
 
   private card(run: ChatRun): HTMLElement {
@@ -298,7 +482,13 @@ export class RunsPanel {
       h('button', { class: `ui-btn ui-perm__btn${allow ? ' ui-perm__btn--allow' : ''}`, type: 'button', on: { click: () => void this.act(run, action) } }, text);
     const done = run.items.filter((i) => i.state === 'done').length;
     const w = run.isolated;
-    const copyOpen = !!w && !w.merged && !w.discarded && run.state !== 'running';
+    const open = !!w && !w.merged && !w.discarded;
+    const copyOpen = open && run.state !== 'running';
+    const shipping = shipActive(run.ship);
+    const u = this.cardUi(run.id);
+    // Reinício antes do merge: o mesmo botão prepara o cartão de novo e pede o PIN para continuar.
+    const canShip = copyOpen && (!shipping || run.ship?.needs === 'reapprove') && run.ship?.step !== 'deployed';
+    const canMerge = copyOpen && !shipping && (!run.ship || run.ship.step === 'failed');
     // Comentar o diff: item que terminou, com a cópia aberta e nenhum item da lista rodando (a cópia é a mesma).
     const canComment = !!w && !w.merged && !w.discarded && !run.items.some((i) => i.state === 'running');
     return h(
@@ -319,6 +509,19 @@ export class RunsPanel {
               ? h('button', { class: 'ui-runs__link', type: 'button', text: i.text, attrs: { title: tr('Ver o agente deste item') }, on: { click: () => this.ctx.select({ type: 'agent', id: i.agentId! }, { focus: true }) } })
               : h('span', { class: 'ui-runs__text', text: i.text }),
             i.summary ? h('span', { class: 'ui-runs__summary-text', text: i.summary }) : null,
+            i.shots?.length
+              ? h(
+                  'span',
+                  { class: 'ui-runs__shots' },
+                  ...i.shots.map((n) =>
+                    h(
+                      'a',
+                      { class: 'ui-runs__shot', attrs: { href: `/api/chat/runs/${encodeURIComponent(run.id)}/items/${index}/shots/${encodeURIComponent(n)}`, target: '_blank', rel: 'noopener', title: n } },
+                      h('img', { attrs: { src: `/api/chat/runs/${encodeURIComponent(run.id)}/items/${index}/shots/${encodeURIComponent(n)}`, alt: tr('Captura do QA visual: {0}', [n]), loading: 'lazy' } }),
+                    ),
+                  ),
+                )
+              : null,
             canComment && i.agentId && (i.state === 'review' || i.state === 'done')
               ? h('button', { class: 'ui-runs__link ui-runs__comment', type: 'button', text: tr('Ver o diff e comentar'), on: { click: () => void this.diff.open(run.id, index, i.text) } })
               : null,
@@ -330,9 +533,17 @@ export class RunsPanel {
         { class: 'ui-vboards__actions' },
         run.state === 'paused' || run.state === 'failed' ? btn(tr('Continuar'), 'continue', true) : null,
         run.state === 'running' || run.state === 'queued' || run.state === 'paused' || run.state === 'failed' ? btn(tr('Parar'), 'stop') : null,
-        copyOpen ? btn(tr('Juntar'), 'merge', true) : null,
-        copyOpen ? btn(tr('Descartar'), 'discard') : null,
+        canShip && !u.preview
+          ? h('button', { class: 'ui-btn ui-perm__btn ui-perm__btn--allow', type: 'button', attrs: { disabled: u.loading }, on: { click: () => void this.prepareShip(run) } }, u.loading ? tr('Preparando…') : run.ship?.needs === 'reapprove' ? tr('Aprovar de novo') : tr('Subir'))
+          : null,
+        canMerge ? btn(tr('Juntar'), 'merge', true) : null,
+        copyOpen && !shipping ? btn(tr('Descartar'), 'discard') : null,
+        open ? h('button', { class: 'ui-btn ui-perm__btn', type: 'button', on: { click: () => void this.openVscode(run) } }, tr('Abrir no VS Code')) : null,
       ),
+      u.vscodePath ? this.vscodeFallback(u.vscodePath) : null,
+      canShip && u.preview ? this.shipConfirm(run, u.preview) : null,
+      run.ship ? this.shipProgress(run, run.ship) : null,
+      !run.ship && run.autoShip?.blocked ? h('p', { class: 'ui-rename__hint', text: tr('Não subiu sozinho: {0}', [run.autoShip.blocked]) }) : null,
     );
   }
 }

@@ -12,7 +12,8 @@ import { AboutGroup } from './version';
 import { WorldSettingsGroup } from './world/settings-world';
 import type { WorldScreen } from './world/world-model';
 import { LOCALE_STORAGE_KEY, LOCALES, normalizeLocale, tr, type Locale } from '../../../shared/i18n';
-import { ApprovalPinGroup, JarvisConfigGroup, VBoardsConfigGroup } from './vboards-config';
+import { Office3dImportGroup } from './office3d-settings';
+import { ApprovalPinGroup, GitHubTokenGroup, JarvisConfigGroup, JarvisVoiceGroup, ProductsConfigGroup, VBoardsConfigGroup } from './vboards-config';
 
 type LanguageChoice = 'auto' | Locale;
 
@@ -218,11 +219,15 @@ export class SettingsPopover implements UiComponent {
       ),
       this.soundGroup.el,
       h('div', { class: 'ui-set-group' }, h('h3', { text: tr('Idioma') }), this.language.row),
+      new Office3dImportGroup().el,
       this.demoGroup,
       this.remoteGroup,
       new VBoardsConfigGroup().el,
+      new ProductsConfigGroup().el,
       new JarvisConfigGroup().el,
+      new JarvisVoiceGroup().el,
       new ApprovalPinGroup().el,
+      new GitHubTokenGroup().el,
       this.world.el,
       this.about.el,
     );

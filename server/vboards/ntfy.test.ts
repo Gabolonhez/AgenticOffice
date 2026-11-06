@@ -60,6 +60,20 @@ describe('ntfy: envio', () => {
   });
 });
 
+describe('triagem automática', () => {
+  it('vem desligada; liga e desliga pela tela e sobrevive a um reinício', () => {
+    const file = join(mkdtempSync(join(tmpdir(), 'hb-ntfy-')), 'notify.json');
+    const s = new NotifySettings(file);
+    expect(s.triage()).toBe(false);
+    expect(s.view(true)).toMatchObject({ triage: false });
+    expect(s.update({ triage: 'sim' })).toMatch(/Triagem/);
+    expect(s.update({ triage: true })).toBeUndefined();
+    expect(new NotifySettings(file).triage()).toBe(true);
+    expect(s.update({ triage: false })).toBeUndefined();
+    expect(new NotifySettings(file).triage()).toBe(false);
+  });
+});
+
 describe('avisos: WhatsApp (WA-AKG) e canal', () => {
   const wa = { url: 'https://wa.dev/api/', apiKey: 'wag_segredo', sessionId: 'pessoal', ownerJid: '5511999999999@s.whatsapp.net' };
 
@@ -71,7 +85,7 @@ describe('avisos: WhatsApp (WA-AKG) e canal', () => {
     expect(s.wa()).toEqual({ ...wa, url: 'https://wa.dev' });
     expect(JSON.stringify(s.view(true))).not.toContain('wag_segredo');
     expect(s.view(true)).toMatchObject({ waConfigured: true, channel: 'both', wa: { url: 'https://wa.dev', sessionId: 'pessoal', apiKeySet: true }, briefing: { time: '08:30' } });
-    expect(s.view(false)).toEqual({ configured: false, waConfigured: true, channel: 'both', briefing: { time: '08:30', days: [1, 2, 3, 4, 5] }, editable: false });
+    expect(s.view(false)).toEqual({ configured: false, waConfigured: true, channel: 'both', briefing: { time: '08:30', days: [1, 2, 3, 4, 5] }, closing: { time: '', days: [] }, weekly: { time: '', days: [] }, triage: false, editable: false });
     expect(s.update({ wa: { url: 'https://wa.dev', apiKey: '', sessionId: 'outra', ownerJid: wa.ownerJid } })).toBeUndefined();
     expect(s.wa()?.apiKey).toBe('wag_segredo');
     expect(new NotifySettings(file).wa()?.sessionId).toBe('outra');
@@ -82,6 +96,10 @@ describe('avisos: WhatsApp (WA-AKG) e canal', () => {
     expect(s.wa()).toMatchObject({ url: 'https://outro.dev', apiKey: 'wag_nova', sessionId: 'outra' });
     expect(s.update({ channel: 'pombo' })).toMatch(/inválido/);
     expect(s.update({ briefing: { time: '25:00' } })).toMatch(/inválido/);
+    expect(s.update({ closing: { time: '18:30', days: [] }, weekly: { time: '17:00', days: [5] } })).toBeUndefined();
+    expect(new NotifySettings(file).briefing('weekly')).toEqual({ time: '17:00', days: [5] });
+    expect(s.briefing('closing').time).toBe('18:30');
+    expect(s.update({ weekly: { time: 'x' } })).toMatch(/inválido/);
     expect(s.update({ wa: { url: '' } })).toBeUndefined();
     expect(s.wa()).toBeUndefined();
   });

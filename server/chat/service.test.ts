@@ -184,6 +184,18 @@ describe('chat: ChatService', () => {
     expect(Number(a[a.indexOf('--max-budget-usd') + 1])).toBeCloseTo(0.88994451);
   });
 
+  it('o agente nunca recebe os segredos do Habblaud (token do GitHub, VBoards)', () => {
+    vi.stubEnv('HABBLAUD_GITHUB_TOKEN', `github_pat_${'S'.repeat(40)}`);
+    vi.stubEnv('HABBLAUD_VBOARDS_TOKEN', 'vb_segredo');
+    const { chat, spawned } = setup();
+    chat.open({ folder: 'C:\\proj', provider: 'claude', prompt: 'oi' });
+    chat.open({ folder: 'C:\\proj', provider: 'codex', prompt: 'oi' });
+    for (const s of spawned) {
+      expect(s.env.HABBLAUD_GITHUB_TOKEN).toBeUndefined();
+      expect(s.env.HABBLAUD_VBOARDS_TOKEN).toBeUndefined();
+    }
+  });
+
   it('env sem as variáveis da sessão de fora; conta escolhida vira CLAUDE_CONFIG_DIR', () => {
     process.env.CLAUDECODE = '1';
     process.env.CLAUDE_CODE_ENTRYPOINT = 'cli';

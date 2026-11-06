@@ -12,6 +12,7 @@ import { createRequestGuard, isLoopbackHost } from './http/guard';
 import { createRemoteGate, isRemoteRequest, loadSecret, RemoteSessions, startRemoteListener, type RemoteListener } from './http/remote';
 import { Hub } from './http/sse';
 import { createStaticHandler } from './http/static';
+import { packRoot } from './assets3d/pack';
 import { TerminalStreams } from './http/terminal';
 import { createTimelineHandler } from './http/timeline';
 import { TIMELINE_DIR, TimelineRecorder } from './history/timeline';
@@ -27,6 +28,8 @@ import { loadHeadlessScreen } from './pty/screen';
 import { openMainAgent, SessionHistory } from './sources/history';
 import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
+import { defaultProjectsRoot, ProjectsService } from './projects/create';
+import { createProjectRoutes } from './projects/http';
 import { PermissionRegistry } from './permissions/registry';
 import { ApprovalPin } from './permissions/pin';
 import { codexAccountOf } from './codex/http';
@@ -60,12 +63,13 @@ import { OwnerSocial } from './world/social';
 import { BuildingTokens } from './world/tokens';
 import { BuildingUplink } from './world/uplink';
 import { WorldViewer } from './world/viewer';
-import { AUTO_TURN_MINUTES, lastReply, loadVBoardsConfig, readFolderConfig, VBoardsService, writeFolderConfig } from './vboards/vboards';
+import { AUTO_TURN_MINUTES, lastReply, loadVBoardsConfig, policyOf, readFolderConfig, VBoardsService, writeFolderConfig } from './vboards/vboards';
 import { VBoardsApi } from './vboards/api';
 import { JarvisInbox, JarvisService, JARVIS_ID } from './jarvis/service';
 import { JarvisTools } from './jarvis/tools';
 import { createJarvisRoutes } from './jarvis/http';
-import { Briefing } from './jarvis/briefing';
+import { VoiceService, VoiceStore } from './jarvis/voice';
+import { Briefing, reportTitle, type ReportKind } from './jarvis/briefing';
 import { Delegation } from './chat/delegation';
 import { createChatRoutes } from './chat/http';
 import { claudeRunner, DaySummaryService, gitSubjectsToday, summaryCwd } from './summary/service';
@@ -73,8 +77,16 @@ import { ChatService, chatOffReason } from './chat/service';
 import { createWorktreeOps } from './chat/worktree';
 import { quotaBlock } from './chat/quota';
 import { readMetrics, RunService } from './chat/runs';
-import { refinerFor, reviewDiff, runChecks } from './chat/gate';
+import { ShipService } from './chat/ship';
+import { parseTranslation, readAppVersion, StoreService, translatePrompt } from './chat/lojas';
+import { takeSecrets } from './secret-env';
+import { GitHub, GitHubTokenStore } from './chat/github';
+import { openInVsCode } from './chat/bins';
+import { refinerFor, reviewDiff, runChecks, runQa } from './chat/gate';
 import { NotifySettings } from './vboards/ntfy';
+import { loadProducts, productOfFolder, saveProducts, type Product } from './vboards/products';
+import { appendJournal, LEDGER_OPEN_MS, projectLedger, readJournal } from './chat/journal';
+import { TriageService } from './vboards/triage';
 import { officeApprover, TriggerService } from './chat/triggers';
 
 const config = loadConfig();
@@ -97,7 +109,7 @@ const roomAliases = new RoomAliases(join(config.dataDir, 'rooms.json'));
 roomAliases.load();
 
 // Office, contas e fontes de agentes se referenciam (avisos de mudança / fontes): ligação tardia.
-const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; ptys?: PtyManager; ptyOff?: string; chat?: ChatService; runs?: RunService; jarvis?: JarvisService; briefing?: Briefing; triggers?: TriggerService } = {};
+const late: { office?: Office; agents?: SourceSet; permissions?: PermissionRegistry; messages?: MessageRegistry; ptys?: PtyManager; ptyOff?: string; chat?: ChatService; runs?: RunService; jarvis?: JarvisService; briefing?: Briefing; triggers?: TriggerService; triage?: TriageService } = {};
 // Versão nova: consulta a release mais recente no GitHub a cada 6 h (HABBLAUD_UPDATE_CHECK=0 desliga).
 const updates = new UpdateChecker({
   current: config.version,
@@ -349,17 +361,32 @@ const knownFolders = async (limit?: number) => {
   const last = new Map<string, number>();
   for (const a of snap.agents) last.set(a.roomId, Math.max(last.get(a.roomId) ?? 0, a.lastEventAt ?? 0));
   const rooms = snap.rooms.filter((r) => !isDemoId(r.id)).map((r) => ({ path: r.path, lastAt: last.get(r.id) ?? 0 }));
-  return recentFolders(history ? await history.list().catch(() => []) : [], rooms, limit);
+  // Repos dos produtos registrados também contam (um projeto novo do molde ainda não teve sessão nenhuma).
+  const repos = products().flatMap((p) => p.repos.map((r) => ({ path: r.path, lastAt: 0 })));
+  return recentFolders(history ? await history.list().catch(() => []) : [], [...rooms, ...repos], limit);
 };
 // Chat com agentes: abre processos com acesso total, então segue a mesma trava do terminal (e HABBLAUD_PTY, fora do Docker).
 const chatOff = chatOffReason({ inDocker: config.inDocker, ptyOptIn, terminal: config.terminal, terminalReason: terminalOffReason(process.env, config.host, config.inDocker) });
 // Ponte com o VBoards (vboards/vboards.ts): git config --global vboards.url/vboards.token/user.email ou
 // HABBLAUD_VBOARDS_URL/_TOKEN/_EMAIL; HABBLAUD_VBOARDS=0 desliga. A fila só é buscada com o Novo agente ligado.
 const vboardsConfig = await loadVBoardsConfig(process.env);
+// Lida a configuração, os segredos do Habblaud saem do process.env: nenhum processo filho (agente, portão, terminal,
+// hooks do git) herda o token do GitHub nem os outros (secret-env.ts).
+const envSecrets = takeSecrets(process.env);
 // Avisos ao dono (opcional, vboards/ntfy.ts): ntfy e/ou WhatsApp (WA-AKG), o horário do briefing e o provedor do Jarvis.
 const ntfy = new NotifySettings(join(config.dataDir, 'notify.json'));
 // API v1 do VBoards (vboards/api.ts): só com um token vb_ (ferramentas vboards_* do Jarvis e a caixa do WhatsApp).
 const vboardsApi = 'off' in vboardsConfig ? undefined : new VBoardsApi(vboardsConfig);
+// Registro de produtos (vboards/products.ts): produto do VBoards -> repos (app, server, web). Lido a cada uso (é pequeno
+// e pode ser editado à mão); estragado = nenhum produto, com um aviso.
+const productsFile = join(config.dataDir, 'products.json');
+const products = (): Product[] => {
+  const r = loadProducts(productsFile);
+  if (r.error) log.warnOnce(`products:${r.error}`, tr('Registro de produtos ignorado: {0}', [r.error]));
+  return r.products;
+};
+// Registro por projeto (chat/journal.ts): as etapas das tarefas das listas, para o briefing e os relatórios.
+const journalFile = join(config.dataDir, 'chat', 'journal.jsonl');
 const vboards =
   'off' in vboardsConfig
     ? undefined
@@ -389,6 +416,10 @@ const vboards =
           return path ? lastReply(path, agents.parserFor(id)) : undefined;
         },
         booting: () => office.isBooting(),
+        // Configuração por pasta: chaves comuns no git config; as sensíveis (subir, merge sozinho, loja) no
+        // <dataDir>/chat/folder-policy.json, que só o servidor grava (vboards/policy.ts).
+        folderConfig: (f) => readFolderConfig(f, config.dataDir),
+        writeConfig: (f, v) => writeFolderConfig(f, v, config.dataDir),
         // Opt-in por pasta (git config --local vboards.auto true): uma lista do chat por pasta, na cópia isolada, sem
         // push. Uma lista por pasta, até HABBLAUD_MAX_PARALLEL_RUNS ao mesmo tempo: sem vaga, espera a próxima busca
         // (o create devolve 409). Nunca junta sozinho.
@@ -400,17 +431,21 @@ const vboards =
               if (!runs || !fresh.length) return;
               const r = runs.create(
                 {
-                  items: fresh.map((t) => ({ text: t.prompt, vboardsTaskId: t.id })),
+                  items: fresh.map((t) => ({ text: t.prompt, vboardsTaskId: t.id, risk: t.risk, riskWhy: t.riskWhy, approvedAt: t.approvedAt })),
                   isolated: true,
                   options: { folder, provider: cfg.provider, permission: 'auto', denyPush: true, limits: { maxCostUsd: cfg.budget, maxTurnMinutes: AUTO_TURN_MINUTES } },
                 },
-                { ...(cfg.check ? { check: cfg.check } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}) },
+                { ...(cfg.check ? { check: cfg.check } : {}), ...(cfg.qa ? { qa: cfg.qa } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}), ...(cfg.riskPaths.length ? { riskPaths: cfg.riskPaths } : {}), ...(cfg.riskLines ? { riskLines: cfg.riskLines } : {}), policy: policyOf(cfg) },
               );
               if ('error' in r && r.status !== 409) log.warnOnce(`vboards:auto:${r.error}`, tr('VBoards: não abriu a lista automática de {0} ({1}).', [folder, r.error]));
             },
         // "Refinar" (o clique já foi no VBoards): uma rodada só de leitura na pasta, pelo vboards.provider.
-        refine: chatOff ? undefined : (folder, prompt, cfg) => refinerFor(cfg.provider, folder, cfg.budget).run(prompt).then((r) => r.text),
+        // Produto com vários repos: os outros vão como leitura extra (extraDirs).
+        refine: chatOff ? undefined : (folder, prompt, cfg, extra) => refinerFor(cfg.provider, folder, cfg.budget, undefined, undefined, false, extra).run(prompt).then((r) => r.text),
+        // Perguntas do Refinar: o card passa a esperar o dono (vboards/triage.ts).
+        onQuestions: (r, questions) => late.triage?.askRefine(r, questions),
         notify: (title, event) => ntfy.notify(title, event),
+        products,
         file: join(config.dataDir, 'vboards-links.json'),
       });
 vboards?.load();
@@ -476,9 +511,12 @@ const runs = chat
       vboards,
       worktrees: createWorktreeOps(config.dataDir),
       // Portão das listas automáticas do VBoards: checagens na cópia e revisão só do diff, numa pasta neutra.
-      gate: { checks: (cmd, cwd) => runChecks(cmd, cwd), review: (auto, diff) => reviewDiff(auto, diff, join(config.dataDir, 'review')) },
+      gate: { checks: (cmd, cwd) => runChecks(cmd, cwd), qa: (cmd, cwd, dir) => runQa(cmd, cwd, dir), review: (auto, diff) => reviewDiff(auto, diff, join(config.dataDir, 'review')) },
+      qaDir: join(config.dataDir, 'chat', 'qa'),
       file: join(config.dataDir, 'chat', 'runs.json'),
       metricsFile: join(config.dataDir, 'chat', 'run-metrics.jsonl'),
+      journalFile,
+      productOf: (folder) => productOfFolder(folder, products())?.id,
       maxParallel: config.maxParallelRuns,
       // Cota da conta (chat/quota.ts): a da lista ou a padrão do provedor (a pasta que a CLI usa sem conta escolhida).
       quota: (provider, account) => {
@@ -490,6 +528,37 @@ const runs = chat
     })
   : undefined;
 late.runs = runs;
+// "Subir" (chat/ship.ts): push do branch agentic/*, PR, CI, merge e deploy pelo GitHub, sempre com o PIN. Token em
+// HABBLAUD_GITHUB_TOKEN ou <dataDir>/github.json (600, gravado só pelo próprio computador).
+const githubToken = new GitHubTokenStore(join(config.dataDir, 'github.json'), { HABBLAUD_GITHUB_TOKEN: envSecrets.HABBLAUD_GITHUB_TOKEN });
+// Lojas (chat/lojas.ts): depois do deployed de um app, dispara o workflow de OTA/build/submit do próprio repo.
+const lojas = new StoreService({
+  folderConfig: (f) => readFolderConfig(f, config.dataDir),
+  products,
+  token: () => githubToken.get(),
+  github: (token) => new GitHub(token),
+  remoteInfo: (f, r) => createWorktreeOps(config.dataDir).remoteInfo(f, r),
+  journal: { append: (e) => appendJournal(journalFile, e), read: (since) => readJournal(journalFile, since) },
+  notify: (title, event) => ntfy.notify(title, event),
+  appVersion: readAppVersion,
+  translate: async (lines) => parseTranslation((await claudeRunner(summaryCwd(config.dataDir))(translatePrompt(lines))).text, lines.length),
+  file: join(config.dataDir, 'chat', 'lojas.json'),
+});
+const ship = runs
+  ? new ShipService({
+      onDeployed: (folder, frozen) => void lojas.afterDeployed(folder, frozen),
+      runs,
+      worktrees: createWorktreeOps(config.dataDir),
+      token: () => githubToken.get(),
+      github: (token) => new GitHub(token),
+      folderConfig: (f) => readFolderConfig(f, config.dataDir),
+      products,
+      vboards,
+      // Subiu sozinha (vboards.autoMerge=low): o aviso leva o link do PR.
+      notify: (title, event, url) => (event === 'auto' ? void ntfy.sendText(tr('{0}: subiu sozinho, sem PIN (risco baixo; merge com CI verde). PR: {1}', [title, url ?? ''])).catch(() => undefined) : ntfy.notify(title, event)),
+      restoreCwd: (id) => chat?.restoreCwd(id),
+    })
+  : undefined;
 // Gatilhos (chat/triggers.ts): todo disparo vira um cartão de aprovação; sem o registro de permissões, não existem.
 const triggers =
   chat && permissions
@@ -521,6 +590,7 @@ const jarvis =
             tr('Agentes do chat: {0} abertos, {1} trabalhando{2}', [others.length, working.length, working.length ? `: ${working.slice(0, 8).map((a) => `${a.name} (${a.folder})`).join(', ')}` : '']),
             tr('Listas: {0} rodando, {1} itens esperando revisão', [(runs?.list() ?? []).filter((r) => r.state === 'running').length, review.length]),
             tr('Cartões de aprovação esperando: {0}', [permissions.snapshot().size]),
+            ...(late.triage?.waiting().length ? [tr('Cards esperando suas respostas: {0}', [late.triage.waiting().map((w) => `${w.title} (${w.cardId})`).join(', ')])] : []),
             ...quotaLines().slice(0, 4),
             tr('Último briefing: {0}', [last ? new Date(last).toLocaleString('pt-BR') : tr('nunca')]),
           ];
@@ -528,6 +598,58 @@ const jarvis =
       })
     : undefined;
 late.jarvis = jarvis;
+// Voz do Jarvis (tela cheia): <dataDir>/voice.json (600) com o motor e as chaves; o navegador só recebe token efêmero.
+const jarvisVoice = jarvis ? new VoiceService({ store: new VoiceStore(join(config.dataDir, 'voice.json')), say: (text, origin, ref) => jarvis.say(text, origin, ref) }) : undefined;
+// Evento SSE "jarvis": item novo ou fim de rodada na conversa dele (só o seq; o texto vem pela rota do chat).
+if (chat && jarvis) {
+  chat.onItem((id, item) => {
+    if (id === jarvis.id()) hub.broadcast('jarvis', { agentId: id, seq: item.seq, kind: item.kind });
+  });
+  chat.onTurnEnd((id) => {
+    if (id === jarvis.id()) hub.broadcast('jarvis', { agentId: id, idle: true });
+  });
+}
+// Projeto novo a partir do molde (projects/): briefing, spec e criação retomável. Criar sempre passa pelo PIN.
+const projectsRoot = () => process.env.HABBLAUD_PROJECTS_ROOT?.trim() || defaultProjectsRoot(products().flatMap((p) => p.repos.map((r) => r.path)));
+const templateDir = () => process.env.HABBLAUD_TEMPLATE_DIR?.trim() || (projectsRoot() ? join(projectsRoot()!, 'app-base') : undefined);
+const projects = chatOff
+  ? undefined
+  : new ProjectsService({
+      dataDir: config.dataDir,
+      projectsRoot,
+      templateDir,
+      // O process.env já perdeu o HABBLAUD_GITHUB_TOKEN (takeSecrets): o token vem do mesmo lugar que o do "Subir".
+      githubToken: () => githubToken.get(),
+      githubOwner: () => process.env.HABBLAUD_GITHUB_OWNER?.trim() || undefined,
+      products: { load: () => loadProducts(productsFile), save: (raw) => saveProducts(productsFile, raw) },
+      writeFolderConfig: (f, v) => writeFolderConfig(f, v, config.dataDir),
+      vboards: vboardsApi,
+      // O agente do projeto (Claude, pedindo aprovação a cada ação) faz a sala nova aparecer no escritório.
+      openAgent: chat
+        ? async (folder, prompt) => {
+            chatFolders = await knownFolders(100);
+            const r = chat.open({ folder, provider: 'claude', permission: 'ask', prompt });
+            return 'agentId' in r ? { agentId: r.agentId } : { reason: r.reason };
+          }
+        : undefined,
+    });
+// Triagem das ideias e laço de perguntas (vboards/triage.ts): uma rodada só de leitura, sem repositório. A varredura das
+// ideias novas só roda ligada (Configurações ou HABBLAUD_TRIAGE=1); as ferramentas e as respostas continuam sempre.
+const triage =
+  jarvis && vboardsApi?.enabled
+    ? new TriageService({
+        api: vboardsApi,
+        run: (prompt) => claudeRunner(summaryCwd(config.dataDir), undefined, 5 * 60_000, 'sonnet')(prompt).then((r) => r.text),
+        products,
+        ledger: () => projectLedger(readJournal(journalFile, Date.now() - LEDGER_OPEN_MS), 0),
+        journal: (e) => appendJournal(journalFile, e),
+        post: (text) => void chat!.post(jarvis.ensure(), text),
+        notify: (text, headline) => ntfy.sendText(text, { title: 'Jarvis', headline }),
+        file: join(config.dataDir, 'jarvis', 'triage.json'),
+      })
+    : undefined;
+late.triage = triage;
+let triageTimer: ReturnType<typeof setInterval> | undefined;
 const jarvisTools =
   chat && permissions && jarvis
     ? new JarvisTools({
@@ -538,49 +660,65 @@ const jarvisTools =
         registry: permissions,
         runs,
         worktrees: createWorktreeOps(config.dataDir),
+        ship,
+        lojas,
         folders: () => chatFolders,
-        folderConfig: (f) => readFolderConfig(f),
-        writeFolderConfig: (f, v) => writeFolderConfig(f, v),
+        folderConfig: (f) => readFolderConfig(f, config.dataDir),
+        writeFolderConfig: (f, v) => writeFolderConfig(f, v, config.dataDir),
         accounts: () =>
           accounts.allEntries().map((a) => {
             const v = accounts.usageView(a.id);
             return { id: a.id, provider: a.provider, name: accounts.find(a.id)?.detected.name, status: v.status, fiveHourPct: v.usage?.fiveHour?.utilization, weekPct: v.usage?.sevenDay?.utilization, resetsAt: v.usage?.fiveHour?.resetsAt };
           }),
         metrics: (since) => readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since),
+        journal: (since) => readJournal(journalFile, since),
+        products,
+        projects,
         notify: (text, channel) => ntfy.sendText(text, { channel }),
         triggers,
         vboards: vboardsApi,
+        triage,
+        // Pesquisa na web: só o Claude tem WebSearch; sem repositório (pasta neutra), orçamento de US$ 1 por rodada.
+        research: (prompt) => refinerFor('claude', summaryCwd(config.dataDir), 1, undefined, undefined, true).run(prompt).then((r) => r.text),
         memory: { read: () => jarvis.memoryRead(), write: (mode, text) => jarvis.memoryWrite(mode, text) },
       })
     : undefined;
 // Caixa do WhatsApp do Jarvis: com o WA-AKG configurado e um token vb_ do VBoards.
-const jarvisInbox = jarvis && vboardsApi ? new JarvisInbox({ api: vboardsApi, wa: () => ntfy.wa(), say: (text, origin, ref) => jarvis.say(text, origin, ref) }) : undefined;
-// Briefing do Jarvis: no horário de notify.json (desligado sem hora) ou pelo botão.
-const briefing = jarvis
-  ? new Briefing({
-      settings: () => ntfy.briefing(),
-      runner: claudeRunner(summaryCwd(config.dataDir)),
-      gather: async (since) => {
-        let summary: Record<string, unknown> | undefined;
-        let summaryError: string | undefined;
-        if (vboardsApi?.enabled) {
-          try {
-            summary = await vboardsApi.summary();
-          } catch (err) {
-            summaryError = errMsg(err);
-          }
+const jarvisInbox = jarvis && vboardsApi ? new JarvisInbox({ api: vboardsApi, wa: () => ntfy.wa(), whisper: () => findWhisper(), say: (text, origin, ref) => jarvis.say(text, origin, ref) }) : undefined;
+// Rotinas do Jarvis (jarvis/briefing.ts): o briefing (no horário de notify.json, desligado sem hora, ou pelo botão), o
+// fechamento do dia e o semanal (só no horário deles, desligados por padrão). Mesmo material, mesmos canais.
+const routine = (kind: ReportKind) =>
+  new Briefing({
+    kind,
+    settings: () => ntfy.briefing(kind),
+    runner: claudeRunner(summaryCwd(config.dataDir)),
+    gather: async (since) => {
+      let summary: Record<string, unknown> | undefined;
+      let summaryError: string | undefined;
+      if (vboardsApi?.enabled) {
+        try {
+          summary = await vboardsApi.summary();
+        } catch (err) {
+          summaryError = errMsg(err);
         }
-        const failures = [
-          ...(runs?.list() ?? []).flatMap((r) => r.items.filter((i) => (i.state === 'failed' || i.state === 'interrupted') && (i.endedAt ?? 0) >= since).map((i) => tr('lista em {0}: {1} ({2})', [r.options.folder, i.text.slice(0, 80), i.state]))),
-          ...(triggers?.history() ?? []).filter((f) => f.outcome === 'failed' && f.at >= since).map((f) => tr('gatilho "{0}": {1}', [f.ruleName, f.note ?? ''])),
-        ];
-        return { since, summary, summaryError, metrics: readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since), quota: quotaLines(), failures };
-      },
-      post: (text) => void chat!.post(jarvis.ensure(), text),
-      notify: (text, headline) => ntfy.sendText(text, { title: tr('Briefing'), headline }),
-      file: join(config.dataDir, 'jarvis', 'briefing.json'),
-    })
-  : undefined;
+      }
+      const failures = [
+        ...(runs?.list() ?? []).flatMap((r) => r.items.filter((i) => (i.state === 'failed' || i.state === 'interrupted') && (i.endedAt ?? 0) >= since).map((i) => tr('lista em {0}: {1} ({2})', [r.options.folder, i.text.slice(0, 80), i.state]))),
+        ...(triggers?.history() ?? []).filter((f) => f.outcome === 'failed' && f.at >= since).map((f) => tr('gatilho "{0}": {1}', [f.ruleName, f.note ?? ''])),
+      ];
+      const ledger = projectLedger(readJournal(journalFile, since - LEDGER_OPEN_MS), since);
+      const versions =
+        kind === 'weekly'
+          ? (await Promise.all(products().flatMap((p) => p.repos.filter((r) => r.role === 'app').map((r) => ({ app: p.name, folder: r.path }))).map(async (a) => ({ app: a.app, cut: await lojas.cut(a.folder, false).catch(() => undefined) })))).flatMap((x) => (x.cut?.items.length ? [{ app: x.app, version: x.cut.version, count: x.cut.items.length }] : []))
+          : undefined;
+      return { since, versions, summary, summaryError, metrics: readMetrics(join(config.dataDir, 'chat', 'run-metrics.jsonl'), since), quota: quotaLines(), failures, ledger, waiting: triage?.waiting().map((w) => ({ cardId: w.cardId, title: w.title, questions: w.questions })) };
+    },
+    post: (text) => void chat!.post(jarvis!.ensure(), text),
+    notify: (text, headline) => ntfy.sendText(text, { title: reportTitle(kind), headline }),
+    file: join(config.dataDir, 'jarvis', kind === 'briefing' ? 'briefing.json' : `${kind}.json`),
+  });
+const briefing = jarvis ? routine('briefing') : undefined;
+const extraRoutines = jarvis ? [routine('closing'), routine('weekly')] : [];
 late.briefing = briefing;
 // Resumo do dia (server/summary): atividade de hoje no escritório, conversas do chat e commits das pastas conhecidas.
 const daySummary = chat
@@ -607,25 +745,41 @@ const chatRoutes = chat
       worktrees: createWorktreeOps(config.dataDir),
       delegation,
       runs,
+      ship,
+      lojas,
+      pin: approvalPin,
+      github: githubToken,
+      openEditor: (path) => openInVsCode(path),
       triggers,
       summary: daySummary,
       extraTools: (id) => (jarvisTools && chat.record(id)?.system === 'jarvis' ? jarvisTools.tools() : []),
-      jarvis: jarvis ? createJarvisRoutes({ jarvis, settings: () => ntfy.jarvis(), saveSettings: (s) => ntfy.setJarvis(s), briefing }) : undefined,
+      jarvis: jarvis ? createJarvisRoutes({ jarvis, settings: () => ntfy.jarvis(), saveSettings: (s) => ntfy.setJarvis(s), briefing, voice: jarvisVoice }) : undefined,
     })
   : undefined;
 if (chat) {
   chat.start();
   runs?.load();
   runs?.start();
+  ship?.start();
+  lojas.start();
   triggers?.load();
   triggers?.start();
+  // Triagem automática das ideias novas: desligada por padrão; liga em Configurações (notify.json) ou com
+  // HABBLAUD_TRIAGE=1 (=0 desliga mesmo com a opção). Lida a cada volta: ligar na tela vale sem reiniciar.
+  const triageOn = () => process.env.HABBLAUD_TRIAGE === '1' || (process.env.HABBLAUD_TRIAGE !== '0' && ntfy.triage());
+  if (triage) {
+    triageTimer = setInterval(() => void (triageOn() ? triage.scan().catch((err) => log.warnOnce(`triage:scan:${errMsg(err)}`, tr('Triagem: falha na varredura das ideias ({0}).', [errMsg(err)]))) : undefined), 2 * 60_000);
+    triageTimer.unref();
+  }
   jarvisInbox?.start();
   briefing?.start();
+  for (const r of extraRoutines) r.start();
   refreshChatFolders();
   setInterval(refreshChatFolders, 30_000).unref();
 }
 
 const api = createApiHandler({
+  assets3dRoot: packRoot(config.dataDir),
   renameRoom: (id, name) => {
     const path = office.roomPath(id);
     if (!path) return undefined;
@@ -654,7 +808,10 @@ const api = createApiHandler({
   files: deliveryFiles,
   spawnFolders: () => knownFolders(),
   vboards,
+  triage,
   ntfy,
+  products: { load: () => loadProducts(productsFile), save: (raw) => saveProducts(productsFile, raw) },
+  projects: projects ? createProjectRoutes(projects, permissions ? approvalPin : undefined, () => ({ githubOwner: process.env.HABBLAUD_GITHUB_OWNER?.trim() || undefined, root: projectsRoot(), template: templateDir() })) : undefined,
   chat: chatRoutes,
   chatOff,
   codexLive,
@@ -844,8 +1001,12 @@ function shutdown(signal: string): void {
   terminals?.stop();
   runs?.freeze();
   triggers?.stop();
+  ship?.stop();
+  lojas.stop();
+  clearInterval(triageTimer);
   jarvisInbox?.stop();
   briefing?.stop();
+  for (const r of extraRoutines) r.stop();
   chat?.stopAll();
   timeline?.stop();
   permissions?.stop();

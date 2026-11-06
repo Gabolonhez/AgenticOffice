@@ -5,13 +5,15 @@
 // A cópia isolada é um git worktree recém-criado, sem node_modules nem .env: o vboards.check instala o que precisar
 // (ex.: `npm ci && npm test`).
 import { spawn } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { maskSecrets } from '../../shared/activity';
 import { CHAT_TEXT_MAX } from '../../shared/chat';
 import { tr } from '../../shared/i18n';
 import type { RunAuto } from '../../shared/runs';
 import type { Provider } from '../../shared/types';
 import { INHERITED_SESSION_VARS } from '../pty/manager';
+import { withoutSecrets } from '../secret-env';
 import { AI_TIMEOUT_MS, claudeRunner, type AiRunner } from '../summary/service';
 import { resolveCliBin, type CliBin } from './bins';
 import { agyDriver } from './drivers/agy';
@@ -19,6 +21,7 @@ import { claudeDriver } from './drivers/claude';
 import { codexDriver } from './drivers/codex';
 import { defaultKill } from './service';
 import type { StreamParser } from './types';
+import { riskLabel, type RiskVerdict } from './risk';
 import { noPushEnv } from './worktree';
 
 export const CHECK_TIMEOUT_MS = 10 * 60_000;
@@ -33,14 +36,14 @@ const cut = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 
 export interface CheckResult { ok: boolean; tail: string }
 export type ReviewResult = { ok: boolean; findings: string; by: string } | { error: string; by: string };
 
-function cleanEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
+function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env = withoutSecrets(process.env);
   for (const k of INHERITED_SESSION_VARS) delete env[k];
-  return { ...env, ...noPushEnv(env) };
+  return withoutSecrets({ ...env, ...noPushEnv(env), ...extra });
 }
 
 /** O vboards.check num shell, na cópia isolada: passa com código 0 dentro do prazo. Guarda o fim da saída, mascarado. */
-export function runChecks(cmd: string, cwd: string, timeoutMs = CHECK_TIMEOUT_MS): Promise<CheckResult> {
+export function runChecks(cmd: string, cwd: string, timeoutMs = CHECK_TIMEOUT_MS, extraEnv: NodeJS.ProcessEnv = {}): Promise<CheckResult> {
   return new Promise((ok) => {
     let out = '';
     let timedOut = false;
@@ -48,7 +51,7 @@ export function runChecks(cmd: string, cwd: string, timeoutMs = CHECK_TIMEOUT_MS
     const finish = (pass: boolean, extra = '') => ok({ ok: pass, tail: maskSecrets(`${out}${extra}`).trim().slice(-CHECK_TAIL_MAX) });
     let proc: ReturnType<typeof spawn>;
     try {
-      proc = spawn(cmd, { cwd, shell: true, env: cleanEnv(), windowsHide: true, detached: process.platform !== 'win32' });
+      proc = spawn(cmd, { cwd, shell: true, env: cleanEnv(extraEnv), windowsHide: true, detached: process.platform !== 'win32' });
     } catch (err) {
       return finish(false, String((err as Error)?.message ?? err));
     }
@@ -67,6 +70,39 @@ export function runChecks(cmd: string, cwd: string, timeoutMs = CHECK_TIMEOUT_MS
       finish(code === 0 && !timedOut, timedOut ? `\n${tr('Checagens passaram de {0} min.', [Math.round(timeoutMs / 60_000)])}` : '');
     });
   });
+}
+
+export const QA_TIMEOUT_MS = 10 * 60_000;
+/** Quantas capturas entram no relatório e o tamanho máximo de cada uma. */
+export const QA_MAX_SHOTS = 6;
+export const QA_SHOT_MAX_BYTES = 5 * 1024 * 1024;
+export interface QaResult extends CheckResult { shots: string[] }
+
+/** PNGs de verdade (extensão e tamanho) na pasta, em ordem de nome, até `max`; devolve só os nomes. */
+export function listShots(dir: string, max = QA_MAX_SHOTS): string[] {
+  try {
+    return readdirSync(dir)
+      .filter((n) => /^[\w][\w .()-]{0,99}\.png$/i.test(n))
+      .filter((n) => {
+        const st = statSync(join(dir, n));
+        return st.isFile() && st.size > 0 && st.size <= QA_SHOT_MAX_BYTES;
+      })
+      .sort()
+      .slice(0, max);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * vboards.qa: roda DEPOIS do vboards.check, com o mesmo env limpo (sem push) e prazo. O comando escreve PNGs na pasta
+ * `HABBLAUD_QA_DIR` (recriada vazia a cada passada). Falha só avisa: o chamador não usa `ok` para reprovar.
+ */
+export async function runQa(cmd: string, cwd: string, dir: string, timeoutMs = QA_TIMEOUT_MS): Promise<QaResult> {
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const r = await runChecks(cmd, cwd, timeoutMs, { HABBLAUD_QA_DIR: dir });
+  return { ...r, shots: listShots(dir) };
 }
 
 export function reviewPrompt(diff: string): string {
@@ -162,23 +198,26 @@ export const REFINE_TIMEOUT_MS = 15 * 60_000;
  * edição, sem os MCPs do usuário) e com o orçamento; codex no sandbox read-only, efêmero; agy no modo plan. O codex e o
  * agy não têm limite de gasto por flag.
  */
-export function refineArgs(provider: Provider, budgetUsd: number, prompt: string): string[] {
+export function refineArgs(provider: Provider, budgetUsd: number, prompt: string, web = false, extraDirs: readonly string[] = []): string[] {
+  // codex (sandbox read-only) e agy (plan) já leem fora da pasta pelo caminho; o claude precisa do --add-dir.
   if (provider === 'codex') return ['exec', '--json', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '-'];
   if (provider === 'antigravity') return ['--output-format', 'stream-json', '--mode', 'plan', `--print=${prompt}`];
-  return ['-p', '--output-format', 'stream-json', '--verbose', '--tools', 'Read,Grep,Glob', '--strict-mcp-config', '--no-session-persistence', '--max-budget-usd', String(budgetUsd)];
+  // WebSearch/WebFetch pedem permissão no -p: sem o --allowedTools a pesquisa roda sem web.
+  const tools = web ? ['--tools', 'WebSearch,WebFetch', '--allowedTools', 'WebSearch,WebFetch'] : ['--tools', 'Read,Grep,Glob'];
+  return ['-p', '--output-format', 'stream-json', '--verbose', ...tools, ...(extraDirs.length ? ['--add-dir', ...extraDirs] : []), '--strict-mcp-config', '--no-session-persistence', '--max-budget-usd', String(budgetUsd)];
 }
 
 /**
  * "Refinar" um card: UMA rodada só de leitura NA PASTA do projeto (sem cópia isolada: nada é escrito), pelo
  * vboards.provider. Sem a CLI do codex/agy, cai no claude, como o reviewerFor.
  */
-export function refinerFor(provider: Provider, cwd: string, budgetUsd: number, bins: (p: Provider) => CliBin | undefined = (p) => resolveCliBin(p), timeoutMs = REFINE_TIMEOUT_MS): { run: AiRunner; by: string } {
+export function refinerFor(provider: Provider, cwd: string, budgetUsd: number, bins: (p: Provider) => CliBin | undefined = (p) => resolveCliBin(p), timeoutMs = REFINE_TIMEOUT_MS, web = false, extraDirs: readonly string[] = []): { run: AiRunner; by: string } {
   const p: Provider = provider !== 'claude' && bins(provider) ? provider : 'claude';
   const bin = bins(p);
   const by = p === provider ? (p === 'antigravity' ? 'agy' : p) : `claude ${tr('(no lugar de {0}, não encontrado)', [provider === 'antigravity' ? 'agy' : provider])}`;
   if (!bin) return { run: () => Promise.reject(new Error(tr('Claude Code não encontrado'))), by };
   const parser = p === 'codex' ? codexDriver.parser : p === 'antigravity' ? agyDriver.parser : claudeDriver.parser;
-  return { run: streamRunner(bin, (prompt) => refineArgs(p, budgetUsd, prompt), p !== 'antigravity', parser, cwd, timeoutMs), by };
+  return { run: streamRunner(bin, (prompt) => refineArgs(p, budgetUsd, prompt, web, extraDirs), p !== 'antigravity', parser, cwd, timeoutMs), by };
 }
 
 /** Revisa o diff; erro da IA não derruba o portão (vira "revisão indisponível" no relatório). */
@@ -203,15 +242,17 @@ export function fixRequest(checks: CheckResult | undefined, review: ReviewResult
 }
 
 /** Relatório para o VBoards (até REPORT_MAX): branch, checagens, revisão e resumo do agente. */
-export function gateReport(r: { branch: string; checks?: CheckResult; review?: ReviewResult; summary?: string; retried?: boolean; missing?: string[] }): string {
+export function gateReport(r: { branch: string; checks?: CheckResult; qa?: QaResult; review?: ReviewResult; summary?: string; retried?: boolean; missing?: string[]; risk?: RiskVerdict }): string {
   const checks = !r.checks ? tr('Checagens: sem vboards.check.') : r.checks.ok ? tr('Checagens: OK.') : `${tr('Checagens: FALHARAM.')}\n${cut(r.checks.tail, 500)}`;
   const review = !r.review
     ? tr('Revisão: sem mudanças no diff.')
     : 'error' in r.review
       ? tr('Revisão ({0}): indisponível ({1}).', [r.review.by, r.review.error])
       : `${tr('Revisão ({0}): {1}', [r.review.by, r.review.ok ? 'OK' : tr('PROBLEMAS')])}${r.review.ok ? '' : `\n${cut(r.review.findings, 600)}`}`;
+  const qa = r.qa ? [r.qa.ok ? tr('QA visual: {0} captura(s).', [r.qa.shots.length]) : `${tr('QA visual: FALHOU (só aviso, não reprova).')}\n${cut(r.qa.tail, 300)}`] : [];
+  const risk = r.risk ? [cut(tr('Risco: {0}{1}', [riskLabel(r.risk.level), r.risk.why.length ? ` (${r.risk.why.join('; ')})` : '']), 400)] : [];
   const missing = r.missing?.length ? [tr('vboards.copy: não existem na pasta (não copiados): {0}.', [r.missing.join(', ')])] : [];
-  const head = [tr('Branch: {0} (falta revisar e Juntar no Habblaud).', [r.branch]), checks, review, ...missing, ...(r.retried ? [tr('O erro voltou uma vez ao agente para correção.')] : [])].join('\n');
+  const head = [tr('Branch: {0} (falta revisar e Juntar no Habblaud).', [r.branch]), checks, ...qa, review, ...risk, ...missing, ...(r.retried ? [tr('O erro voltou uma vez ao agente para correção.')] : [])].join('\n');
   const summary = r.summary?.trim() ? `\n${tr('Resumo do agente:')}\n${r.summary.trim()}` : '';
   return cut(maskSecrets(`${head}${summary}`), REPORT_MAX);
 }

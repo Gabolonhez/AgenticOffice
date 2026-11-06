@@ -133,7 +133,8 @@ export class TopBar implements UiComponent {
     this.triggersBtn = iconButton(ICONS.bolt, tr('Gatilhos: quando algo acontecer, propor abrir ou avisar um agente'), () => this.triggersPanel.toggle(this.triggersBtn), 'ui-btn-triggers');
     this.triggersBtn.setAttribute('aria-haspopup', 'dialog');
     this.triggersBtn.hidden = true;
-    this.jarvisBtn = iconButton(ICONS.jarvis, tr('Jarvis: o orquestrador do escritório'), () => void this.openJarvis(), 'ui-btn-jarvis');
+    this.jarvisBtn = iconButton(ICONS.jarvis, tr('Jarvis: o orquestrador do escritório, em tela cheia com voz (J)'), () => void this.openJarvis(), 'ui-btn-jarvis');
+    this.jarvisBtn.setAttribute('aria-haspopup', 'dialog');
     this.jarvisBtn.hidden = true;
     this.version = new VersionChip(ctx, this.settingsBtn);
     this.status = h('div', { class: 'ui-topbar__status' }, this.pill, this.version.el, this.demoBadge);
@@ -250,7 +251,8 @@ export class TopBar implements UiComponent {
     setHidden(this.spawnBtn, !(access().spawn || access().chat) || store.mock || store.replaying);
     setHidden(this.runsBtn, !access().chat || store.mock || store.replaying);
     setHidden(this.triggersBtn, !access().chat || store.mock || store.replaying);
-    setHidden(this.jarvisBtn, !access().chat || store.mock || store.replaying);
+    // Na demonstração o Jarvis aparece (tela cheia de exemplo, sem servidor).
+    setHidden(this.jarvisBtn, !this.jarvisAvailable);
 
     this.sidebarBtn.setAttribute('aria-pressed', String(this.ctx.isPanelOpen('sidebar')));
     this.feedBtn.setAttribute('aria-pressed', String(this.ctx.isPanelOpen('feed')));
@@ -291,8 +293,14 @@ export class TopBar implements UiComponent {
     this.ctx.select({ type: 'agent', id: agents[i].id }, { focus: true });
   }
 
-  /** GET /api/chat/jarvis cria o Jarvis (sem rodar nada) e devolve o id; a gaveta abre na conversa dele. */
+  get jarvisAvailable(): boolean {
+    const store = this.ctx.store;
+    return !store.replaying && (store.mock || !!access().chat);
+  }
+
+  /** Jarvis em tela cheia (ui/jarvis.ts); sem ele, a gaveta na conversa (GET /api/chat/jarvis cria o agente). */
   private async openJarvis(): Promise<void> {
+    if (this.ctx.openJarvis) return this.ctx.openJarvis();
     try {
       const res = await fetch('/api/chat/jarvis', { credentials: 'same-origin', cache: 'no-store' });
       const body = (await res.json().catch(() => ({}))) as { agentId?: string; error?: string };

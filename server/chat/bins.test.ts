@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveCliBin } from './bins';
+import { openInVsCode, resolveCodeBin, resolveCliBin } from './bins';
 
 describe('chat: executáveis das CLIs', () => {
   it('Windows: shim .cmd do npm vira o binário real', () => {
@@ -14,5 +14,14 @@ describe('chat: executáveis das CLIs', () => {
   });
   it('override de env vence o PATH', () => {
     expect(resolveCliBin('antigravity', { PATH: '', HABBLAUD_AGY_BIN: '/opt/agy/agy' }, 'linux', () => true)).toEqual({ file: '/opt/agy/agy', prefix: [] });
+  });
+  it('VS Code: code.cmd do Windows vira o Code.exe da pasta de cima; sem code = undefined', async () => {
+    const root = 'C:\\Users\\u\\AppData\\Local\\Programs\\Microsoft VS Code';
+    const has = (p: string) => p === `${root}\\bin\\code.cmd` || p === `${root}\\Code.exe`;
+    expect(resolveCodeBin({ PATH: `${root}\\bin`, PATHEXT: '.CMD' }, 'win32', has)).toBe(`${root}\\Code.exe`);
+    expect(resolveCodeBin({ PATH: `${root}\\bin`, PATHEXT: '.CMD' }, 'win32', (p) => p.endsWith('code.cmd'))).toBeUndefined();
+    expect(resolveCodeBin({ PATH: '/usr/bin' }, 'linux', (p) => p === '/usr/bin/code')).toBe('/usr/bin/code');
+    expect(resolveCodeBin({ PATH: '/usr/bin' }, 'linux', () => false)).toBeUndefined();
+    expect(await openInVsCode('/tmp/x', '')).toBe(false);
   });
 });

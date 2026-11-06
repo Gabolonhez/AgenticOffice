@@ -76,6 +76,8 @@ export interface UiContext {
   visitOwnBuilding?(): void;
   /** Abre as configurações na seção "Sobre" (versão em uso e versão nova). */
   openAbout(): void;
+  /** Abre/fecha o Jarvis em tela cheia (ui/jarvis.ts). */
+  openJarvis?(): void;
   /** Abre/fecha o timelapse do dia (ui/timelapse.ts). */
   toggleTimelapse(): void;
   isTimelapseOpen(): boolean;

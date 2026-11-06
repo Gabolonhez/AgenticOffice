@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { RunMetric } from '../../shared/runs';
 import { setQuiet } from '../log';
-import { Briefing, briefingMaterial, briefingPrompt, type BriefingInput } from './briefing';
+import { Briefing, briefingMaterial, briefingPrompt, reportSince, type BriefingInput } from './briefing';
 
 setQuiet(true);
 
@@ -74,5 +74,40 @@ describe('Jarvis: briefing', () => {
     now += 24 * 60 * 60_000;
     await b.tick();
     expect(gather).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Jarvis: seção por projeto e as rotinas de fechamento e semanal', () => {
+  it('material: uma linha por projeto com feito/fazendo/a fazer/travado e alguns títulos', () => {
+    const item = (title: string) => ({ title, stage: 'merged' as const, at: 1 });
+    const m = briefingMaterial(input({ ledger: [{ project: 'peptpro', folders: ['/p/a'], done: [item('Login'), item('Tela')], doing: [item('X')], todo: [], stuck: [item('CI quebrado')] }] }));
+    expect(m).toContain('Projetos:');
+    expect(m).toContain('- peptpro: feito 2, fazendo 1, a fazer 0, travado 1');
+    expect(m).toContain('  feito: Login; Tela');
+    expect(m).toContain('  travado: CI quebrado');
+  });
+
+  it('desde quando e o título de cada rotina; o prompt pede o que cada uma tem', async () => {
+    const now = new Date(2026, 10, 6, 18, 30).getTime();
+    expect(reportSince('closing', now, 0)).toBe(new Date(2026, 10, 6).getTime());
+    expect(reportSince('weekly', now, 0)).toBe(now - 7 * 24 * 3_600_000);
+    expect(reportSince('briefing', now, 123)).toBe(123);
+    expect(briefingPrompt('m', 'closing')).toContain('fica para amanhã');
+    expect(briefingPrompt('m', 'weekly')).toContain('custo dos agentes');
+    const post = vi.fn();
+    const gather = vi.fn(async (since: number) => input({ since }));
+    const b = new Briefing({ kind: 'closing', settings: () => ({ time: '', days: [] }), gather, runner: async () => ({ text: 'Dia fechado' }), post, notify: async () => undefined, file: join(mkdtempSync(join(tmpdir(), 'hb-brief-')), 'closing.json'), now: () => now });
+    await b.run();
+    expect(gather).toHaveBeenCalledWith(new Date(2026, 10, 6).getTime());
+    expect(post.mock.calls[0][0]).toMatch(/^Fechamento do dia 18:30\nDia fechado/);
+  });
+});
+
+describe('Jarvis: semanal com sugestão de versão', () => {
+  it('o material lista a versão proposta por app', () => {
+    const m = briefingMaterial(input({ versions: [{ app: 'PeptPro', version: '1.5.0', count: 3 }] }));
+    expect(m).toContain('Sugestão de versão para a loja:');
+    expect(m).toContain('- PeptPro: 1.5.0 (3 tarefas novas)');
+    expect(briefingMaterial(input())).not.toContain('Sugestão de versão');
   });
 });

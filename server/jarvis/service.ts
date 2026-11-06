@@ -12,6 +12,8 @@ import { tr } from '../../shared/i18n';
 import type { Provider } from '../../shared/types';
 import type { ChatRecord } from '../chat/store';
 import type { ChatService, DeliverResult } from '../chat/service';
+import { AUDIO_MAX_BYTES } from '../dictation/dictation';
+import { createWhisperTranscriber, transcribeTimeoutMs, type Transcript, type WhisperSetup } from '../dictation/whisper';
 import { errMsg, log } from '../log';
 import type { InboxMessage, VBoardsApi } from '../vboards/api';
 import { normJid, sendWhatsApp, WA_TEXT_MAX, type WaSettings } from '../vboards/whatsapp';
@@ -25,8 +27,11 @@ export const MEMORY_MAX = 16 * 1024;
 /** Prazo de cada rodada do Jarvis: uma rodada presa não segura a fila (WhatsApp, agendamentos) para sempre. */
 export const JARVIS_TURN_MINUTES = 30;
 
-/** De onde veio o pedido do turno: 'ui' = o dono pela página; o resto entra embrulhado e deixa o turno contaminado. */
-export type JarvisOrigin = 'ui' | 'whatsapp' | 'vboards' | 'schedule' | 'agent';
+/**
+ * De onde veio o pedido do turno: 'ui' = o dono pela página; o resto entra embrulhado e deixa o turno contaminado.
+ * 'voice' = a tela cheia por voz: o microfone ouve o ambiente (pode ser outra pessoa falando), então nunca vale como o dono.
+ */
+export type JarvisOrigin = 'ui' | 'whatsapp' | 'vboards' | 'schedule' | 'agent' | 'voice';
 /** O turno atual do Jarvis: a origem e o seq do item do pedido (a mancha de contaminação vale até o próximo pedido). */
 export interface JarvisTurn { origin: JarvisOrigin; seq: number }
 export interface JarvisSettings { provider: Provider; model?: string }
@@ -69,7 +74,7 @@ export function validateJarvisSettings(raw: unknown, providers: ReturnType<typeo
   return { settings: { provider: p.id, ...(model ? { model } : {}) } };
 }
 
-export const originLabel = (o: JarvisOrigin): string => (o === 'whatsapp' ? 'WhatsApp' : o === 'vboards' ? 'VBoards' : o === 'schedule' ? tr('agendamento') : o === 'agent' ? tr('outro agente') : tr('página'));
+export const originLabel = (o: JarvisOrigin): string => (o === 'voice' ? tr('voz') : o === 'whatsapp' ? 'WhatsApp' : o === 'vboards' ? 'VBoards' : o === 'schedule' ? tr('agendamento') : o === 'agent' ? tr('outro agente') : tr('página'));
 
 /**
  * O turno atual: a última mensagem da conversa (o `from` do item). 'ui' só para o que a página manda (POST
@@ -81,7 +86,7 @@ export function turnOf(rec: Pick<ChatRecord, 'items'> | undefined): JarvisTurn {
     const it = items[i];
     if (it.kind !== 'user') continue;
     const who = it.from?.agentId;
-    const origin: JarvisOrigin = who === undefined || who === 'ui' ? 'ui' : who === 'whatsapp' || who === 'vboards' || who === 'schedule' ? who : who.startsWith('trigger:') ? 'schedule' : 'agent';
+    const origin: JarvisOrigin = who === undefined || who === 'ui' ? 'ui' : who === 'whatsapp' || who === 'vboards' || who === 'schedule' || who === 'voice' ? who : who.startsWith('trigger:') ? 'schedule' : 'agent';
     return { origin, seq: it.seq };
   }
   return { origin: 'ui', seq: 0 };
@@ -223,7 +228,11 @@ export const INBOX_STALE_MS = 10 * 60_000;
 const RECENT_REPLIES = 20;
 
 export interface JarvisInboxDeps {
-  api: Pick<VBoardsApi, 'enabled' | 'inbox' | 'ack'>;
+  api: Pick<VBoardsApi, 'enabled' | 'inbox' | 'ack'> & Partial<Pick<VBoardsApi, 'inboxAudio'>>;
+  /** Whisper local (findWhisper): sem ele (ou com `missing`), áudio recebe a explicação do que falta. */
+  whisper?: () => WhisperSetup | { missing: string };
+  /** Transcreve com o prazo proporcional ao tamanho (padrão: createWhisperTranscriber); o áudio nunca sai desta máquina. */
+  transcribe?: (setup: WhisperSetup, audio: Buffer, mime: string) => Promise<Transcript>;
   /** WhatsApp do dono (ntfy.ts NotifySettings.wa): sem ele, a caixa não é lida. */
   wa: () => WaSettings | undefined;
   say: JarvisService['say'];
@@ -293,8 +302,35 @@ export class JarvisInbox {
       await send(wa, note);
       return ack(note);
     }
-    const r = await this.deps.say(m.text, 'whatsapp', m.id).result;
-    const reply = maskSecrets(r.ok ? r.reply || tr('(sem resposta)') : tr('Não consegui responder: {0}', [r.error])).slice(0, WA_TEXT_MAX);
+    let text = m.text;
+    let heard = '';
+    if (m.audio) {
+      const t = await this.transcribe(m);
+      if ('error' in t) return this.answer(wa, t.error, send, ack);
+      text = t.text;
+      heard = `${tr('Entendi: «{0}»', [t.text])}\n\n`;
+    }
+    const r = await this.deps.say(text, 'whatsapp', m.id).result;
+    await this.answer(wa, heard + (r.ok ? r.reply || tr('(sem resposta)') : tr('Não consegui responder: {0}', [r.error])), send, ack);
+  }
+
+  /** Áudio do dono → texto, só no Whisper local; `error` é a resposta pronta para o dono. */
+  private async transcribe(m: InboxMessage): Promise<{ text: string } | { error: string }> {
+    if (m.audio!.bytes > AUDIO_MAX_BYTES) return { error: tr('Áudio grande demais ({0} MB; o limite é {1} MB). Mande um mais curto.', [Math.round(m.audio!.bytes / 1048576), AUDIO_MAX_BYTES / 1048576]) };
+    const setup = this.deps.whisper?.();
+    if (!setup || 'missing' in setup) return { error: tr('Recebi o seu áudio, mas não consigo transcrever: falta {0}. Instale e mande de novo; enquanto isso, escreva a mensagem.', [setup && 'missing' in setup ? setup.missing : 'whisper.cpp']) };
+    try {
+      const audio = await this.deps.api.inboxAudio!(m.id, AUDIO_MAX_BYTES);
+      const transcribe = this.deps.transcribe ?? ((s, a, mime) => createWhisperTranscriber(s, transcribeTimeoutMs(a.length))(a, mime));
+      const text = (await transcribe(setup, audio, m.audio!.mime)).text.trim();
+      return text ? { text } : { error: tr('Não entendi nada no áudio. Mande de novo ou escreva.') };
+    } catch (err) {
+      return { error: tr('Não consegui transcrever o áudio: {0}', [errMsg(err)]) };
+    }
+  }
+
+  private async answer(wa: WaSettings, raw: string, send: (w: WaSettings, t: string) => Promise<string | undefined>, ack: (reply?: string) => Promise<void>): Promise<void> {
+    const reply = maskSecrets(raw).slice(0, WA_TEXT_MAX);
     this.replies.push(reply.trim());
     if (this.replies.length > RECENT_REPLIES) this.replies.shift();
     const err = await send(wa, reply);

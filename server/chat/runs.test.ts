@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatRun } from '../../shared/runs';
-import { feedbackMessage, METRICS_KEEP_MS, METRICS_TRIM_BYTES, parseComments, readMetrics, RunService, trimMetrics, type RunDeps } from './runs';
+import { readJournal } from './journal';
+import { feedbackMessage, itemTitle, mergeMessage, METRICS_KEEP_MS, METRICS_TRIM_BYTES, parseComments, readMetrics, RunService, trimMetrics, type RunDeps } from './runs';
 
 const PROJ = 'C:\\proj';
 const options = { folder: PROJ, provider: 'claude', permission: 'auto', limits: {} };
@@ -271,6 +272,8 @@ describe('chat: lista que roda um agente por item', () => {
     expect(item).toMatchObject({ state: 'review', retried: true });
     expect(item.report).toContain('agentic/lista-1');
     expect(item.report).toContain('teste quebrou');
+    // Volta de correção e sem risco da IA: médio, com os motivos no relatório.
+    expect(item.report).toMatch(/Risco: médio \(.*corrigir/);
     expect(svc.gateState('chat:1')).toBe('review');
     expect(svc.reportOf('chat:1')).toBe(item.report);
     expect(opened).toHaveLength(2);
@@ -279,6 +282,48 @@ describe('chat: lista que roda um agente por item', () => {
     expect(svc.get('r1')?.state).toBe('done');
     expect(worktrees.merge).not.toHaveBeenCalled();
     expect(worktrees.discard).not.toHaveBeenCalled();
+  });
+
+  it('risco e approvedAt do item só vêm da abertura automática (servidor), nunca do corpo do pedido', async () => {
+    const raw = { text: 'a', vboardsTaskId: 'c:1', risk: 'low', riskWhy: 'estilo', approvedAt: '2026-11-06T10:00:00.000Z' };
+    const vb = { vboards: { begin: vi.fn(async () => ({ agentId: 'chat:1' })) } };
+    const fromBody = setup(vb).svc.create({ items: [raw], options });
+    const plain = 'run' in fromBody ? fromBody.run.items[0] : undefined;
+    expect(plain).toMatchObject({ text: 'a', vboardsTaskId: 'c:1' });
+    for (const k of ['risk', 'riskWhy', 'approvedAt']) expect(plain).not.toHaveProperty(k);
+    const fromAuto = setup(vb).svc.create({ items: [raw], options }, { reviewer: 'claude' });
+    expect('run' in fromAuto && fromAuto.run.items[0]).toMatchObject({ risk: 'low', riskWhy: 'estilo', approvedAt: '2026-11-06T10:00:00.000Z' });
+  });
+
+  it('QA visual: roda depois do check, registra os PNGs no item; falhar só avisa; a rota só serve o que o item registrou, dentro da pasta', async () => {
+    const worktrees = { create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(), discard: vi.fn(), summary: vi.fn(), diff: vi.fn(async () => '') };
+    const qaDir = mkdtempSync(join(tmpdir(), 'hb-qa-'));
+    const order: string[] = [];
+    const gate = {
+      checks: vi.fn(async () => (order.push('check'), { ok: true, tail: '' })),
+      review: vi.fn(),
+      qa: vi.fn(async (_c: string, _w: string, dir: string) => {
+        order.push('qa');
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'home.png'), 'png');
+        return { ok: false, tail: 'timeout no passo 3', shots: ['home.png'] };
+      }),
+    };
+    const { svc, end } = setup({ worktrees, gate, qaDir });
+    svc.create({ items: items('a'), options, isolated: true }, { check: 'npm test', qa: 'npx playwright test', reviewer: 'claude' });
+    await flush();
+    end('chat:1', 'done', 'Feito.');
+    await flush();
+    expect(order).toEqual(['check', 'qa']);
+    expect(gate.qa).toHaveBeenCalledWith('npx playwright test', 'C:\wt', join(qaDir, 'r1', '0'));
+    const item = svc.get('r1')!.items[0];
+    expect(item).toMatchObject({ state: 'review', gate: 'pass', shots: ['home.png'] });
+    expect(item.report).toContain('QA visual: FALHOU');
+    writeFileSync(join(qaDir, 'r1', 'secret.png'), 'x');
+    expect(svc.shotPath('r1', 0, 'home.png')).toContain('home.png');
+    for (const name of ['secret.png', '../secret.png', '..\secret.png', 'home.png/../../secret.png']) expect(svc.shotPath('r1', 0, name)).toBeUndefined();
+    expect(svc.shotPath('r1', 3, 'home.png')).toBeUndefined();
+    expect(svc.shotPath('nope', 0, 'home.png')).toBeUndefined();
   });
 
   it('lista automática que passa no portão: review direto, sem mandar nada ao agente', async () => {
@@ -561,5 +606,88 @@ describe('chat: métricas das listas (run-metrics.jsonl)', () => {
     writeFileSync(small, `${JSON.stringify(old)}\n`);
     trimMetrics(small, now);
     expect(readMetrics(small)).toHaveLength(1);
+  });
+});
+
+describe('chat: lista, registro por projeto e o fim no VBoards', () => {
+  it('mensagem do Juntar: as tarefas que terminaram, sem o prefixo do VBoards', () => {
+    expect(mergeMessage([{ text: 'Corrigir o login\ncom detalhes', state: 'done' }])).toBe('Corrigir o login');
+    const m = mergeMessage([
+      { text: 'Tarefa do VBoards (card Posts Builder): Tela de perfil', vboardsTaskId: 'c:1', state: 'review' },
+      { text: 'Testes', state: 'done' },
+      { text: 'Falhou', state: 'failed' },
+    ]);
+    expect(m).toBe('Tela de perfil (e mais 1)\n\n- Tela de perfil\n- Testes');
+    expect(itemTitle({ text: 'Tarefa do VBoards (card X): [server] Y', vboardsTaskId: 'c:1' })).toBe('[server] Y');
+  });
+
+  it('grava as etapas no journal e, no Juntar/Descartar, avisa o VBoards', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hb-runs-j-'));
+    const journalFile = join(dir, 'journal.jsonl');
+    const merge = vi.fn(async (_r: string, _w: unknown, _m: string) => ({ ok: true as const }));
+    const worktrees = { create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge, discard: vi.fn(async () => ({ ok: true as const })), summary: vi.fn(), diff: vi.fn() };
+    const settle = vi.fn(() => true);
+    const vboards = { begin: vi.fn(async () => ({ agentId: 'chat:1' })), settle };
+    const { svc, end } = setup({ worktrees, vboards, journalFile, productOf: () => 'posts' });
+    await svc.create({ items: [{ text: 'Tarefa do VBoards (card P): Login', vboardsTaskId: 'c1:s1' }], options, isolated: true });
+    await flush();
+    await flush();
+    end('chat:1', 'done');
+    expect(await svc.merge('r1')).toEqual({ ok: true });
+    expect(merge.mock.calls[0][2]).toBe('Login');
+    expect(settle).toHaveBeenCalledWith('c1:s1', { state: 'done', stage: 'merged' });
+    expect(readJournal(journalFile).map((e) => [e.stage, e.product, e.cardId, e.subtaskId, e.title, e.ref])).toEqual([
+      ['queued', 'posts', 'c1', 's1', 'Login', 'r1#0'],
+      ['running', 'posts', 'c1', 's1', 'Login', 'r1#0'],
+      ['review', 'posts', 'c1', 's1', 'Login', 'r1#0'],
+      ['merged', 'posts', 'c1', 's1', 'Login', 'r1#0'],
+    ]);
+  });
+
+  it('Descartar: failed com o motivo no VBoards e discarded no journal', async () => {
+    const journalFile = join(mkdtempSync(join(tmpdir(), 'hb-runs-j-')), 'journal.jsonl');
+    const worktrees = { create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(), discard: vi.fn(async () => ({ ok: true as const })), summary: vi.fn(), diff: vi.fn() };
+    const settle = vi.fn(() => true);
+    const { svc, end } = setup({ worktrees, vboards: { begin: vi.fn(async () => ({ agentId: 'chat:1' })), settle }, journalFile });
+    await svc.create({ items: [{ text: 'X', vboardsTaskId: 'c1:s1' }], options, isolated: true });
+    await flush();
+    await flush();
+    end('chat:1', 'done');
+    await svc.discard('r1');
+    expect(settle).toHaveBeenCalledWith('c1:s1', { state: 'failed', stage: 'discarded', summary: expect.stringContaining('Descartado') });
+    expect(readJournal(journalFile).at(-1)).toMatchObject({ stage: 'discarded', folder: PROJ });
+  });
+
+  it('Descartar com PR aberto (ship=pr): só limpa a cópia, sem discarded no VBoards nem no journal', async () => {
+    const journalFile = join(mkdtempSync(join(tmpdir(), 'hb-runs-j-')), 'journal.jsonl');
+    const worktrees = { create: vi.fn(async () => ({ path: 'C:\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(), discard: vi.fn(async () => ({ ok: true as const })), summary: vi.fn(), diff: vi.fn() };
+    const settle = vi.fn(() => true);
+    const { svc, end } = setup({ worktrees, vboards: { begin: vi.fn(async () => ({ agentId: 'chat:1' })), settle }, journalFile });
+    await svc.create({ items: [{ text: 'X', vboardsTaskId: 'c1:s1' }], options, isolated: true });
+    await flush();
+    await flush();
+    end('chat:1', 'done');
+    svc.get('r1')!.ship = { step: 'pr', mode: 'pr', sha: 'a'.repeat(40), owner: 'o', repo: 'r', remote: 'origin', base: 'main', branch: 'agentic/lista-1', deploy: 'none', risky: [], ciMinutes: 30, startedAt: 0, stepAt: 0, prUrl: 'https://github.com/o/r/pull/1' };
+    expect(await svc.discard('r1')).toEqual({ ok: true });
+    expect(worktrees.discard).toHaveBeenCalled();
+    expect(settle).not.toHaveBeenCalledWith('c1:s1', expect.objectContaining({ stage: 'discarded' }));
+    expect(readJournal(journalFile).some((e) => e.stage === 'discarded')).toBe(false);
+  });
+
+  it('Juntar × Subir: subida em andamento trava Juntar e Descartar; depois do PR, Juntar não cabe', async () => {
+    const worktrees = { create: vi.fn(async () => ({ path: 'C:\\wt', branch: 'agentic/lista-1', base: 'abc' })), merge: vi.fn(async () => ({ ok: true as const })), discard: vi.fn(async () => ({ ok: true as const })), summary: vi.fn(), diff: vi.fn() };
+    const { svc, end } = setup({ worktrees, vboards: { begin: vi.fn(async () => ({ agentId: 'chat:1' })) } });
+    await svc.create({ items: [{ text: 'X', vboardsTaskId: 'c1:s1' }], options, isolated: true });
+    await flush();
+    await flush();
+    end('chat:1', 'done');
+    const run = svc.get('r1')!;
+    run.ship = { step: 'ci', mode: 'merge', sha: 'a'.repeat(40), owner: 'o', repo: 'r', remote: 'origin', base: 'main', branch: 'agentic/lista-1', deploy: 'none', risky: [], ciMinutes: 30, startedAt: 0, stepAt: 0, prUrl: 'u' };
+    expect(await svc.merge('r1')).toMatchObject({ status: 409, error: expect.stringMatching(/Subir/) });
+    expect(await svc.discard('r1')).toMatchObject({ status: 409 });
+    run.ship = { ...run.ship, mode: 'pr', step: 'pr' };
+    expect(await svc.merge('r1')).toMatchObject({ status: 409, error: expect.stringMatching(/já subiu/) });
+    expect(worktrees.merge).not.toHaveBeenCalled();
+    expect(await svc.discard('r1')).toEqual({ ok: true });
   });
 });

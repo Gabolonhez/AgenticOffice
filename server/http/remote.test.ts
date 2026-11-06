@@ -212,7 +212,7 @@ async function start(allow: RemoteFeature[] = ['permissions'], over: Partial<Par
   const ptyCalls: string[] = [];
   const worldCalls: string[] = [];
   const vboardsSaves: unknown[] = [];
-  const settings = { folder: '/p/app', config: { auto: true, provider: 'claude', budget: 2, check: `npm test --token=sk-ant-api03-${'a'.repeat(40)}`, reviewer: 'claude', reviewerModel: 'sonnet', copy: '' } };
+  const settings = { folder: '/p/app', config: { auto: true, provider: 'claude', budget: 2, check: `npm test --token=sk-ant-api03-${'a'.repeat(40)}`, reviewer: 'claude', reviewerModel: 'sonnet', copy: '', ship: 'off' as const, ciMinutes: 30, autoMerge: 'off' as const, riskPaths: '' } };
   const spawn = new SpawnService();
   const api = createApiHandler({
     office,

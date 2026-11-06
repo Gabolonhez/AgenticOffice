@@ -13,6 +13,7 @@ import type { Provider } from '../../shared/types';
 import type { AccountsService } from '../accounts/service';
 import type { Office } from '../model/office';
 import { INHERITED_SESSION_VARS } from '../pty/manager';
+import { withoutSecrets } from '../secret-env';
 import { resolveCliBin, type CliBin } from './bins';
 import { agyDriver } from './drivers/agy';
 import { claudeDriver, claudeMcpConfig } from './drivers/claude';
@@ -133,6 +134,7 @@ export class ChatService {
   private readonly now: () => number;
   private readonly platform: NodeJS.Platform;
   private readonly turnEndListeners: Array<(agentId: string) => void> = [];
+  private readonly itemListeners: Array<(agentId: string, item: ChatItem) => void> = [];
 
   constructor(private readonly deps: ChatServiceDeps) {
     this.store = new ChatStore(join(deps.dataDir, 'chat', 'agents'));
@@ -349,6 +351,11 @@ export class ChatService {
   /** Avisado quando a rodada de qualquer agente termina (inclusive por Parar ou tempo). */
   onTurnEnd(cb: (agentId: string) => void): void {
     this.turnEndListeners.push(cb);
+  }
+
+  /** Avisado a cada item novo de qualquer conversa (ex.: o evento SSE "jarvis"). */
+  onItem(cb: (agentId: string, item: ChatItem) => void): void {
+    this.itemListeners.push(cb);
   }
 
   /** "Bia (Dev)": o nome do personagem no escritório e o papel. */
@@ -571,6 +578,13 @@ export class ChatService {
     rt.rec.items.push(full);
     this.store.save(rt.rec);
     this.deps.office.markDirty();
+    for (const cb of this.itemListeners) {
+      try {
+        cb(rt.rec.agentId, full);
+      } catch {
+        // quem escuta não atrapalha a conversa
+      }
+    }
     return full;
   }
 
@@ -652,7 +666,7 @@ export class ChatService {
     };
     const driver = DRIVERS[rec.provider];
     const inv = driver.invocation(spec);
-    const env: NodeJS.ProcessEnv = { ...process.env };
+    const env = withoutSecrets(process.env);
     for (const k of INHERITED_SESSION_VARS) delete env[k];
     for (const [k, v] of Object.entries(inv.env)) if (v !== undefined) env[k] = v;
     if (spec.denyPush) Object.assign(env, noPushEnv(env));

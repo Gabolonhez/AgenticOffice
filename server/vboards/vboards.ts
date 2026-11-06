@@ -28,6 +28,11 @@ import type { TerminalParser } from '../sources/terminal';
 import { sessionName, type SpawnInfo, type SpawnSubmit } from '../spawn/spawn';
 import { apiErrorText } from './api';
 import type { NotifyEvent } from './ntfy';
+import type { RiskLevel } from '../../shared/runs';
+import { parseRisk } from '../chat/risk';
+import { pickRepo, productForCard, repoHint, type Product, type ProductRepo } from './products';
+import { pinError, type ApprovalPin } from '../permissions/pin';
+import { isSensitive, policyFile, policyNeedsPin, readPolicy, SENSITIVE_KEYS, writePolicy, type FolderPolicy, type SensitiveKey } from './policy';
 
 export const POLL_MS = 10_000;
 export const POLL_MAX_MS = 5 * 60_000;
@@ -59,6 +64,13 @@ export interface AgentTask {
   text: string;
   cardTitle: string;
   date?: string;
+  /** Repo da subtarefa (papel ou nome da pasta), se o VBoards mandar; senão vale a etiqueta "[repo]" do texto. */
+  repo?: string;
+  /** Risco que o Refinar deu à subtarefa (chat/risk.ts parseRisk; ausente = medium) e o motivo. */
+  risk?: RiskLevel;
+  riskWhy?: string;
+  /** Quando o plano do card foi aprovado no VBoards. Sem ele, a lista nunca sobe sozinha (vboards.autoMerge). */
+  approvedAt?: string;
 }
 
 /** O que a página vê: a subtarefa, a pasta escolhida (se só uma combina) e as pastas para escolher. */
@@ -69,6 +81,8 @@ export interface VBoardsTaskView {
   date?: string;
   folder?: string;
   candidates: Array<{ path: string; name: string }>;
+  /** Produto com vários repos e a subtarefa não diz qual (products.ts pickRepo): a frase para a pessoa. */
+  problem?: string;
   /** Conversas abertas (qualquer provedor) nas pastas da subtarefa, para "Ligar a uma conversa aberta". */
   agents: Array<{ id: string; name: string; title?: string; provider: string; folder: string }>;
 }
@@ -94,11 +108,17 @@ export interface TaskLink {
   /** O agente já esteve trabalhando. */
   worked?: boolean;
   state: TaskStatus;
+  /** Etapa do journal (server/chat/journal.ts) que vai junto do status: merged, discarded, pr... */
+  stage?: string;
+  prUrl?: string;
   summary?: string;
-  /** Último status aceito pelo VBoards. */
-  reported?: TaskStatus;
+  /** Último status+etapa aceito pelo VBoards (reportKey). */
+  reported?: string;
   retryAt?: number;
 }
+
+/** O que já foi aceito pelo VBoards: só o status (igual às ligações antigas) ou status+etapa+PR. */
+export const reportKey = (l: Pick<TaskLink, 'state' | 'stage' | 'prUrl'>): string => [l.state, l.stage, l.prUrl].filter(Boolean).join('+');
 
 /** Pedido de "Refinar" um card (GET /api/agent-tasks → `refines`). */
 export interface RefineRequest {
@@ -116,6 +136,8 @@ export interface RefineResult {
   plan: string;
   questions: string[];
   subtasks: string[];
+  /** Um por subtarefa, na mesma ordem (campo extra: um VBoards antigo ignora). */
+  risks: Array<{ risk: RiskLevel; riskWhy?: string }>;
 }
 
 export type RefineStatus = 'running' | 'ready' | 'failed';
@@ -129,7 +151,7 @@ export interface RefineView {
 }
 
 /** Limites do POST /api/agent-tasks/refine (o VBoards também corta). */
-export const REFINE_LIMITS = { plan: 8_000, questions: 10, question: 500, subtasks: 20, subtask: 300, error: 2_000 } as const;
+export const REFINE_LIMITS = { plan: 8_000, questions: 10, question: 500, subtasks: 20, subtask: 300, riskWhy: 300, error: 2_000 } as const;
 /** Rodadas do "Refinar" ao mesmo tempo (cada uma é uma CLI lendo o repositório). */
 export const REFINE_PARALLEL = 2;
 /** Tentativas de mandar o resultado final do "Refinar" (uma por busca da fila). */
@@ -182,8 +204,28 @@ export function matchFolders(cardTitle: string, folders: readonly Folder[]): str
   return folders.filter((f) => norm(baseName(f.path)) === want || (!!f.card && norm(f.card) === want)).map((f) => f.path);
 }
 
-/** Configuração de uma pasta no `git config --local` dela (a única fonte; a tela do escritório lê e grava lá). */
+/**
+ * Pastas de uma subtarefa (ou de um card, sem `text`): com o produto do card no registro (products.ts), o repo dela;
+ * produto ambíguo = os repos dele como opções e `error` (a pessoa escolhe; nada abre sozinho). Sem produto, o
+ * casamento antigo (matchFolders).
+ */
+export function taskFolders(t: { cardTitle: string; text?: string; repo?: string }, folders: readonly Folder[], products: readonly Product[] = []): { paths: string[]; error?: string } {
+  const p = productForCard(t.cardTitle, products);
+  if (!p) return { paths: matchFolders(t.cardTitle, folders) };
+  const r = pickRepo(p, t.repo?.trim() || (t.text ? repoHint(t.text) : undefined));
+  return 'error' in r ? { paths: p.repos.map((x) => x.path), error: r.error } : { paths: [r.path] };
+}
+
+/** A pasta, se for uma só e sem ambiguidade. */
+const single = (m: { paths: string[]; error?: string }): string | undefined => (!m.error && m.paths.length === 1 ? m.paths[0] : undefined);
+
+/**
+ * Configuração de uma pasta: as chaves comuns no `git config --local` dela; as sensíveis (policy.ts SENSITIVE_KEYS:
+ * subir, merge sozinho, loja, risco) só em <dataDir>/chat/folder-policy.json, gravado pelo servidor.
+ */
 export interface FolderConfig {
+  /** Chaves sensíveis achadas no git config da pasta e ignoradas (sem valor no folder-policy.json): configurar de novo. */
+  legacy?: string[];
   card?: string;
   /** vboards.auto: abre sozinho as subtarefas desta pasta (padrão: não). */
   auto: boolean;
@@ -192,15 +234,62 @@ export interface FolderConfig {
   budget: number;
   /** vboards.check: comando de shell do portão (instala as dependências: a cópia isolada não tem node_modules nem .env). */
   check?: string;
+  /** vboards.qa: comando opcional do QA visual (depois do check); escreve PNGs em $HABBLAUD_QA_DIR. Falha só avisa. */
+  qa?: string;
   reviewer: Provider;
   reviewerModel?: string;
   /** vboards.copy: arquivos (caminhos relativos, separados por vírgula) copiados da pasta para cada cópia isolada (ex.: .env). */
   copy: string[];
+  /** vboards.ship: off (padrão) | pr | merge. Fora de off, a cópia isolada nasce de <remote>/<base> depois de um fetch. */
+  ship: ShipMode;
+  /** vboards.base: o branch base (padrão: o HEAD do remoto, senão main). */
+  base?: string;
+  /** vboards.remote: padrão origin. */
+  remote?: string;
+  /** vboards.deploy: `none` (o merge conta como deployed) ou `workflow:<arquivo.yml>` (espera esse workflow na base). */
+  deploy?: string;
+  /** vboards.ciMinutes: prazo do CI e do deploy no "Subir" (padrão 30). */
+  ciMinutes: number;
+  /**
+   * vboards.autoMerge: off (padrão) | low. Com low, a lista automática de risco baixo sobe sozinha, SEM PIN (ship.ts
+   * autoShipBlock). Só liga pela tela local ou pelo cartão com PIN do Jarvis.
+   */
+  autoMerge: AutoMergeMode;
+  /** vboards.riskPaths: globs (vírgulas) que contam como risco alto (chat/risk.ts). */
+  riskPaths: string[];
+  /** vboards.riskLines: acima disto o diff é risco médio (padrão DEFAULT_RISK_LINES). */
+  riskLines?: number;
+  /** vboards.store: off (padrão) | ota | ota+build. Vale depois do deployed de um repo app (chat/lojas.ts). */
+  store?: StoreMode;
+  /** vboards.storeWorkflow: o workflow (.yml) do repo que o Habblaud dispara com {kind, channel}. */
+  storeWorkflow?: string;
+  /** vboards.otaChannel: canal do OTA automático (padrão preview). */
+  otaChannel?: string;
+  /** vboards.versionBump: como o release_cut sobe a versão (padrão auto). */
+  versionBump?: VersionBump;
 }
 
-export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'reviewer', 'reviewerModel', 'copy'] as const;
+export const STORE_MODES_CFG = ['off', 'ota', 'ota+build'] as const;
+export type StoreMode = (typeof STORE_MODES_CFG)[number];
+export const VERSION_BUMPS = ['auto', 'patch', 'minor', 'major'] as const;
+export type VersionBump = (typeof VERSION_BUMPS)[number];
+export const DEFAULT_OTA_CHANNEL = 'preview';
+const validChannel = (s: string | undefined): s is string => !!s && /^[\w][\w.-]{0,39}$/.test(s);
+
+export const SHIP_MODES = ['off', 'pr', 'merge'] as const;
+export type ShipMode = (typeof SHIP_MODES)[number];
+export const AUTO_MERGE_MODES = ['off', 'low'] as const;
+export type AutoMergeMode = (typeof AUTO_MERGE_MODES)[number];
+export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'qa', 'reviewer', 'reviewerModel', 'copy', 'ship', 'base', 'remote', 'deploy', 'ciMinutes', 'store', 'storeWorkflow', 'otaChannel', 'versionBump', 'autoMerge', 'riskPaths', 'riskLines'] as const;
 export type FolderKey = (typeof FOLDER_KEYS)[number];
 export const DEFAULT_BUDGET_USD = 2;
+export const DEFAULT_CI_MINUTES = 30;
+export const validDeploy = (s: string | undefined): s is string => !!s && /^(none|workflow:[\w.-]{1,100}\.ya?ml)$/.test(s);
+const validCiMinutes = (s: string | undefined): boolean => !!s && /^\d{1,3}$/.test(s) && Number(s) >= 1 && Number(s) <= 240;
+const validRiskLines = (s: string | undefined): boolean => !!s && /^\d{1,5}$/.test(s) && Number(s) >= 1;
+/** Glob do vboards.riskPaths: sem quebra de linha nem vírgula (o separador). */
+const validRiskGlob = (g: string): boolean => !!g && g.length <= 200 && !/[\r\n\0,]/.test(g);
+export const parseRiskPaths = (raw: string | undefined): string[] => (raw ?? '').split(',').map((s) => s.trim()).filter(validRiskGlob);
 /** Prazo de cada rodada de um item da lista automática. */
 export const AUTO_TURN_MINUTES = 30;
 /** No git config o Antigravity é `agy` (o nome da CLI). */
@@ -208,13 +297,24 @@ export const PROVIDER_NAMES: Record<string, Provider> = { claude: 'claude', code
 /** Modelo do revisor quando a pasta não diz: sonnet no Claude; Codex e agy ficam com o padrão da CLI. */
 export const DEFAULT_REVIEWER_MODEL: Record<Provider, string | undefined> = { claude: 'sonnet', codex: undefined, antigravity: undefined };
 
-/** `git config --get-regexp ^vboards\.` (chaves em minúsculas) vira a configuração, com os padrões. */
-export function parseFolderConfig(out: string | undefined): FolderConfig {
+const SENSITIVE_LC = new Map<string, SensitiveKey>(SENSITIVE_KEYS.map((k) => [k.toLowerCase(), k]));
+
+/**
+ * `git config --get-regexp ^vboards\.` (chaves em minúsculas) mais a política sensível da pasta (policy.ts) viram a
+ * configuração, com os padrões. Chave sensível no git config NUNCA vale (um agente pode tê-la gravado): só vira aviso.
+ */
+export function parseFolderConfig(out: string | undefined, policy: FolderPolicy = {}): FolderConfig {
   const raw = new Map<string, string>();
+  const legacy: string[] = [];
   for (const line of (out ?? '').split(/\r?\n/)) {
     const m = /^vboards\.(\S+)(?: (.*))?$/i.exec(line.trim());
-    if (m) raw.set(m[1].toLowerCase(), (m[2] ?? '').trim());
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const sensitive = SENSITIVE_LC.get(key);
+    if (!sensitive) raw.set(key, (m[2] ?? '').trim());
+    else if (!policy[sensitive] && !legacy.includes(sensitive)) legacy.push(sensitive);
   }
+  for (const [k, v] of Object.entries(policy)) if (v && isSensitive(k)) raw.set(k.toLowerCase(), v);
   const provider = PROVIDER_NAMES[raw.get('provider')?.toLowerCase() ?? ''] ?? 'claude';
   const reviewer = PROVIDER_NAMES[raw.get('reviewer')?.toLowerCase() ?? ''] ?? 'claude';
   const budget = Number(raw.get('budget'));
@@ -224,11 +324,52 @@ export function parseFolderConfig(out: string | undefined): FolderConfig {
     provider,
     budget: Number.isFinite(budget) && budget > 0 ? budget : DEFAULT_BUDGET_USD,
     ...(raw.get('check') ? { check: raw.get('check') } : {}),
+    ...(raw.get('qa') ? { qa: raw.get('qa') } : {}),
     reviewer,
     ...((raw.get('reviewermodel') || DEFAULT_REVIEWER_MODEL[reviewer]) ? { reviewerModel: raw.get('reviewermodel') || DEFAULT_REVIEWER_MODEL[reviewer] } : {}),
     copy: parseCopyList(raw.get('copy')),
+    ship: (SHIP_MODES as readonly string[]).includes(raw.get('ship')?.toLowerCase() ?? '') ? (raw.get('ship')!.toLowerCase() as ShipMode) : 'off',
+    ...(validRef(raw.get('base')) ? { base: raw.get('base') } : {}),
+    ...(validRemote(raw.get('remote')) ? { remote: raw.get('remote') } : {}),
+    ...(validDeploy(raw.get('deploy')) ? { deploy: raw.get('deploy') } : {}),
+    ciMinutes: validCiMinutes(raw.get('ciminutes')) ? Number(raw.get('ciminutes')) : DEFAULT_CI_MINUTES,
+    autoMerge: raw.get('automerge')?.toLowerCase() === 'low' ? 'low' : 'off',
+    riskPaths: parseRiskPaths(raw.get('riskpaths')),
+    ...(validRiskLines(raw.get('risklines')) ? { riskLines: Number(raw.get('risklines')) } : {}),
+    ...((STORE_MODES_CFG as readonly string[]).includes(raw.get('store')?.toLowerCase() ?? '') ? { store: raw.get('store')!.toLowerCase() as StoreMode } : {}),
+    ...(/^[\w.-]{1,100}\.ya?ml$/.test(raw.get('storeworkflow') ?? '') ? { storeWorkflow: raw.get('storeworkflow') } : {}),
+    ...(validChannel(raw.get('otachannel')) ? { otaChannel: raw.get('otachannel') } : {}),
+    ...((VERSION_BUMPS as readonly string[]).includes(raw.get('versionbump')?.toLowerCase() ?? '') ? { versionBump: raw.get('versionbump')!.toLowerCase() as VersionBump } : {}),
+    ...(legacy.length ? { legacy } : {}),
   };
 }
+
+/** As chaves sensíveis da configuração já lida (com os padrões): o que a lista congela e o que o PIN compara. */
+export function policyOf(c: FolderConfig): FolderPolicy {
+  const p: FolderPolicy = { autoMerge: c.autoMerge, ship: c.ship, ciMinutes: String(c.ciMinutes) };
+  if (c.base) p.base = c.base;
+  if (c.remote) p.remote = c.remote;
+  if (c.deploy) p.deploy = c.deploy;
+  if (c.riskPaths.length) p.riskPaths = c.riskPaths.join(',');
+  if (c.riskLines) p.riskLines = String(c.riskLines);
+  if (c.store) p.store = c.store;
+  if (c.storeWorkflow) p.storeWorkflow = c.storeWorkflow;
+  if (c.otaChannel) p.otaChannel = c.otaChannel;
+  if (c.versionBump) p.versionBump = c.versionBump;
+  return p;
+}
+
+/** Gravar `values` sobre a configuração atual liga (ou mexe, com ligado) algo que sobe/publica sem PIN a cada vez. */
+export function policyChangeNeedsPin(current: FolderConfig, values: Partial<Record<FolderKey, string>>): boolean {
+  const sensitive = Object.entries(values).filter(([k]) => isSensitive(k));
+  if (!sensitive.length) return false;
+  const before = policyOf(current);
+  return policyNeedsPin(policyOf(parseFolderConfig(undefined, { ...before, ...Object.fromEntries(sensitive) })), before);
+}
+
+/** Branch seguro como argumento do git: sem `-` no começo, sem `..`, sem espaço. */
+export const validRef = (s: string | undefined): s is string => !!s && /^\w[\w./-]{0,99}$/.test(s) && !s.includes('..') && !s.endsWith('/') && !s.endsWith('.lock');
+export const validRemote = (s: string | undefined): s is string => !!s && /^\w[\w.-]{0,59}$/.test(s);
 
 /** Caminho do vboards.copy: relativo, sem `..`, sem unidade nem barra no começo, sem quebra de linha. */
 export const validCopyPath = (p: string): boolean => !!p && p.length <= 200 && !/[\r\n\0]/.test(p) && !/^([\\/]|[A-Za-z]:)/.test(p) && !p.split(/[\\/]/).includes('..');
@@ -236,14 +377,15 @@ export const validCopyPath = (p: string): boolean => !!p && p.length <= 200 && !
 /** vboards.copy (vírgulas) vira a lista; o que não passa no validCopyPath fica de fora. */
 export const parseCopyList = (raw: string | undefined): string[] => (raw ?? '').split(',').map((s) => s.trim()).filter(validCopyPath);
 
-export function readFolderConfig(folder: string): Promise<FolderConfig> {
-  return gitConfig(['--local', '--get-regexp', '^vboards\\.'], folder).then(parseFolderConfig);
+/** Sem `dataDir` (testes), as chaves sensíveis ficam nos padrões (desligadas). */
+export function readFolderConfig(folder: string, dataDir?: string): Promise<FolderConfig> {
+  return gitConfig(['--local', '--get-regexp', '^vboards\\.'], folder).then((out) => parseFolderConfig(out, dataDir ? readPolicy(policyFile(dataDir), folder) : {}));
 }
 
 /** A configuração como a tela mostra e grava: o Antigravity volta a ser `agy`, como no git config. */
-export type FolderConfigView = Omit<FolderConfig, 'provider' | 'reviewer' | 'copy'> & { provider: string; reviewer: string; copy: string };
+export type FolderConfigView = Omit<FolderConfig, 'provider' | 'reviewer' | 'copy' | 'riskPaths'> & { provider: string; reviewer: string; copy: string; riskPaths: string };
 const providerName = (p: Provider): string => (p === 'antigravity' ? 'agy' : p);
-export const folderConfigView = (c: FolderConfig): FolderConfigView => ({ ...c, provider: providerName(c.provider), reviewer: providerName(c.reviewer), copy: c.copy.join(', ') });
+export const folderConfigView = (c: FolderConfig): FolderConfigView => ({ ...c, provider: providerName(c.provider), reviewer: providerName(c.reviewer), copy: c.copy.join(', '), riskPaths: c.riskPaths.join(', ') });
 
 /**
  * Valida o que a tela manda gravar (só as chaves presentes). Texto vazio = tirar a chave (volta ao padrão). Nada de
@@ -268,20 +410,42 @@ export function validateFolderConfig(raw: unknown): { values: Partial<Record<Fol
       : key === 'reviewerModel' ? /^[\w.:/[\]-]{1,60}$/.test(s)
       : key === 'card' ? s.length <= 100
       : key === 'copy' ? s.length <= 500 && s.split(',').every((x) => validCopyPath(x.trim()))
-      : s.length <= 500; // check
+      : key === 'ship' ? (SHIP_MODES as readonly string[]).includes(s)
+      : key === 'base' ? validRef(s)
+      : key === 'remote' ? validRemote(s)
+      : key === 'deploy' ? validDeploy(s)
+      : key === 'ciMinutes' ? validCiMinutes(s)
+      : key === 'autoMerge' ? (AUTO_MERGE_MODES as readonly string[]).includes(s)
+      : key === 'riskPaths' ? s.length <= 1000 && s.split(',').every((x) => validRiskGlob(x.trim()))
+      : key === 'riskLines' ? validRiskLines(s)
+      : key === 'store' ? (STORE_MODES_CFG as readonly string[]).includes(s)
+      : key === 'storeWorkflow' ? /^[\w.-]{1,100}\.ya?ml$/.test(s)
+      : key === 'otaChannel' ? validChannel(s)
+      : key === 'versionBump' ? (VERSION_BUMPS as readonly string[]).includes(s)
+      : s.length <= 500; // check, qa
     if (!ok) return { error: tr('Valor inválido em vboards.{0}.', [key]) };
     values[key] = s;
   }
   return { values };
 }
 
-/** Grava no git config --local da pasta (sem shell); valor vazio tira a chave. */
-export async function writeFolderConfig(folder: string, values: Partial<Record<FolderKey, string>>): Promise<string | undefined> {
+/**
+ * Grava (sem shell); valor vazio tira a chave. As comuns vão ao git config --local da pasta; as sensíveis ao
+ * folder-policy.json do `dataDir` (e a cópia antiga delas sai do git config, para o aviso sumir).
+ */
+export async function writeFolderConfig(folder: string, values: Partial<Record<FolderKey, string>>, dataDir?: string): Promise<string | undefined> {
+  const sensitive = Object.fromEntries(Object.entries(values).filter(([k]) => isSensitive(k))) as FolderPolicy;
+  if (Object.keys(sensitive).length) {
+    if (!dataDir) return tr('Sem a pasta de dados do Habblaud: as chaves de subir, merge e loja não podem ser gravadas.');
+    const err = writePolicy(policyFile(dataDir), folder, sensitive);
+    if (err) return err;
+  }
   for (const [key, value] of Object.entries(values)) {
+    const legacy = isSensitive(key);
     const err = await new Promise<string | undefined>((ok) =>
-      execFile('git', ['config', '--local', ...(value ? [`vboards.${key}`, value] : ['--unset', `vboards.${key}`])], { cwd: folder, timeout: 5_000, windowsHide: true, encoding: 'utf8' }, (e, _out, stderr) =>
-        // --unset de uma chave que não existe sai com 5: já está como pedido.
-        ok(e && !(value === '' && (e as { code?: unknown }).code === 5) ? stderr.trim() || e.message : undefined),
+      execFile('git', ['config', '--local', ...(value && !legacy ? [`vboards.${key}`, value] : ['--unset-all', `vboards.${key}`])], { cwd: folder, timeout: 5_000, windowsHide: true, encoding: 'utf8' }, (e, _out, stderr) =>
+        // --unset de uma chave que não existe sai com 5: já está como pedido. Sensível: tirar a cópia antiga é só limpeza.
+        ok(e && !legacy && !(value === '' && (e as { code?: unknown }).code === 5) ? stderr.trim() || e.message : undefined),
       ),
     );
     if (err) return err;
@@ -294,6 +458,21 @@ export const taskPrompt = (t: Pick<AgentTask, 'cardTitle' | 'text'>): string => 
 
 const cutText = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
 const str = (v: unknown): string => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
+
+/**
+ * risk/riskWhy/approvedAt de uma tarefa da fila (campos novos; um VBoards antigo não manda). risk ausente fica
+ * ausente (conta como medium); approvedAt só se for uma data de verdade.
+ */
+export function taskRisk(t: Record<string, unknown>): Pick<AgentTask, 'risk' | 'riskWhy' | 'approvedAt'> {
+  const why = typeof t.riskWhy === 'string' ? cutText(maskSecrets(t.riskWhy.trim()), REFINE_LIMITS.riskWhy) : '';
+  const at = t.approvedAt;
+  const ms = typeof at === 'number' ? at : typeof at === 'string' && at.trim() ? Date.parse(at) : NaN;
+  return {
+    ...(typeof t.risk === 'string' && t.risk.trim() ? { risk: parseRisk(t.risk) } : {}),
+    ...(why ? { riskWhy: why } : {}),
+    ...(Number.isFinite(ms) && ms > 0 ? { approvedAt: new Date(ms).toISOString() } : {}),
+  };
+}
 
 /** `refines` da fila; ausente ou estragado (VBoards antigo) = nenhum. */
 export function parseRefines(raw: unknown): RefineRequest[] {
@@ -313,14 +492,27 @@ export function parseRefines(raw: unknown): RefineRequest[] {
 }
 
 /** O pedido do "Refinar": o card e as subtarefas que já existem; a resposta é UM bloco ```json. */
-export function refinePrompt(r: Pick<RefineRequest, 'cardTitle' | 'description' | 'subtasks'>): string {
+/** A etiqueta de cada repo de um produto na subtarefa: o papel (se só um repo tem ele), senão o nome da pasta. */
+export const repoTag = (repos: readonly Pick<ProductRepo, 'path' | 'role'>[], r: Pick<ProductRepo, 'path' | 'role'>): string =>
+  r.role !== 'other' && repos.filter((x) => x.role === r.role).length === 1 ? r.role : baseName(r.path);
+
+export function refinePrompt(r: Pick<RefineRequest, 'cardTitle' | 'description' | 'subtasks'>, repos?: readonly Pick<ProductRepo, 'path' | 'role'>[]): string {
   const subtasks = r.subtasks.slice(0, 50).map((t) => `- ${cutText(t, REFINE_LIMITS.subtask)}`);
+  const multi = repos && repos.length > 1
+    ? [
+        'Este card é de um produto com vários repositórios. A pasta atual é o principal; os outros você só lê, pelo caminho:',
+        ...repos.map((x) => `- [${repoTag(repos, x)}] ${x.path}`),
+        'Comece o texto de CADA subtarefa com a etiqueta do repo onde ela será feita, exatamente como acima (ex.: "[server] validar o token no login"). Uma subtarefa mexe em um repo só.',
+      ]
+    : [];
   return [
     'Você planeja um card do quadro do time, em português do Brasil. Só leia: não edite arquivos, não rode comandos que mudem nada, não faça commit.',
     'Leia o repositório desta pasta o quanto precisar para entender o pedido e responda com UM único bloco ```json, sem mais nada depois dele:',
-    '{"plan": "escopo, arquivos afetados e critérios de aceite", "questions": ["o que falta decidir"], "subtasks": ["itens pequenos, de um propósito só, implementáveis"]}',
+    '{"plan": "escopo, arquivos afetados e critérios de aceite", "questions": ["o que falta decidir"], "subtasks": [{"text": "item pequeno, de um propósito só, implementável", "risk": "low|medium|high", "riskWhy": "por quê, em uma frase"}]}',
+    'risk: high se mexer em login, pagamento, assinatura, dados de usuário, banco/migration, CI, dependências ou build da loja; medium se mexer em regra de negócio ou em muitos arquivos; low só para mudança pequena, isolada e fácil de desfazer (texto, estilo, ajuste local). Na dúvida, medium.',
     `Limites: plan até ${REFINE_LIMITS.plan} caracteres; até ${REFINE_LIMITS.questions} perguntas; até ${REFINE_LIMITS.subtasks} subtarefas, sem repetir as que já existem.`,
     'Cada subtarefa vira um agente que implementa e já faz o próprio commit: não crie subtarefa só de commit, push, PR, merge ou revisão. Para o pedido pequeno, uma subtarefa basta.',
+    ...multi,
     '',
     `Card: ${cutText(r.cardTitle, 200)}`,
     `Descrição:\n${cutText(r.description.trim(), REFINE_DESCRIPTION_MAX) || '(sem descrição)'}`,
@@ -343,9 +535,16 @@ export function parseRefineOutput(text: string): RefineResult | undefined {
     v === undefined ? [] : Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x.trim()).slice(0, max).map((x) => cutText(maskSecrets(x.trim()), each)) : undefined;
   const plan = typeof o.plan === 'string' ? maskSecrets(o.plan.trim()) : '';
   const questions = list(o.questions, REFINE_LIMITS.questions, REFINE_LIMITS.question);
-  const subtasks = list(o.subtasks, REFINE_LIMITS.subtasks, REFINE_LIMITS.subtask);
-  if (!plan || !questions || !subtasks) return undefined;
-  return { plan: cutText(plan, REFINE_LIMITS.plan), questions, subtasks };
+  // Subtarefa: texto (formato antigo, risco medium) ou {text, risk, riskWhy}.
+  const subs = o.subtasks === undefined ? [] : Array.isArray(o.subtasks) ? o.subtasks.map((x) => (typeof x === 'string' ? { text: x } : ((x && typeof x === 'object' ? x : {}) as Record<string, unknown>))) : undefined;
+  if (!plan || !questions || !subs) return undefined;
+  const kept = subs.filter((x) => typeof x.text === 'string' && !!x.text.trim()).slice(0, REFINE_LIMITS.subtasks);
+  const subtasks = kept.map((x) => cutText(maskSecrets(String(x.text).trim()), REFINE_LIMITS.subtask));
+  const risks = kept.map((x) => {
+    const why = typeof x.riskWhy === 'string' ? x.riskWhy.trim() : '';
+    return { risk: parseRisk(x.risk), ...(why ? { riskWhy: cutText(maskSecrets(why), REFINE_LIMITS.riskWhy) } : {}) };
+  });
+  return { plan: cutText(plan, REFINE_LIMITS.plan), questions, subtasks, risks };
 }
 
 /** Nome do card para uma pasta: o vboards.card dela ou o nome da pasta. */
@@ -484,14 +683,18 @@ export interface VBoardsServiceOptions {
    * Abertura automática: chamada a cada busca da fila com as subtarefas soltas de uma pasta com vboards.auto=true (a
    * única pasta que combina com o card). Ausente (chat desligado) = nada abre sozinho.
    */
-  auto?: (folder: string, tasks: Array<{ id: string; prompt: string }>, config: FolderConfig) => void;
+  auto?: (folder: string, tasks: Array<{ id: string; prompt: string } & Pick<AgentTask, 'risk' | 'riskWhy' | 'approvedAt'>>, config: FolderConfig) => void;
   /**
    * "Refinar": uma rodada só de leitura na pasta (gate.ts refinerFor) que devolve o texto da resposta. Ausente (chat
-   * desligado) = os pedidos de refinar ficam para outro Habblaud.
+   * desligado) = os pedidos de refinar ficam para outro Habblaud. `extraDirs`: os outros repos do produto (só leitura).
    */
-  refine?: (folder: string, prompt: string, config: FolderConfig) => Promise<string>;
+  refine?: (folder: string, prompt: string, config: FolderConfig, extraDirs?: string[]) => Promise<string>;
+  /** O Refinar devolveu `questions`: o card passa a esperar o dono (vboards/triage.ts askRefine). */
+  onQuestions?: (r: RefineRequest, questions: string[]) => void;
   /** Aviso no celular (vboards/ntfy.ts): só o título do card e o que aconteceu. */
   notify?: (cardTitle: string, event: NotifyEvent) => void;
+  /** Registro de produtos (products.ts); ausente = só o casamento por nome da pasta / vboards.card. */
+  products?: () => Product[];
   file?: string;
   fetch?: typeof fetch;
   now?: () => number;
@@ -565,7 +768,7 @@ export class VBoardsService {
       this.tasks = list.flatMap((x) => {
         const t = x as Record<string, unknown>;
         const s = (v: unknown) => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
-        return s(t.cardId) && s(t.subtaskId) && s(t.text) ? [{ cardId: s(t.cardId), subtaskId: s(t.subtaskId), text: s(t.text), cardTitle: s(t.cardTitle), date: s(t.date) || undefined }] : [];
+        return s(t.cardId) && s(t.subtaskId) && s(t.text) ? [{ cardId: s(t.cardId), subtaskId: s(t.subtaskId), text: s(t.text), cardTitle: s(t.cardTitle), date: s(t.date) || undefined, ...(s(t.repo) ? { repo: s(t.repo) } : {}), ...taskRisk(t) }] : [];
       });
       this.delay = POLL_MS;
       this.lastError = undefined;
@@ -593,13 +796,14 @@ export class VBoardsService {
     if (!queued.length) return;
     const folders = await this.knownFolders();
     const byFolder = new Map<string, AgentTask[]>();
+    const products = this.products();
     for (const t of queued) {
-      const m = matchFolders(t.cardTitle, folders);
-      if (m.length === 1) byFolder.set(m[0], [...(byFolder.get(m[0]) ?? []), t]);
+      const one = single(taskFolders(t, folders, products));
+      if (one) byFolder.set(one, [...(byFolder.get(one) ?? []), t]);
     }
     for (const [folder, tasks] of byFolder) {
       const config = await (this.opts.folderConfig ?? readFolderConfig)(folder);
-      if (config.auto) this.opts.auto(folder, tasks.map((t) => ({ id: taskId(t), prompt: taskPrompt(t) })), config);
+      if (config.auto) this.opts.auto(folder, tasks.map((t) => ({ id: taskId(t), prompt: taskPrompt(t), ...(t.risk ? { risk: t.risk } : {}), ...(t.riskWhy ? { riskWhy: t.riskWhy } : {}), ...(t.approvedAt ? { approvedAt: t.approvedAt } : {}) })), config);
     }
   }
 
@@ -623,9 +827,15 @@ export class VBoardsService {
   }
 
   private async refine(r: RefineRequest, run: NonNullable<VBoardsServiceOptions['refine']>): Promise<void> {
-    const matches = matchFolders(r.cardTitle, await this.knownFolders());
-    if (matches.length !== 1) {
-      const error = matches.length
+    // Produto com vários repos: o card é refinado no repo principal (server, senão o primeiro), os outros só para leitura,
+    // e cada subtarefa volta com a etiqueta do repo dela (a abertura automática acha a pasta por ela).
+    const product = productForCard(r.cardTitle, this.products());
+    const m: { paths: string[]; error?: string } = product && product.repos.length > 1 ? { paths: [(product.repos.find((x) => x.role === 'server') ?? product.repos[0]).path] } : taskFolders(r, await this.knownFolders(), this.products());
+    const matches = m.paths;
+    if (m.error || matches.length !== 1) {
+      const error = m.error
+        ? m.error
+        : matches.length
         ? tr('várias pastas combinam com o card {0} ({1}): deixe vboards.card em só uma', [r.cardTitle, matches.map(baseName).join(', ')])
         : tr('nenhuma pasta com vboards.card = {0} (nem com esse nome) neste computador', [r.cardTitle]);
       return void (await this.postRefine(r, { status: 'failed', error }));
@@ -633,8 +843,11 @@ export class VBoardsService {
     // VBoards que recusa o "running" (antigo, 404/400): nem gasta a rodada.
     if ((await this.postRefine(r, { status: 'running' })) === 'rejected') return;
     const folder = matches[0];
-    const text = await run(folder, refinePrompt(r), await (this.opts.folderConfig ?? readFolderConfig)(folder));
+    const repos = product && product.repos.length > 1 ? product.repos : undefined;
+    const extra = repos?.filter((x) => !samePath(x.path, folder)).map((x) => x.path);
+    const text = await run(folder, refinePrompt(r, repos), await (this.opts.folderConfig ?? readFolderConfig)(folder), extra);
     const out = parseRefineOutput(text);
+    if (out?.questions.length) this.opts.onQuestions?.(r, out.questions);
     await this.postRefine(r, out ? { status: 'ready', ...out } : { status: 'failed', error: `${tr('A resposta não trouxe um bloco ```json válido (plan, questions, subtasks). Fim da saída:')}\n${maskSecrets(text).trim().slice(-1_500)}` });
   }
 
@@ -685,16 +898,20 @@ export class VBoardsService {
     const pending = this.tasks.filter((t) => !started.has(taskId(t)));
     if (!pending.length) return [];
     const folders = await this.knownFolders();
+    const products = this.products();
     return pending.map((t) => {
-      const matches = matchFolders(t.cardTitle, folders);
-      const pool = matches.length > 1 ? folders.filter((f) => matches.includes(f.path)) : folders;
+      const m = taskFolders(t, folders, products);
+      const matches = m.paths;
+      const one = single(m);
+      const pool = matches.length > 1 ? folders.filter((f) => matches.some((p) => samePath(p, f.path))) : folders;
       return {
         id: taskId(t),
         cardTitle: t.cardTitle,
         text: t.text,
         ...(t.date ? { date: t.date } : {}),
-        ...(matches.length === 1 ? { folder: matches[0] } : {}),
+        ...(one ? { folder: one } : {}),
         candidates: pool.map((f) => ({ path: f.path, name: baseName(f.path) })),
+        ...(m.error ? { problem: m.error } : {}),
         agents: this.attachable(matches.length ? matches : folders.map((f) => f.path)).map(({ agent: a, folder }) => ({ id: a.id, name: a.name, ...(a.title ? { title: a.title } : {}), provider: a.provider ?? 'claude', folder })),
       };
     });
@@ -721,6 +938,9 @@ export class VBoardsService {
     l.state = 'running';
     l.summary = undefined;
     l.retryAt = undefined;
+    // A etapa e o PR da rodada anterior não valem mais (a próxima settle traz os novos).
+    l.stage = undefined;
+    l.prUrl = undefined;
     this.save();
     void this.report();
     return true;
@@ -733,7 +953,7 @@ export class VBoardsService {
     if (!task) return { status: 404, error: tr('tarefa do VBoards desconhecida: atualize a lista') };
     if (this.links.some((l) => l.id === body.id)) return { status: 409, error: tr('esta tarefa já foi iniciada') };
     const folders = await this.knownFolders();
-    const matches = matchFolders(task.cardTitle, folders);
+    const matches = taskFolders(task, folders, this.products()).paths;
     const hit = this.attachable(matches.length ? matches : folders.map((f) => f.path)).find((x) => x.agent.id === body.agentId);
     if (!hit) return { status: 400, error: tr('conversa não encontrada na pasta do projeto: atualize a lista') };
     // Duas requisições durante a espera acima: só a primeira liga.
@@ -755,9 +975,9 @@ export class VBoardsService {
     if (!task) return { status: 404, error: tr('tarefa do VBoards desconhecida: atualize a lista') };
     if (this.links.some((l) => l.id === body.id)) return { status: 409, error: tr('esta tarefa já foi iniciada') };
     const folders = await this.knownFolders();
-    const matches = matchFolders(task.cardTitle, folders);
-    const picked = typeof body.folder === 'string' && body.folder ? folders.find((f) => f.path === body.folder)?.path : matches.length === 1 ? matches[0] : undefined;
-    if (!picked) return { status: 400, error: tr('escolha a pasta do projeto (uma das sugeridas)') };
+    const m = taskFolders(task, folders, this.products());
+    const picked = typeof body.folder === 'string' && body.folder ? folders.find((f) => f.path === body.folder)?.path : single(m);
+    if (!picked) return { status: 400, error: m.error ?? tr('escolha a pasta do projeto (uma das sugeridas)') };
     // Dois cliques durante a espera acima: só o primeiro abre.
     if (this.links.some((l) => l.id === body.id)) return { status: 409, error: tr('esta tarefa já foi iniciada') };
     const prompt = taskPrompt(task);
@@ -792,13 +1012,20 @@ export class VBoardsService {
     return { folder: known.path, config: folderConfigView(await (this.opts.folderConfig ?? readFolderConfig)(known.path)) };
   }
 
-  /** Grava a configuração de uma pasta conhecida. A trava de quem pode (só local) fica na rota (http/app.ts). */
-  async saveFolderSettings(raw: unknown): Promise<{ folder: string; config: FolderConfigView } | { status: number; error: string }> {
+  /**
+   * Grava a configuração de uma pasta conhecida. A trava de quem pode (só local) fica na rota (http/app.ts). Ligar
+   * autoMerge=low, ship=merge ou store≠off (ou mexer na política com isso ligado) pede o PIN de aprovação no corpo.
+   */
+  async saveFolderSettings(raw: unknown, pin?: Pick<ApprovalPin, 'check' | 'triesLeft'>): Promise<{ folder: string; config: FolderConfigView } | { status: number; error: string; pin?: string }> {
     const body = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
     const known = typeof body.folder === 'string' ? (await this.knownFolders()).find((f) => samePath(f.path, body.folder as string)) : undefined;
     if (!known) return { status: 400, error: tr('Pasta desconhecida: abra uma sessão nela antes.') };
     const v = validateFolderConfig(body.config);
     if ('error' in v) return { status: 400, error: v.error };
+    if (policyChangeNeedsPin(await (this.opts.folderConfig ?? readFolderConfig)(known.path), v.values)) {
+      const c = pin ? await pin.check(body.pin) : 'unset';
+      if (c !== 'ok') return { ...pinError(c, pin?.triesLeft() ?? 0), pin: c };
+    }
     const err = await (this.opts.writeConfig ?? writeFolderConfig)(known.path, v.values);
     if (err) return { status: 409, error: tr('Não deu para gravar no git config da pasta: {0}', [maskSecrets(err)]) };
     this.cards.delete(known.path);
@@ -894,11 +1121,12 @@ export class VBoardsService {
   private async reportAll(): Promise<void> {
     const now = this.now();
     for (const l of this.links) {
-      if (l.reported === l.state || (l.retryAt && now < l.retryAt)) continue;
-      const state = l.state;
+      const key = reportKey(l);
+      if (l.reported === key || (l.retryAt && now < l.retryAt)) continue;
       try {
-        await this.call('/api/agent-tasks/update', { email: this.opts.config.email || undefined, cardId: l.cardId, subtaskId: l.subtaskId, status: state, ...(l.summary ? { summary: l.summary } : {}) });
-        l.reported = state;
+        // stage e prUrl são campos novos: um VBoards antigo ignora.
+        await this.call('/api/agent-tasks/update', { email: this.opts.config.email || undefined, cardId: l.cardId, subtaskId: l.subtaskId, status: l.state, ...(l.stage ? { stage: l.stage } : {}), ...(l.prUrl ? { prUrl: l.prUrl } : {}), ...(l.summary ? { summary: l.summary } : {}) });
+        l.reported = key;
         l.retryAt = undefined;
       } catch (err) {
         l.retryAt = now + RETRY_MS;
@@ -937,8 +1165,30 @@ export class VBoardsService {
     }
   }
 
+  private products(): Product[] {
+    return this.opts.products?.() ?? [];
+  }
+
+  /**
+   * Juntar ou Descartar a cópia (chat/runs.ts closeCopy), ou outra etapa depois do portão: a subtarefa ligada vira
+   * `state` com a etapa (e o motivo no resumo) e vai ao VBoards. Sem ligação (já saiu, KEEP_DONE_MS) = false.
+   */
+  settle(id: string, s: { state: 'done' | 'failed' | 'review'; stage?: string; summary?: string; prUrl?: string }): boolean {
+    const l = this.links.find((x) => x.id === id);
+    if (!l) return false;
+    l.state = s.state;
+    l.stage = s.stage;
+    l.prUrl = s.prUrl;
+    if (s.summary !== undefined) l.summary = summaryText(s.summary, REVIEW_SUMMARY_MAX);
+    l.retryAt = undefined;
+    this.save();
+    void this.report();
+    return true;
+  }
+
   private async knownFolders(): Promise<Folder[]> {
-    const paths = [...(await this.opts.folders().catch(() => []))];
+    // Os repos do registro de produtos também são pastas conhecidas (configuração e "Iniciar").
+    const paths = [...(await this.opts.folders().catch(() => [])), ...this.products().flatMap((p) => p.repos.map((r) => r.path))];
     for (const a of this.opts.agents()) {
       const p = this.opts.roomPath(a.roomId);
       if (p && /^(\/|[A-Za-z]:[\\/])/.test(p)) paths.push(p);

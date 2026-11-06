@@ -82,6 +82,22 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body;
 }
 
+/** Manda a gravação ao Whisper do computador (POST /api/dictation) e espera o texto. Também o Jarvis em tela cheia. */
+export async function transcribeAudio(blob: Blob, type = blob.type): Promise<DictationText> {
+  let r = await api<DictationReply>('/api/dictation', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: type.split(';')[0], data: await blobToBase64(blob) }),
+  });
+  const end = Date.now() + WAIT_MS;
+  while ((r.status === 'queued' || r.status === 'sent') && Date.now() < end) {
+    await new Promise((ok) => setTimeout(ok, POLL_MS));
+    r = await api<DictationReply>(`/api/dictation/${encodeURIComponent(r.id)}`);
+  }
+  if (r.status !== 'done') throw new Error(r.error || tr('o computador não respondeu a tempo'));
+  return { text: r.text ?? '', ...(r.lang ? { lang: r.lang } : {}) };
+}
+
 const AVAILABLE_TTL_MS = 30_000;
 let availableCache: { at: number; value: Promise<boolean> } | null = null;
 
@@ -216,17 +232,7 @@ export class DictationButton {
     this.set('working');
     this.say(tr('Transcrevendo no computador…'));
     try {
-      let r = await api<DictationReply>('/api/dictation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: type.split(';')[0], data: await blobToBase64(blob) }),
-      });
-      const end = Date.now() + WAIT_MS;
-      while ((r.status === 'queued' || r.status === 'sent') && Date.now() < end) {
-        await new Promise((ok) => setTimeout(ok, POLL_MS));
-        r = await api<DictationReply>(`/api/dictation/${encodeURIComponent(r.id)}`);
-      }
-      if (r.status !== 'done') throw new Error(r.error || tr('o computador não respondeu a tempo'));
+      const r = await transcribeAudio(blob, type);
       if (!r.text?.trim()) this.say(tr('Não entendi nada na gravação: tente de novo.'), true);
       else {
         this.onText({ text: r.text, lang: r.lang });

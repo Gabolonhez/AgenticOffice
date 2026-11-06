@@ -12,8 +12,25 @@ import { JARVIS_DEFAULT, type JarvisSettings } from '../jarvis/service';
 import { errMsg, log } from '../log';
 import { isLocalHost, sendWhatsApp, validateWa, type WaSettings } from './whatsapp';
 
-/** 'quota': uma lista pausou pela cota da conta (chat/runs.ts); o título é o nome da pasta. */
-export type NotifyEvent = 'review' | 'ready' | 'failed' | 'quota';
+/**
+ * 'quota': uma lista pausou pela cota da conta (chat/runs.ts); o título é o nome da pasta. 'pr', 'ci_failed', 'no_ci' e
+ * 'deployed': o "Subir" (chat/ship.ts), com o nome da pasta.
+ */
+export type NotifyEvent = 'review' | 'ready' | 'failed' | 'quota' | 'pr' | 'ci_failed' | 'no_ci' | 'deployed' | 'store_pin' | 'store_ok' | 'store_failed';
+
+const EVENT_TEXT: Record<NotifyEvent, () => string> = {
+  review: () => tr('aguardando revisão'),
+  ready: () => tr('plano pronto'),
+  quota: () => tr('lista pausada: cota da conta no limite'),
+  failed: () => tr('falhou'),
+  pr: () => tr('PR aberto'),
+  ci_failed: () => tr('CI do PR falhou'),
+  no_ci: () => tr('repo sem CI de PR: o merge espera a sua aprovação com PIN'),
+  deployed: () => tr('no ar (deployed)'),
+  store_pin: () => tr('loja: espera a sua aprovação com PIN'),
+  store_ok: () => tr('loja: etapa concluída'),
+  store_failed: () => tr('loja: etapa falhou'),
+};
 
 const TITLE_MAX = 100;
 const URL_MAX = 300;
@@ -41,7 +58,7 @@ export function validateNtfyUrl(raw: unknown): { url: string } | { error: string
 export function ntfyMessage(cardTitle: string, event: NotifyEvent): { title: string; text: string } {
   const t = maskSecrets(cardTitle).replace(/\s+/g, ' ').trim() || tr('(card sem título)');
   const title = t.length > TITLE_MAX ? `${t.slice(0, TITLE_MAX - 1)}…` : t;
-  return { title, text: event === 'review' ? tr('aguardando revisão') : event === 'ready' ? tr('plano pronto') : event === 'quota' ? tr('lista pausada: cota da conta no limite') : tr('falhou') };
+  return { title, text: EVENT_TEXT[event]() };
 }
 
 /** POST no tópico; o título vai como RFC 2047 (o fetch não aceita cabeçalho fora do latin1). Erro só vira log. */
@@ -66,12 +83,18 @@ export interface BriefingSettings { time: string; days: number[] }
 /** Texto livre (notify_send do Jarvis, manchete do briefing) no ntfy: mascarado e cortado. */
 export const NTFY_FREE_MAX = 200;
 
-interface Stored {
+/** As rotinas do Jarvis com horário (jarvis/briefing.ts ReportKind): briefing, fechamento do dia e semanal; desligadas por padrão. */
+export const ROUTINES = ['briefing', 'closing', 'weekly'] as const;
+export type Routine = (typeof ROUTINES)[number];
+const OFF: BriefingSettings = { time: '', days: [] };
+
+interface Stored extends Record<Routine, BriefingSettings> {
   ntfyUrl: string;
   channel: NotifyChannel;
   wa?: WaSettings;
-  briefing: BriefingSettings;
   jarvis: JarvisSettings;
+  /** Triagem automática das ideias novas (vboards/triage.ts) a cada 2 min: desligada por padrão. */
+  triage?: boolean;
 }
 
 const CHANNELS: readonly NotifyChannel[] = ['ntfy', 'whatsapp', 'both'];
@@ -101,7 +124,7 @@ const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` 
  * computador (http/app.ts e server/jarvis/http.ts); a página remota vê só "ligado"; a chave nunca sai.
  */
 export class NotifySettings {
-  private s: Stored = { ntfyUrl: '', channel: 'ntfy', briefing: { time: '', days: [] }, jarvis: { ...JARVIS_DEFAULT } };
+  private s: Stored = { ntfyUrl: '', channel: 'ntfy', briefing: OFF, closing: OFF, weekly: OFF, jarvis: { ...JARVIS_DEFAULT } };
 
   constructor(
     private readonly file: string,
@@ -115,8 +138,11 @@ export class NotifySettings {
         ntfyUrl: 'url' in u ? u.url : '',
         channel: CHANNELS.includes(raw?.channel as NotifyChannel) ? (raw.channel as NotifyChannel) : 'ntfy',
         ...('wa' in wa && wa.wa ? { wa: wa.wa } : {}),
-        briefing: parseBriefing(raw?.briefing) ?? { time: '', days: [] },
+        briefing: parseBriefing(raw?.briefing) ?? OFF,
+        closing: parseBriefing(raw?.closing) ?? OFF,
+        weekly: parseBriefing(raw?.weekly) ?? OFF,
         jarvis: parseJarvis(raw?.jarvis),
+        ...(raw?.triage === true ? { triage: true } : {}),
       };
     } catch {
       // sem arquivo: tudo desligado, Jarvis no padrão
@@ -136,12 +162,18 @@ export class NotifySettings {
     return this.s.channel;
   }
 
-  briefing(): BriefingSettings {
-    return this.s.briefing;
+  /** Horário de uma rotina (padrão: o briefing da manhã). */
+  briefing(kind: Routine = 'briefing'): BriefingSettings {
+    return this.s[kind];
   }
 
   jarvis(): JarvisSettings {
     return this.s.jarvis;
+  }
+
+  /** A triagem automática das ideias novas está ligada (Configurações)? */
+  triage(): boolean {
+    return this.s.triage === true;
   }
 
   /** Só o tópico do ntfy (compatível com a tela antiga). */
@@ -172,10 +204,16 @@ export class NotifySettings {
       if (w.wa) next.wa = w.wa;
       else delete next.wa;
     }
-    if (b.briefing !== undefined) {
-      const br = parseBriefing(b.briefing);
+    if (b.triage !== undefined) {
+      if (typeof b.triage !== 'boolean') return tr('Triagem automática: use verdadeiro ou falso.');
+      if (b.triage) next.triage = true;
+      else delete next.triage;
+    }
+    for (const k of ROUTINES) {
+      if (b[k] === undefined) continue;
+      const br = parseBriefing(b[k]);
       if (!br) return tr('Horário do briefing inválido (use HH:MM e dias de 0 a 6).');
-      next.briefing = br;
+      next[k] = br;
     }
     return this.write(next);
   }
@@ -188,6 +226,9 @@ export class NotifySettings {
       waConfigured: !!wa,
       channel: this.s.channel,
       briefing: this.s.briefing,
+      closing: this.s.closing,
+      weekly: this.s.weekly,
+      triage: this.triage(),
       ...(editable ? { url: ntfyUrl, wa: wa ? { url: wa.url, sessionId: wa.sessionId, ownerJid: wa.ownerJid, apiKeySet: true } : null } : {}),
       editable,
     };
@@ -233,14 +274,15 @@ export class NotifySettings {
   private write(next: Stored): string | undefined {
     try {
       mkdirSync(dirname(this.file), { recursive: true });
-      const { ntfyUrl, channel, wa, briefing, jarvis } = next;
+      const { ntfyUrl, channel, wa, jarvis, triage } = next;
       // Só o que difere do padrão: um notify.json antigo (só o tópico) continua igual.
       const out = {
         ntfyUrl,
         ...(channel !== 'ntfy' ? { channel } : {}),
         ...(wa ? { wa } : {}),
-        ...(briefing.time || briefing.days.length ? { briefing } : {}),
+        ...Object.fromEntries(ROUTINES.filter((k) => next[k].time || next[k].days.length).map((k) => [k, next[k]])),
         ...(jarvis.provider !== JARVIS_DEFAULT.provider || jarvis.model !== JARVIS_DEFAULT.model ? { jarvis } : {}),
+        ...(triage ? { triage: true } : {}),
       };
       writeFileSync(`${this.file}.tmp`, JSON.stringify(out), { mode: 0o600 });
       renameSync(`${this.file}.tmp`, this.file);

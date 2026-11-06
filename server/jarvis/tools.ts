@@ -16,18 +16,27 @@ import { basename, dirname } from 'node:path';
 import { maskSecrets } from '../../shared/activity';
 import { CHAT_TEXT_MAX } from '../../shared/chat';
 import { tr } from '../../shared/i18n';
-import type { ChatRun, RunMetric } from '../../shared/runs';
+import { shipApprovalOf, type ChatRun, type RunMetric } from '../../shared/runs';
 import type { TriggerRule } from '../../shared/triggers';
 import type { Provider } from '../../shared/types';
 import { askHuman, type HumanAnswer, type McpTool } from '../chat/permission';
+import { LEDGER_OPEN_MS, projectLedger, type JournalEntry } from '../chat/journal';
 import type { RunService } from '../chat/runs';
+import type { ShipService } from '../chat/ship';
+import { riskLabel } from '../chat/risk';
+import type { StoreService } from '../chat/lojas';
+import type { Product } from '../vboards/products';
+import { parseOptions, type ProjectsService } from '../projects/create';
 import type { ChatService } from '../chat/service';
 import type { TriggerService } from '../chat/triggers';
 import type { WorktreeOps } from '../chat/types';
 import type { PermissionRegistry } from '../permissions/registry';
 import { CARD_STATUSES, SCHEDULE_SCOPES, TASK_STATUSES, VBoardsApiError, type VBoardsApi } from '../vboards/api';
 import type { NotifyChannel } from '../vboards/ntfy';
-import { AUTO_TURN_MINUTES, folderConfigView, validateFolderConfig, type FolderConfig, type FolderKey } from '../vboards/vboards';
+import { freshIdeas, parseResearchOutput, researchMessage, researchPrompt, RESEARCH_IDEAS_MAX, RESEARCH_ORIGIN } from '../vboards/research';
+import type { TriageService } from '../vboards/triage';
+import { SENSITIVE_KEYS } from '../vboards/policy';
+import { AUTO_TURN_MINUTES, FOLDER_KEYS, folderConfigView, policyChangeNeedsPin, policyOf, validateFolderConfig, type FolderConfig, type FolderKey } from '../vboards/vboards';
 import { UNTRUSTED_TAG, wrapUntrusted } from './prompt';
 import { originLabel, type JarvisTurn } from './service';
 
@@ -43,7 +52,7 @@ export const NOTIFY_NTFY_MAX = 200;
 export const NOTIFY_WA_MAX = 3000;
 const HOUR = 60 * 60_000;
 /** Ferramentas de leitura que devolvem texto de fora (embrulhado): contaminam o turno desde o início da chamada. */
-const UNTRUSTED_READS: ReadonlySet<string> = new Set(['memory_read', 'agents_list', 'agents_read', 'runs_get', 'vboards_me', 'vboards_projects', 'vboards_tasks_list', 'vboards_schedule_list', 'vboards_summary']);
+const UNTRUSTED_READS: ReadonlySet<string> = new Set(['projects_status', 'release_notes', 'release_cut', 'memory_read','agents_list', 'agents_read', 'runs_get', 'runs_ship_status', 'vboards_me', 'vboards_projects', 'vboards_tasks_list', 'vboards_schedule_list', 'vboards_summary', 'vboards_triage', 'vboards_research']);
 const READ_ITEMS = 30;
 const READ_TEXT = 600;
 const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'antigravity'];
@@ -99,14 +108,26 @@ export interface JarvisToolsDeps {
   registry: Pick<PermissionRegistry, 'registerChat' | 'wait'>;
   runs?: Pick<RunService, 'list' | 'get' | 'create' | 'stop' | 'continue' | 'merge' | 'discard'>;
   worktrees?: Pick<WorktreeOps, 'summary'>;
+  /** "Subir" (chat/ship.ts): runs_ship sempre com cartão crítico (PIN), runs_ship_status SAFE. */
+  ship?: Pick<ShipService, 'prepare' | 'approve' | 'status'>;
+  /** Lojas (chat/lojas.ts): release_cut SAFE (resultado embrulhado), release_submit sempre com cartão crítico (PIN). */
+  lojas?: Pick<StoreService, 'cut' | 'request' | 'appFolder'>;
   folders: () => Array<{ path: string; name?: string }>;
   folderConfig: (folder: string) => Promise<FolderConfig>;
   writeFolderConfig: (folder: string, values: Partial<Record<FolderKey, string>>) => Promise<string | undefined>;
   accounts?: () => unknown[];
   metrics?: (since: number) => RunMetric[];
+  /** Registro por projeto (chat/journal.ts) desde `since`, e o registro de produtos (projects_status, release_notes). */
+  journal?: (since: number) => JournalEntry[];
+  products?: () => Product[];
+  /** Projeto novo a partir do molde (projects_draft, projects_create). */
+  projects?: Pick<ProjectsService, 'draft' | 'plan' | 'facts' | 'start' | 'get'>;
   notify?: (text: string, channel: NotifyChannel) => Promise<{ ntfy?: boolean; whatsapp?: boolean; error?: string }>;
   triggers?: Pick<TriggerService, 'list' | 'create' | 'update' | 'remove' | 'test'>;
   vboards?: VBoardsApi;
+  /** Triagem e laço de perguntas (vboards/triage.ts) e a rodada de pesquisa na web (só leitura). */
+  triage?: Pick<TriageService, 'triage' | 'answer' | 'waiting'>;
+  research?: (prompt: string) => Promise<string>;
   memory: { read(): string; write(mode: 'append' | 'replace', text: string): string | undefined };
   now?: () => number;
   /** Prazo dos cartões (testes). */
@@ -217,10 +238,33 @@ export class JarvisTools {
       ),
       t('runs_merge', 'GATED. Merges the run isolated copy into the project.', obj({ id: S(), ...REASON }, ['id']), async (a) => this.runsClose(a, 'merge')),
       t('runs_discard', 'GATED. Discards the run isolated copy and branch.', obj({ id: S(), ...REASON }, ['id']), async (a) => this.runsClose(a, 'discard')),
+      t(
+        'runs_ship',
+        'GATED, always (critical card with PIN, even in a clean turn). Ships the run isolated copy: commit, push of its agentic/* branch, PR and, with vboards.ship=merge, merge on green CI and deploy. Also the extra approval of a merge on a repo without PR CI.',
+        obj({ id: S(), ...REASON }, ['id']),
+        async (a) => this.runsShip(a),
+      ),
+      t('runs_ship_status', 'SAFE. Ship progress of a run (step, PR link, CI verdict, note). Note wrapped as untrusted data.', obj({ id: S() }, ['id']), async (a) => this.runsShipStatus(a)),
       // --- projetos
       t('projects_list', 'SAFE. Known project folders and their VBoards settings.', obj({}), async () => ok(await this.projectsList())),
       t('projects_config_get', 'SAFE. Settings of a folder (git config vboards.*; the check command masked).', obj({ folder: S() }, ['folder']), async (a) => this.projectsConfigGet(a)),
-      t('projects_config_set', 'GATED. Changes settings of a folder (keys: card, auto, provider, budget, check, reviewer, reviewerModel, copy).', obj({ folder: S(), values: { type: 'object' }, ...REASON }, ['folder', 'values']), async (a) => this.projectsConfigSet(a)),
+      t('projects_status', 'SAFE. Per project (product or folder; empty = all), from the journal: done and stuck in the last 7 days, doing, to do. Wrapped as untrusted data.', obj({ project: S('Product id/name or folder (path or name)') }), async (a) => this.projectsStatus(a)),
+      t('release_notes', 'SAFE. What was merged or deployed in a folder or product since `since` (ms epoch; default 7 days): titles for release notes. Wrapped as untrusted data.', obj({ folder: S('Folder (path or name) or product'), since: { type: 'number' } }, ['folder']), async (a) => this.releaseNotes(a)),
+      t(
+        'projects_draft',
+        'SAFE. Briefing of a NEW product from the app-base template: pass what you know (idea, name, audience, monetization, parts app/server/web, bundleId, primaryColor #RRGGBB, secondaryColor, notes). Returns the questions still missing (ask the owner, then call again with everything) or saves spec.md + plan and returns the slug for projects_create.',
+        obj({ idea: S(), name: S(), audience: S(), monetization: S(), parts: { type: 'array', items: { type: 'string', enum: ['app', 'server', 'web'] } }, bundleId: S(), primaryColor: S(), secondaryColor: S(), notes: S() }, ['idea']),
+        async (a) => this.projectsDraft(a),
+      ),
+      t(
+        'projects_create',
+        'GATED, ALWAYS (owner card with PIN, even in a clean turn). Creates the product drafted by projects_draft: copies the template, personalizes, CI workflow, git init + first commit, optional private GitHub repos (github + githubOwner), registry + vboards.* keys, optional VBoards card (vboards) and an agent in the new room (agent). Resumable: call again to retry what is pending. Never pushes.',
+        obj({ slug: S(), github: { type: 'boolean' }, githubOwner: S(), vboards: { type: 'boolean' }, agent: { type: 'boolean' }, ...REASON }, ['slug']),
+        async (a) => this.projectsCreate(a),
+      ),
+      t('release_cut', 'SAFE. Release package of an app (folder or product): tasks deployed since the last version, proposed semver and the "what is new" text in pt/en/es. Titles come from PRs: wrapped as untrusted data.', obj({ app: S('App folder (path or name) or product') }, ['app']), async (a) => this.releaseCut(a)),
+      t('release_submit', 'GATED, always (critical card with PIN). Sends the app version for store review: dispatches the repo store workflow (kind=submit). Use the version from release_cut.', obj({ app: S(), version: S('x.y.z from release_cut'), ...REASON }, ['app', 'version']), async (a) => this.releaseSubmit(a)),
+      t('projects_config_set', `GATED. Changes settings of a folder. Keys: ${FOLDER_KEYS.join(', ')}. Sensitive keys (${SENSITIVE_KEYS.join(', ')}) live in the Habblaud data folder, not in git config. autoMerge=low (ships low-risk tasks WITHOUT PIN), ship=merge and store other than off: only from a clean turn of the owner on the page.`, obj({ folder: S(), values: { type: 'object' }, ...REASON }, ['folder', 'values']), async (a) => this.projectsConfigSet(a)),
       // --- uso
       t('usage_accounts', 'SAFE. Accounts and their 5h/week quota.', obj({}), async () => ok(this.deps.accounts?.() ?? [])),
       t('usage_spend', 'SAFE. Spend (US$, tokens) of each chat agent.', obj({}), async () => ok(this.spend())),
@@ -433,7 +477,8 @@ export class JarvisTools {
     const cfg = await this.deps.folderConfig(f.path);
     // Sempre cópia isolada, sem push e com o orçamento da pasta, aprovada ou não.
     const body = { items: items.map((text) => ({ text })), isolated: true, ...(context ? { context } : {}), options: { folder: f.path, provider: cfg.provider, permission: 'auto', denyPush: true, limits: { maxCostUsd: cfg.budget, maxTurnMinutes: AUTO_TURN_MINUTES } } };
-    const auto = { ...(cfg.check ? { check: cfg.check } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}) };
+    // Igual à abertura automática do VBoards (index.ts): risco da pasta no portão e a política congelada na lista.
+    const auto = { ...(cfg.check ? { check: cfg.check } : {}), ...(cfg.qa ? { qa: cfg.qa } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}), ...(cfg.riskPaths.length ? { riskPaths: cfg.riskPaths } : {}), ...(cfg.riskLines ? { riskLines: cfg.riskLines } : {}), policy: policyOf(cfg) };
     const tainted = this.tainted();
     if (cfg.auto && !tainted && this.runsWindow.take(this.now())) {
       const r = runs.create(body, auto);
@@ -473,6 +518,60 @@ export class JarvisTools {
     return 'ok' in r ? ok(how === 'merge' ? tr('Cópia juntada ao projeto.') : tr('Cópia descartada.')) : fail(r.error);
   }
 
+  private async runsShip(a: Record<string, unknown>): Promise<Result> {
+    const ship = this.deps.ship;
+    const run = this.need('runs')?.get(str(a.id));
+    if (!ship || !run) return fail(tr('lista não encontrada'));
+    const s = run.ship;
+    // Repo sem CI de PR: a aprovação extra do merge (merge = deploy em produção), no mesmo SHA.
+    if (s?.needs === 'no-ci') {
+      const facts = [
+        tr('MERGE SEM CI da lista {0}: este repo não tem CI de PR; merge = deploy em produção.', [run.id]),
+        tr('Repositório: {0}/{1}', [s.owner, s.repo]),
+        tr('Base: {0}', [s.base]),
+        tr('Branch: {0}', [s.branch]),
+        tr('SHA: {0}', [s.sha]),
+        ...(s.prUrl ? [tr('PR: {0}', [s.prUrl])] : []),
+      ];
+      const approval = shipApprovalOf(s, true);
+      if (s.risky?.length) facts.push(tr('ATENÇÃO: o diff muda workflows/hooks ({0}); CI verde não prova nada.', [s.risky.join(', ')]));
+      facts.push(tr('Remoto: {0} · modo: {1} · deploy: {2}', [s.remote, s.mode, s.deploy]));
+      const refused = await this.gate('runs_ship', { id: run.id, ...approval }, facts, a.reason);
+      if (refused) return fail(refused);
+      const r = await ship.approve(run.id, approval);
+      return 'run' in r ? ok(tr('Merge sem CI aprovado: segue para o merge.')) : fail(r.error);
+    }
+    const p = await ship.prepare(run.id);
+    if ('error' in p) return fail(p.error);
+    const facts = [
+      ...(s?.needs === 'reapprove' ? [tr('RETOMADA depois de um reinício: o push/merge desta lista só segue com o PIN de novo.')] : []),
+      tr('SUBIR a lista {0}: push do branch e PR ({1})', [run.id, p.mode === 'merge' ? tr('com CI verde, merge automático e deploy') : tr('só o PR')]),
+      tr('Pasta: {0}', [p.folder]),
+      tr('Repositório: {0}/{1}', [p.owner, p.repo]),
+      tr('Base: {0}', [p.base]),
+      tr('Branch: {0}', [p.branch]),
+      tr('SHA: {0}', [p.sha]),
+      tr('Remoto: {0} · modo: {1} · deploy: {2}', [p.remote, p.mode, p.deploy]),
+      tr('Portão: {0}', [p.gate]),
+      tr('Risco: {0}{1}', [riskLabel(p.risk), p.riskWhy.length ? ` (${clip(p.riskWhy.join('; '), 400)})` : '']),
+      ...(p.risky.length ? [tr('ATENÇÃO: muda hooks/CI que rodam com a credencial do dono: {0}', [p.risky.join(', ')])] : []),
+      tr('Diff: {0}', [clip(p.stat, 600) || tr('(vazio)')]),
+    ];
+    const approval = shipApprovalOf(p);
+    const refused = await this.gate('runs_ship', { id: run.id, ...approval }, facts, a.reason);
+    if (refused) return fail(refused);
+    const r = await ship.approve(run.id, approval);
+    return 'run' in r ? ok(tr('Subindo: {0} → {1}/{2} ({3}). Acompanhe com runs_ship_status.', [p.branch, p.owner, p.repo, p.base])) : fail(r.error);
+  }
+
+  private async runsShipStatus(a: Record<string, unknown>): Promise<Result> {
+    const id = str(a.id);
+    const s = this.deps.ship?.status(id);
+    if (!s) return fail(tr('Esta lista não está subindo.'));
+    const { note, notified: _n, ...rest } = s;
+    return ok({ id, ...rest, ...(note ? { note: wrapUntrusted('ship', id, note) } : {}) });
+  }
+
   // ------------------------------------------------------------------ projetos
 
   private async projectsList(): Promise<unknown[]> {
@@ -488,7 +587,7 @@ export class JarvisTools {
     const f = this.folder(str(a.folder));
     if (!f) return fail(tr('Pasta desconhecida: abra uma sessão nela antes.'));
     const v = folderConfigView(await this.deps.folderConfig(f.path));
-    return ok({ folder: f.path, config: { ...v, ...(v.check ? { check: maskSecrets(v.check) } : {}) } });
+    return ok({ folder: f.path, config: { ...v, ...(v.check ? { check: maskSecrets(v.check) } : {}), ...(v.qa ? { qa: maskSecrets(v.qa) } : {}) } });
   }
 
   private async projectsConfigSet(a: Record<string, unknown>): Promise<Result> {
@@ -498,12 +597,46 @@ export class JarvisTools {
     if ('error' in v) return fail(v.error);
     const keys = Object.entries(v.values);
     if (!keys.length) return fail(tr('Nada para mudar.'));
-    const before = folderConfigView(await this.deps.folderConfig(f.path)) as unknown as Record<string, unknown>;
-    const facts = [tr('Mudar o git config --local de {0}:', [f.path]), ...keys.map(([k, val]) => `vboards.${k}: ${maskSecrets(String(before[k] ?? ''))} → ${val ? maskSecrets(val) : tr('(padrão)')}`)];
+    // Subir/publicar sem PIN a cada vez (autoMerge=low, ship=merge, store≠off, ou mexer na política com isso ligado): só
+    // a tela local ou um pedido limpo da página (nunca WhatsApp, voz, VBoards, agendamento ou turno contaminado).
+    const autoMerge = v.values.autoMerge === 'low';
+    const current = await this.deps.folderConfig(f.path);
+    if (policyChangeNeedsPin(current, v.values) && this.tainted()) return fail(tr('vboards.autoMerge=low, ship=merge e a loja só ligam (ou mudam ligados) pela tela local ou por um pedido seu na página, nunca por WhatsApp, voz ou dado de fora. Nada foi feito.'));
+    const before = folderConfigView(current) as unknown as Record<string, unknown>;
+    const facts = [
+      tr('Mudar a configuração de {0}:', [f.path]),
+      ...(autoMerge ? [tr('ATENÇÃO: isto permite subir sem PIN tarefas de risco baixo (push, PR e merge com CI verde, e o deploy do repo).')] : []),
+      ...keys.map(([k, val]) => `vboards.${k}: ${maskSecrets(String(before[k] ?? ''))} → ${val ? maskSecrets(val) : tr('(padrão)')}`),
+    ];
     const refused = await this.gate('projects_config_set', { folder: f.path, keys: keys.map(([k]) => k) }, facts, a.reason);
     if (refused) return fail(refused);
     const err = await this.deps.writeFolderConfig(f.path, v.values);
-    return err ? fail(tr('Não deu para gravar no git config da pasta: {0}', [maskSecrets(err)])) : ok(tr('Gravado no git config da pasta.'));
+    return err ? fail(tr('Não deu para gravar a configuração da pasta: {0}', [maskSecrets(err)])) : ok(tr('Configuração da pasta gravada.'));
+  }
+
+  private projectsDraft(a: Record<string, unknown>): Result {
+    if (!this.deps.projects) return fail(tr('Projeto novo indisponível (chat com agentes desligado).'));
+    const r = this.deps.projects.draft(a);
+    if ('slug' in r) return ok({ slug: r.slug, next: tr('Mostre a spec ao dono; com o ok dele, chame projects_create.'), spec: r.spec });
+    return r.errors.length ? fail([...r.errors, ...r.questions.map((q) => q.question)].join('\n')) : ok({ questions: r.questions, next: tr('Pergunte ao dono o que falta e chame de novo com todas as respostas.') });
+  }
+
+  /** projects_create: SEMPRE cartão crítico (PIN), limpo ou contaminado; os fatos vêm do plano, a spec inteira vai junto. */
+  private async projectsCreate(a: Record<string, unknown>): Promise<Result> {
+    const svc = this.deps.projects;
+    if (!svc) return fail(tr('Projeto novo indisponível (chat com agentes desligado).'));
+    const slug = str(a.slug);
+    const options = parseOptions(a);
+    if ('error' in options) return fail(options.error);
+    const plan = svc.plan(slug, options);
+    if ('error' in plan) return fail(plan.error);
+    const spec = svc.get(slug)?.spec ?? '';
+    const refused = await this.gate('projects_create', { slug, ...options }, svc.facts(plan), a.reason, spec || undefined);
+    if (refused) return fail(refused);
+    const r = svc.start(slug, options);
+    if ('error' in r) return fail(r.error);
+    const end = await r.done;
+    return ok({ slug, root: end.root, steps: end.steps.map((s) => ({ id: s.id, status: s.status, ...(s.note ? { note: s.note } : {}) })) });
   }
 
   // ------------------------------------------------------------------ uso
@@ -521,6 +654,70 @@ export class JarvisTools {
     const folder = str(a.folder);
     const list = (this.deps.metrics?.(since) ?? []).filter((m) => !folder || normPath(m.folder) === normPath(folder) || basename(m.folder).toLowerCase() === folder.toLowerCase());
     return summarizeMetrics(list);
+  }
+
+  /** Projeto pelo produto (id, nome, card) ou pela pasta (caminho ou nome); vazio = todos. */
+  private projectMatch(want: string): (project: string, folder: string) => boolean {
+    const w = want.trim().toLowerCase();
+    const n = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const product = this.deps.products?.().find((p) => [p.id, p.name, p.cardName].some((x) => n(x) === n(w)));
+    return (project, folder) => !w || project.toLowerCase() === w || project === product?.id || normPath(folder) === normPath(w) || basename(folder).toLowerCase() === w;
+  }
+
+  /** projects_status: feito (7 dias), fazendo, a fazer e travado (7 dias) por projeto, do journal; dado de fora. */
+  private projectsStatus(a: Record<string, unknown>): Result {
+    if (!this.deps.journal) return fail(tr('Registro por projeto desligado.'));
+    const now = this.now();
+    const match = this.projectMatch(str(a.project));
+    const ledger = projectLedger(this.deps.journal(now - LEDGER_OPEN_MS), now - 7 * 24 * HOUR).filter((p) => p.folders.some((f) => match(p.project, f)));
+    return ok(wrapUntrusted('journal', str(a.project) || 'todos', JSON.stringify(ledger.map((p) => ({ ...p, done: p.done.slice(0, READ_ITEMS), doing: p.doing.slice(0, READ_ITEMS), todo: p.todo.slice(0, READ_ITEMS), stuck: p.stuck.slice(0, READ_ITEMS) })), null, 1)));
+  }
+
+  /** release_notes: o que foi juntado ou publicado numa pasta (ou produto) desde `since`; dado de fora. */
+  private releaseNotes(a: Record<string, unknown>): Result {
+    if (!this.deps.journal) return fail(tr('Registro por projeto desligado.'));
+    const target = str(a.folder);
+    if (!target) return fail(tr('Diga a pasta ou o produto.'));
+    const since = typeof a.since === 'number' && a.since > 0 ? a.since : this.now() - 7 * 24 * HOUR;
+    const match = this.projectMatch(target);
+    const seen = new Set<string>();
+    const notes = this.deps.journal(since)
+      .filter((e) => (e.stage === 'merged' || e.stage === 'deployed') && match(e.product ?? '', e.folder))
+      .reverse()
+      .filter((e) => {
+        const k = e.ref ?? e.title ?? '';
+        return !seen.has(k) && !!seen.add(k);
+      })
+      .slice(0, 100)
+      .map((e) => ({ title: e.title ?? '', stage: e.stage, at: new Date(e.at).toISOString(), folder: basename(e.folder) }));
+    return ok(wrapUntrusted('journal', target, JSON.stringify({ since: new Date(since).toISOString(), notes }, null, 1)));
+  }
+
+  private async releaseCut(a: Record<string, unknown>): Promise<Result> {
+    const l = this.deps.lojas;
+    const folder = l?.appFolder(str(a.app), this.deps.folders());
+    if (!l || !folder) return fail(tr('App não encontrado: diga a pasta ou o produto.'));
+    return ok(wrapUntrusted('release_cut', str(a.app), JSON.stringify(await l.cut(folder), null, 1)));
+  }
+
+  /** release_submit: cartão crítico com versão e texto nos 3 idiomas; só depois do PIN dispara o submit. */
+  private async releaseSubmit(a: Record<string, unknown>): Promise<Result> {
+    const l = this.deps.lojas;
+    const folder = l?.appFolder(str(a.app), this.deps.folders());
+    if (!l || !folder) return fail(tr('App não encontrado: diga a pasta ou o produto.'));
+    const version = str(a.version);
+    const cut = await l.cut(folder);
+    if (version !== cut.version) return fail(tr('A versão proposta agora é {0}, não {1}: rode release_cut de novo.', [cut.version, version]));
+    const facts = [
+      tr('ENVIAR PARA REVISÃO DA LOJA: {0} versão {1} (público e irreversível)', [basename(folder), cut.version]),
+      tr('Última versão: {0}', [cut.lastVersion ?? tr('(nenhuma)')]),
+      tr('Tarefas na versão: {0}', [cut.items.length]),
+      ...(cut.translated ? [] : [tr('Atenção: en/es estão em português (sem tradução).')]),
+    ];
+    const refused = await this.gate('release_submit', { app: folder, version }, facts, a.reason, [cut.notes.pt, cut.notes.en, cut.notes.es].join('\n\n'));
+    if (refused) return fail(refused);
+    const r = await l.request(folder, { kind: 'submit', version }, true);
+    return 'event' in r ? ok(tr('Disparado: submit da versão {0}. Acompanhe na tela da pasta.', [version])) : fail(r.error);
   }
 
   // ------------------------------------------------------------------ aviso
@@ -733,6 +930,60 @@ export class JarvisTools {
       ),
       t('vboards_refine', 'SAFE. Asks VBoards to refine a schedule card (an agent plans it read-only).', obj({ id: S() }, ['id']), async (a) => data('refine', await api.refine(id(a.id)))),
       t('vboards_summary', 'SAFE. VBoards summary for a date: subtasks, refines and tasks per state.', obj({ date: S('YYYY-MM-DD') }), async (a) => data('summary', await api.summary(date(a.date)))),
+      t('vboards_triage', 'SAFE. Triage of an ideas card (read-only round): valid? duplicate? already done? product/repo, priority, questions for the owner. The result is also saved on the card. Wrapped as untrusted data.', obj({ id: S() }, ['id']), async (a) => {
+        const triage = this.deps.triage;
+        if (!triage) return fail(tr('Triagem desligada.'));
+        const r = await triage.triage(id(a.id));
+        return 'cardId' in r ? data('triage', r) : fail(r.error);
+      }),
+      t('vboards_answer', 'SAFE. The owner answer to the questions of a card waiting for them (triage or refine); re-refines the card. Never approves anything. Answers that came from WhatsApp/voice/schedule are stored as unverified.', obj({ id: S(), answer: S('Numbered answers, e.g. "1) yes 2) no", or one text for all') }, ['id', 'answer']), async (a) => {
+        const triage = this.deps.triage;
+        if (!triage) return fail(tr('Triagem desligada.'));
+        const r = await triage.answer(id(a.id), str(a.answer), !this.tainted());
+        return 'error' in r ? fail(r.error) : ok(r.action === 'refine' ? tr('Resposta registrada: o card vai ser refinado de novo.') : tr('Resposta registrada: a triagem foi refeita.'));
+      }),
+      t('vboards_research', 'SAFE. Read-only research round (web search when the agent has it) for a product: opportunities, competitors, reviews and idea proposals. Wrapped as untrusted data (web content); creating cards from it needs vboards_ideas_create (GATED).', obj({ product: S() }, ['product']), async (a) => {
+        const run = this.deps.research;
+        const product = maskSecrets(str(a.product)).slice(0, 100);
+        if (!run || !product) return fail(tr('Pesquisa desligada ou produto vazio.'));
+        const existing = ((await api.tasks()).tasks as Array<{ title?: unknown }>).flatMap((x) => (typeof x?.title === 'string' ? [x.title] : []));
+        const out = parseResearchOutput(await run(researchPrompt(product, existing)));
+        return out ? data('research', out) : fail(tr('A pesquisa não trouxe um bloco ```json válido.'));
+      }),
+      t(
+        'vboards_ideas_create',
+        `Creates idea cards (status ideas, origin research) from a research. GATED when the turn carries outside data (always the case after vboards_research): the owner sees every idea in full. Max ${RESEARCH_IDEAS_MAX}; ideas that match an existing card are dropped.`,
+        obj({ ideas: { type: 'array', items: obj({ title: S(), description: S() }, ['title']) }, product: S(), projectId: S(), ...REASON }, ['ideas']),
+        async (a) => {
+          const raw = Array.isArray(a.ideas) ? a.ideas.slice(0, RESEARCH_IDEAS_MAX) : [];
+          const mapped = raw.map((x) => ({ title: title((x as Record<string, unknown>)?.title, true)!, description: desc((x as Record<string, unknown>)?.description) ?? '' }));
+          if (!mapped.length) throw new Error(tr('Mande de 1 a {0} ideias.', [RESEARCH_IDEAS_MAX]));
+          const tasks = (await api.tasks()).tasks as Array<{ id?: unknown; title?: unknown }>;
+          const ideas = freshIdeas(mapped, tasks.flatMap((x) => (typeof x?.title === 'string' ? [{ title: x.title, done: false }] : [])));
+          if (!ideas.length) return ok(tr('Todas as ideias já existem no quadro: nada criado.'));
+          if (this.tainted()) {
+            const refused = await this.gate('vboards_ideas_create', { count: ideas.length }, [tr('Criar {0} ideias no VBoards (origem: pesquisa na web), status ideas', [ideas.length])], a.reason, ideas.map((x, i) => `${i + 1}. ${x.title}\n${x.description}`).join('\n\n'));
+            if (refused) return fail(refused);
+          }
+          const made: unknown[] = [];
+          for (const i of ideas) {
+            const body = pick({ title: i.title, description: `${tr('Origem: pesquisa agendada (web). Não verificado.')}\n\n${i.description}`.trim(), status: 'ideas', projectId: str(a.projectId) || undefined });
+            // `origin` é campo novo: um VBoards antigo que recusa (400) ainda recebe o card, só sem o campo.
+            made.push((await api.createTask({ ...body, origin: RESEARCH_ORIGIN }).catch((err: unknown) => (err instanceof VBoardsApiError && err.status === 400 ? api.createTask(body) : Promise.reject(err)))).task);
+          }
+          return data('ideas', made);
+        },
+      ),
+      t(
+        'vboards_research_schedule',
+        'GATED (once). Creates the ready-made schedule "Pesquisar ideias para <product>" (weekly, sends you the research request). Same card as schedule_create.',
+        obj({ product: S(), time: S('HH:MM, default 09:00'), days: { type: 'array', items: { type: 'number' } }, ...REASON }, ['product']),
+        async (a) => {
+          const product = maskSecrets(str(a.product)).slice(0, 100);
+          if (!product) return fail(tr('Diga o produto.'));
+          return this.scheduleCreate({ name: tr('Pesquisar ideias para {0}', [product]).slice(0, 60), mode: 'scheduled', time: str(a.time) || '09:00', days: Array.isArray(a.days) && a.days.length ? a.days : [1], message: researchMessage(product), reason: a.reason });
+        },
+      ),
       t('vboards_approve', 'GATED. Approves the refine plan of a schedule card (its subtasks go to the agents queue).', obj({ id: S(), ...REASON }, ['id']), async (a) => {
         const cardId = id(a.id);
         const refused = await this.gate('vboards_approve', { id: cardId }, [tr('Aprovar o plano do card {0} no VBoards: as subtarefas vão para a fila dos agentes', [cardId])], a.reason);

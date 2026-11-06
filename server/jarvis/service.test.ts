@@ -115,6 +115,7 @@ describe('Jarvis: JarvisService', () => {
     expect(turnOf({ items: [{ seq: 5, at: 0, kind: 'user', text: 'x', from: { agentId: 'ui', name: 'página' } }] })).toEqual({ origin: 'ui', seq: 5 });
     expect(originOf({ items: [{ seq: 1, at: 0, kind: 'user', text: 'x', from: { agentId: 'chat:123', name: 'Ana' } }] })).toBe('agent');
     expect(originOf({ items: [{ seq: 1, at: 0, kind: 'user', text: 'x', from: { agentId: 'qualquer', name: 'Q' } }] })).toBe('agent');
+    expect(turnOf({ items: [{ seq: 6, at: 0, kind: 'user', text: 'x', from: { agentId: 'voice', name: 'voz' } }] })).toEqual({ origin: 'voice', seq: 6 });
   });
 
   it('trocar de provedor começa conversa nova (com a configuração nova); igual não mexe', () => {
@@ -192,6 +193,58 @@ describe('Jarvis: caixa de entrada do WhatsApp', () => {
     await t.all();
     expect(t.say).not.toHaveBeenCalled();
     expect(t.api.ack).toHaveBeenCalledWith('m3', expect.stringContaining('descartada após reinício'));
+  });
+
+  describe('áudio', () => {
+    const setup = { bin: 'w', ffmpeg: 'f', model: 'm', langs: ['pt'] };
+    const audioMsg = (id: string, bytes = 1000) => msg(id, { text: '', audio: { mime: 'audio/ogg', bytes } });
+    function withAudio(list: ReturnType<typeof msg>[], whisper: () => unknown, transcribe = vi.fn(async () => ({ text: ' crie uma tarefa ', lang: 'pt' }))) {
+      const t = inbox(list);
+      const inboxAudio = vi.fn(async () => Buffer.from('ogg'));
+      const box = new JarvisInbox({ api: { ...t.api, inboxAudio }, wa: () => wa, whisper: whisper as never, transcribe, say: t.say as never, send: t.send, now: () => 2_000_000, startedAt: 1_900_000 });
+      return { ...t, box, transcribe, inboxAudio, all: async () => Promise.all(await box.poll()) };
+    }
+
+    it('transcreve local, vira turno do WhatsApp (contaminado) e a resposta começa com "Entendi"; ack depois', async () => {
+      const t = withAudio([audioMsg('a1')], () => setup);
+      await t.all();
+      expect(t.say).toHaveBeenCalledWith('crie uma tarefa', 'whatsapp', 'a1');
+      const reply = ['Entendi: «crie uma tarefa»', '', 'resposta a crie uma tarefa'].join(String.fromCharCode(10));
+      expect(t.order).toEqual(['say a1', `send ${reply}`, `ack a1 ${reply}`]);
+    });
+
+    it('áudio grande: recusa sem baixar nem transcrever', async () => {
+      const t = withAudio([audioMsg('a2', 50 * 1024 * 1024)], () => setup);
+      await t.all();
+      expect(t.inboxAudio).not.toHaveBeenCalled();
+      expect(t.say).not.toHaveBeenCalled();
+      expect(t.send.mock.calls[0][1]).toContain('grande demais');
+      expect(t.api.ack).toHaveBeenCalledTimes(1);
+    });
+
+    it('sem Whisper: responde o que falta, sem rodar o Jarvis', async () => {
+      const t = withAudio([audioMsg('a3')], () => ({ missing: 'whisper-cli.exe (baixe o release)' }));
+      await t.all();
+      expect(t.say).not.toHaveBeenCalled();
+      expect(t.send.mock.calls[0][1]).toContain('falta whisper-cli.exe');
+      expect(t.api.ack).toHaveBeenCalledTimes(1);
+    });
+
+    it('de outro remetente: nem baixa o áudio', async () => {
+      const t = withAudio([msg('a4', { senderJid: '5521888888888@s.whatsapp.net', audio: { mime: 'audio/ogg', bytes: 5 } })], () => setup);
+      await t.all();
+      expect(t.inboxAudio).not.toHaveBeenCalled();
+    });
+
+    it('falha ou silêncio na transcrição: avisa o dono', async () => {
+      const t = withAudio([audioMsg('a5')], () => setup, vi.fn(async () => ({ text: '  ', lang: '' })));
+      await t.all();
+      expect(t.send.mock.calls[0][1]).toContain('Não entendi');
+      const u = withAudio([audioMsg('a6')], () => setup, vi.fn(async () => { throw new Error('boom'); }));
+      await u.all();
+      expect(u.send.mock.calls[0][1]).toContain('boom');
+      expect(u.say).not.toHaveBeenCalled();
+    });
   });
 
   it('sem WhatsApp configurado ou sem token vb_: nem busca', async () => {
