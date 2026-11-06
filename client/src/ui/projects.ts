@@ -73,6 +73,7 @@ export class ProjectWizard implements UiComponent {
   private busy = false;
   private readonly status = h('p', { class: 'ui-rename__hint ui-spawn__status', attrs: { role: 'status', 'aria-live': 'polite' } });
   private readonly stepper: HTMLElement;
+  private readonly stepItems: Array<[View, HTMLElement]>;
   private readonly views: Record<View, HTMLElement>;
   // ideia
   private readonly idea = stop(h('textarea', { class: 'ui-rename__input ui-spawn__prompt', attrs: { rows: 4, maxlength: '2000', placeholder: tr('Ex.: um app que ajuda quem treina em casa a montar a série do dia e acompanhar a evolução.') } })) as HTMLTextAreaElement;
@@ -166,7 +167,8 @@ export class ProjectWizard implements UiComponent {
       ['spec', tr('Spec')],
       ['create', tr('Criar')],
     ];
-    this.stepper = h('ol', { class: 'ui-proj__stepper', attrs: { 'aria-label': tr('Etapas') } }, ...labels.map(([v, text], i) => h('li', { attrs: { 'data-view': v } }, h('span', { class: 'ui-proj__num', text: String(i + 1) }), h('span', { text }))));
+    this.stepItems = labels.map(([v, text], i) => [v, h('li', {}, h('span', { class: 'ui-proj__num', text: String(i + 1) }), h('span', { text }))]);
+    this.stepper = h('ol', { class: 'ui-proj__stepper', attrs: { 'aria-label': tr('Etapas') } }, ...this.stepItems.map(([, li]) => li));
     this.el = h(
       'div',
       { class: 'ui-popover ui-spawn ui-proj', role: 'dialog', tabIndex: -1, attrs: { 'aria-label': tr('Novo projeto'), id: 'ui-projects', popover: 'auto' } },
@@ -220,12 +222,12 @@ export class ProjectWizard implements UiComponent {
     this.view = v;
     for (const [k, el] of Object.entries(this.views)) setHidden(el, k !== v);
     const order: View[] = ['idea', 'questions', 'spec', 'create'];
-    for (const li of this.stepper.querySelectorAll('li')) {
-      const i = order.indexOf(li.getAttribute('data-view') as View);
+    // Sem querySelector/removeAttribute: o construtor roda também nos testes com DOM mínimo.
+    for (const [view, li] of this.stepItems) {
+      const i = order.indexOf(view);
       li.classList.toggle('is-current', i === order.indexOf(v));
       li.classList.toggle('is-past', i < order.indexOf(v));
-      if (i === order.indexOf(v)) li.setAttribute('aria-current', 'step');
-      else li.removeAttribute('aria-current');
+      li.setAttribute('aria-current', i === order.indexOf(v) ? 'step' : 'false');
     }
     this.say('');
   }
