@@ -12154,6 +12154,9 @@ button.ui-diff__line:focus-visible {
 
   .ui-o3d-field {
     flex: 1 1 100%;
+  }
+}
+
 /* ------------------------------------------------------------------ Jarvis em tela cheia (ui/jarvis.ts) */
 .ui-jarvis {
   --jv: var(--st-idle);
