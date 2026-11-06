@@ -428,11 +428,11 @@ const vboards =
               if (!runs || !fresh.length) return;
               const r = runs.create(
                 {
-                  items: fresh.map((t) => ({ text: t.prompt, vboardsTaskId: t.id })),
+                  items: fresh.map((t) => ({ text: t.prompt, vboardsTaskId: t.id, risk: t.risk, riskWhy: t.riskWhy, approvedAt: t.approvedAt })),
                   isolated: true,
                   options: { folder, provider: cfg.provider, permission: 'auto', denyPush: true, limits: { maxCostUsd: cfg.budget, maxTurnMinutes: AUTO_TURN_MINUTES } },
                 },
-                { ...(cfg.check ? { check: cfg.check } : {}), ...(cfg.qa ? { qa: cfg.qa } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}) },
+                { ...(cfg.check ? { check: cfg.check } : {}), ...(cfg.qa ? { qa: cfg.qa } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}), ...(cfg.riskPaths.length ? { riskPaths: cfg.riskPaths } : {}), ...(cfg.riskLines ? { riskLines: cfg.riskLines } : {}) },
               );
               if ('error' in r && r.status !== 409) log.warnOnce(`vboards:auto:${r.error}`, tr('VBoards: não abriu a lista automática de {0} ({1}).', [folder, r.error]));
             },
@@ -550,7 +550,8 @@ const ship = runs
       folderConfig: (f) => readFolderConfig(f),
       products,
       vboards,
-      notify: (title, event) => ntfy.notify(title, event),
+      // Subiu sozinha (vboards.autoMerge=low): o aviso leva o link do PR.
+      notify: (title, event, url) => (event === 'auto' ? void ntfy.sendText(tr('{0}: subiu sozinho, sem PIN (risco baixo; merge com CI verde). PR: {1}', [title, url ?? ''])).catch(() => undefined) : ntfy.notify(title, event)),
       restoreCwd: (id) => chat?.restoreCwd(id),
     })
   : undefined;

@@ -7,12 +7,16 @@ import type { Product } from './products';
 import { answersBlock, findDuplicate, mergeTriage, parseTriageOutput, splitAnswers, stripAnswers, TriageService, triagePrompt, type TriageResult } from './triage';
 
 const fence = (o: unknown) => `texto\n\`\`\`json\n${JSON.stringify(o)}\n\`\`\`\n`;
-const ok = { valid: true, reason: 'clara', product: 'peptpro', repo: 'helix-app', priority: 'high', questions: ['Qual plataforma?'] };
+const ok = { valid: true, reason: 'clara', product: 'peptpro', repo: 'helix-app', priority: 'high', risk: 'high', riskWhy: 'mexe no paywall', questions: ['Qual plataforma?'] };
 
 describe('parseTriageOutput', () => {
   it('valida o JSON e corta os campos', () => {
     expect(parseTriageOutput(fence(ok))).toEqual({ ...ok });
-    expect(parseTriageOutput(fence({ valid: false, reason: 'x', priority: 'urgente', questions: 'não é lista' }))).toEqual({ valid: false, reason: 'x', priority: 'med', questions: [] });
+    expect(parseTriageOutput(fence({ valid: false, reason: 'x', priority: 'urgente', questions: 'não é lista' }))).toEqual({ valid: false, reason: 'x', priority: 'med', risk: 'medium', questions: [] });
+  });
+  it('risk tolerante: low/baixo, high/alto; ausente ou estranho = medium', () => {
+    const risk = (v: unknown) => parseTriageOutput(fence({ valid: true, reason: 'x', risk: v }))?.risk;
+    expect([risk('low'), risk('Baixo'), risk('HIGH'), risk('alto'), risk(undefined), risk('crítico'), risk(3)]).toEqual(['low', 'low', 'high', 'high', 'medium', 'medium', 'medium']);
   });
   it('recusa sem bloco, JSON estragado, valid que não é booleano ou sem motivo', () => {
     for (const bad of ['sem bloco', '```json\n{oops\n```', fence({ valid: 'sim', reason: 'x' }), fence({ valid: true }), fence([1])]) expect(parseTriageOutput(bad)).toBeUndefined();
@@ -36,7 +40,7 @@ describe('detecção de duplicata (pura)', () => {
     expect(findDuplicate('Tela de perfil nova', known)).toBeUndefined();
   });
   it('mergeTriage invalida a duplicata e o já feito que a IA deixou passar', () => {
-    const base: TriageResult = { valid: true, reason: 'ok', priority: 'med', questions: [] };
+    const base: TriageResult = { valid: true, reason: 'ok', priority: 'med', risk: 'medium', questions: [] };
     const dup = mergeTriage(base, 'Login com Google no app', known);
     expect(dup).toMatchObject({ valid: false, duplicateOf: 'a1' });
     const done = mergeTriage(base, 'Corrigir cálculo das doses', known);

@@ -13,7 +13,7 @@ import { CARD_TEXT_MAX, JarvisTools, NOTIFY_PER_HOUR, RUNS_PER_HOUR, SPAWN_PER_H
 const JID = 'chat:jarvis';
 type Answer = 'allow' | 'deny' | 'timeout';
 
-const cfg = (o: Partial<FolderConfig> = {}): FolderConfig => ({ auto: false, provider: 'claude', budget: 3, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off', ciMinutes: 30, ...o });
+const cfg = (o: Partial<FolderConfig> = {}): FolderConfig => ({ auto: false, provider: 'claude', budget: 3, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off', ciMinutes: 30, autoMerge: 'off', riskPaths: [], ...o });
 
 function run(o: Partial<ChatRun> = {}): ChatRun {
   return {
@@ -420,7 +420,7 @@ describe('Jarvis: projeto novo', () => {
 
 describe('Jarvis: runs_ship (sempre cartão crítico)', () => {
   const SHA = 'a'.repeat(40);
-  const preview = { folder: 'C:\\proj', owner: 'acme', repo: 'api', remote: 'origin', base: 'main', branch: 'agentic/lista-r1', sha: SHA, mode: 'merge' as const, deploy: 'workflow:deploy.yml', ciMinutes: 30, stat: ' a.ts | 2 ++', files: 2, added: 2, removed: 0, gate: 'pass' as const, risky: ['.husky/pre-push'] };
+  const preview = { folder: 'C:\\proj', owner: 'acme', repo: 'api', remote: 'origin', base: 'main', branch: 'agentic/lista-r1', sha: SHA, mode: 'merge' as const, deploy: 'workflow:deploy.yml', ciMinutes: 30, stat: ' a.ts | 2 ++', files: 2, added: 2, removed: 0, gate: 'pass' as const, risky: ['.husky/pre-push'], risk: 'high' as const, riskWhy: ['CI/hooks'] };
   const shipFake = (ship?: ChatRun['ship']) => ({
     prepare: vi.fn(async () => preview),
     approve: vi.fn(async () => ({ run: run() })),
@@ -529,6 +529,45 @@ describe('triagem, perguntas e pesquisa (Jarvis)', () => {
     await s.call('vboards_research_schedule', { product: 'PeptPro' });
     expect(s.cards.map((c) => c.tool)).toEqual(['Jarvis · schedule_create']);
     expect(s.triggers.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Pesquisar ideias para PeptPro', do: expect.objectContaining({ kind: 'send', message: expect.stringContaining('vboards_research') }) }), { trusted: 'jarvis' });
+  });
+});
+
+describe('projects_config_set: vboards.autoMerge (subir sem PIN)', () => {
+  it('turno limpo da página: só com o cartão crítico, que diz com todas as letras o que libera', async () => {
+    const denied = setup('deny');
+    expect((await denied.call('projects_config_set', { folder: 'proj', values: { autoMerge: 'low' } })).isError).toBe(true);
+    expect(denied.cards).toHaveLength(1);
+    expect(denied.cards[0].critical).toBe(true);
+    expect(denied.cards[0].body).toContain('isto permite subir sem PIN tarefas de risco baixo');
+    expect(denied.writeFolderConfig).not.toHaveBeenCalled();
+    const allowed = setup('allow');
+    expect((await allowed.call('projects_config_set', { folder: 'proj', values: { autoMerge: 'low' } })).isError).toBeFalsy();
+    expect(allowed.writeFolderConfig).toHaveBeenCalledWith(expect.stringContaining('proj'), { autoMerge: 'low' });
+  });
+
+  for (const origin of ['whatsapp', 'voice', 'vboards', 'schedule', 'agent'] as const) {
+    it(`origem ${origin}: nunca liga, nem com o cartão aprovado`, async () => {
+      const s = setup('allow');
+      s.setTurn({ origin, seq: 1 });
+      const r = await s.call('projects_config_set', { folder: 'proj', values: { autoMerge: 'low' } });
+      expect(r.isError).toBe(true);
+      expect(s.cards).toHaveLength(0);
+      expect(s.writeFolderConfig).not.toHaveBeenCalled();
+    });
+  }
+
+  it('desligar (off) segue o caminho normal do cartão', async () => {
+    const s = setup('allow');
+    s.setTurn({ origin: 'whatsapp', seq: 1 });
+    expect((await s.call('projects_config_set', { folder: 'proj', values: { autoMerge: 'off' } })).isError).toBeFalsy();
+    expect(s.cards).toHaveLength(1);
+    expect(s.writeFolderConfig).toHaveBeenCalledWith(expect.stringContaining('proj'), { autoMerge: 'off' });
+  });
+
+  it('runs_ship: o cartão mostra o risco final e o motivo', async () => {
+    const s = setup('deny', { ship: { prepare: vi.fn(async () => ({ folder: 'proj', owner: 'acme', repo: 'api', remote: 'origin', base: 'main', branch: 'agentic/lista-r1', sha: 'a'.repeat(40), mode: 'merge' as const, deploy: 'none', ciMinutes: 30, stat: '', files: 1, added: 1, removed: 0, gate: 'pass' as const, risky: [], risk: 'high' as const, riskWhy: ['arquivo .env: .env'] })), approve: vi.fn(), status: vi.fn() } });
+    await s.call('runs_ship', { id: 'r1' });
+    expect(s.cards[0].body).toContain('Risco: alto (arquivo .env: .env)');
   });
 });
 

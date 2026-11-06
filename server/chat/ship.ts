@@ -9,14 +9,17 @@
 // - Cada etapa vai ao registro (journal.ts) e ao VBoards (stage + prUrl em todas as tarefas da lista); avisos no
 //   celular: pr, ci_failed, no_ci, deployed (e failed). Depois do deploy: descarta a cópia e faz fast-forward do
 //   checkout local se ele estiver limpo e na base (senão só avisa).
+// - vboards.autoMerge=low (A4): a lista automática do VBoards sobe SOZINHA, sem PIN, só se autoShipBlock deixar (plano
+//   aprovado no VBoards, portão sem volta de correção, risco final baixo); o merge continua exigindo CI verde.
 import { basename } from 'node:path';
 import { tr } from '../../shared/i18n';
-import { sameApproval, shipActive, shipApprovalOf, type ChatRun, type RunShip, type ShipApproval, type ShipPreview, type ShipStep } from '../../shared/runs';
+import { sameApproval, shipActive, shipApprovalOf, type ChatRun, type RiskLevel, type RunShip, type ShipApproval, type ShipPreview, type ShipStep } from '../../shared/runs';
 import { errMsg } from '../log';
 import { productOfFolder, type Product, type RepoRole } from '../vboards/products';
 import type { FolderConfig } from '../vboards/vboards';
 import { ciVerdict, deployVerdict, GitHubError, parseRemote, type GitHub } from './github';
 import type { JournalStage } from './journal';
+import { diffRisk, finalRisk, maxRisk, riskLabel } from './risk';
 import { mergeMessage, type RunService } from './runs';
 import type { ShipWorktreeOps } from './types';
 import { riskyFiles } from './worktree';
@@ -28,7 +31,8 @@ export const NO_CI_GRACE_MS = 3 * 60_000;
 const ROLE_ORDER: Record<RepoRole, number> = { server: 0, web: 1, app: 2, other: 3 };
 
 export type ShipGitHub = Pick<GitHub, 'openPr' | 'pr' | 'checks' | 'mergePr' | 'workflowRuns'>;
-export type ShipEvent = 'pr' | 'ci_failed' | 'no_ci' | 'deployed' | 'failed';
+/** 'auto': o PR de uma subida sem PIN (vboards.autoMerge=low), com o link. */
+export type ShipEvent = 'pr' | 'ci_failed' | 'no_ci' | 'deployed' | 'failed' | 'auto';
 
 export interface ShipDeps {
   runs: Pick<RunService, 'get' | 'list' | 'persist' | 'journalShipped'>;
@@ -38,7 +42,7 @@ export interface ShipDeps {
   folderConfig: (folder: string) => Promise<FolderConfig>;
   products?: () => Product[];
   vboards?: { settle?(id: string, s: { state: 'done' | 'failed' | 'review'; stage?: string; summary?: string; prUrl?: string }): boolean };
-  notify?: (title: string, event: ShipEvent) => void;
+  notify?: (title: string, event: ShipEvent, url?: string) => void;
   /** Agentes dos itens voltam à pasta do projeto quando a cópia some. */
   restoreCwd?: (agentId: string) => void;
   /** Depois do deployed (chat/store.ts afterDeployed: OTA/build da loja nos apps). */
@@ -52,6 +56,8 @@ type Outcome = 'next' | 'wait' | 'end';
 export class ShipService {
   private readonly now: () => number;
   private readonly busy = new Set<string>();
+  /** Listas que já existiam no start() (vindas do runs.json): o "Subir" sozinho não vale para elas. */
+  private readonly boot = new Set<string>();
   private timer?: ReturnType<typeof setInterval>;
 
   constructor(private readonly deps: ShipDeps) {
@@ -64,6 +70,8 @@ export class ShipService {
    * juntado (o deploy); o que ainda vai fazer push ou merge volta a esperar o PIN ('reapprove').
    */
   start(pollMs = SHIP_POLL_MS): void {
+    // Listas lidas do runs.json (de antes do reinício) nunca sobem sozinhas: o que está lá não prova nada.
+    for (const r of this.deps.runs.list()) this.boot.add(r.id);
     this.afterRestart();
     clearInterval(this.timer);
     this.timer = setInterval(() => void this.tick(), pollMs);
@@ -92,6 +100,8 @@ export class ShipService {
   /** Uma volta em cada subida em andamento (os testes chamam direto). */
   async tick(): Promise<void> {
     await Promise.all(this.deps.runs.list().filter((r) => shipActive(r.ship) && !r.ship!.needs).map((r) => this.advance(r)));
+    // Subir sozinho: só lista nascida neste processo (nada lido do runs.json depois de um reinício) e ainda sem subida.
+    await Promise.all(this.deps.runs.list().filter((r) => r.auto && !r.ship && !r.autoShip && r.state === 'done' && !this.boot.has(r.id)).map((r) => this.autoShip(r)));
   }
 
   status(id: string): RunShip | undefined {
@@ -125,10 +135,12 @@ export class ShipService {
     const files = scan.names;
     if (!files.length) return { status: 409, error: tr('Nada para subir: a cópia não mudou nada desde a base.') };
     const secrets = scan.secrets;
+    const diff = await this.deps.worktrees.diff(w);
     if (secrets.length) return { status: 409, error: tr('Não sobe: o diff tem o que parece segredo: {0}. Tire do commit (e troque a chave, se for real).', [secrets.slice(0, 10).join(', ')]) };
     const sum = await this.deps.worktrees.summary(w);
     const gate = run.items.some((i) => i.gate === 'fail') ? 'fail' : run.items.some((i) => i.gate === 'pass') ? 'pass' : 'none';
-    return { folder: run.options.folder, owner: gh.owner, repo: gh.repo, remote, base, branch: w.branch, sha: c.sha, mode: cfg.ship, deploy: cfg.deploy ?? repoCfg?.deploy ?? 'none', ciMinutes: cfg.ciMinutes, stat: sum.stat, files: sum.files, added: sum.added, removed: sum.removed, gate, risky: riskyFiles(files) };
+    const risk = finalRisk(run.items, diffRisk(diff, { reworked: run.items.some((i) => i.retried), extra: cfg.riskPaths, maxLines: cfg.riskLines, files }));
+    return { folder: run.options.folder, owner: gh.owner, repo: gh.repo, remote, base, branch: w.branch, sha: c.sha, mode: cfg.ship, deploy: cfg.deploy ?? repoCfg?.deploy ?? 'none', ciMinutes: cfg.ciMinutes, stat: sum.stat, files: sum.files, added: sum.added, removed: sum.removed, gate, risky: riskyFiles(files), risk: risk.level, riskWhy: risk.why };
   }
 
   /**
@@ -137,9 +149,12 @@ export class ShipService {
    * needs='no-ci' e `noCi`: a aprovação extra do merge. Com needs='reapprove' (reinício): confere de novo contra a
    * cópia e a pasta e continua de onde parou.
    */
-  async approve(id: string, b: ShipApproval): Promise<{ run: ChatRun } | Fail> {
+  async approve(id: string, b: ShipApproval, opts: { auto?: boolean } = {}): Promise<{ run: ChatRun } | Fail> {
     const run = this.deps.runs.get(id);
     if (!run) return { status: 404, error: tr('lista não encontrada') };
+    // Sem PIN (vboards.autoMerge): só uma subida nova; retomada depois do reinício, merge sem CI e hooks/CI mudados
+    // pedem sempre o PIN. O conjunto aprovado passa pela mesma comparação abaixo.
+    if (opts.auto && (run.ship || b.noCi || b.risky.length)) return { status: 409, error: tr('Sem PIN só sobe uma lista nova, sem merge sem CI e sem mudança em hooks/CI.') };
     const changed = (): Fail => ({ status: 409, error: tr('O que o cartão mostrou mudou (repositório, base, remoto, modo, deploy, hooks/CI ou SHA): prepare e aprove de novo.') });
     const s = run.ship;
     if (s?.needs === 'no-ci' || b.noCi) {
@@ -166,7 +181,7 @@ export class ShipService {
     }
     const now = this.now();
     const parentSha = run.ship?.branch === p.branch ? run.ship.pushedSha : undefined;
-    run.ship = { step: 'waiting', mode: p.mode === 'merge' ? 'merge' : 'pr', sha: p.sha, owner: p.owner, repo: p.repo, remote: p.remote, base: p.base, branch: p.branch, deploy: p.deploy, risky: [...p.risky], ciMinutes: p.ciMinutes, startedAt: now, stepAt: now, ...(parentSha ? { parentSha } : {}) };
+    run.ship = { step: 'waiting', mode: p.mode === 'merge' ? 'merge' : 'pr', sha: p.sha, owner: p.owner, repo: p.repo, remote: p.remote, base: p.base, branch: p.branch, deploy: p.deploy, risky: [...p.risky], ciMinutes: p.ciMinutes, startedAt: now, stepAt: now, ...(parentSha ? { parentSha } : {}), ...(opts.auto ? { auto: true } : {}) };
     this.deps.runs.persist();
     void this.advance(run);
     return { run };
@@ -240,7 +255,7 @@ export class ShipService {
         s.prUrl = pr.url;
         this.deps.runs.journalShipped(run, 'pr');
         this.settle(run, s.mode === 'pr' ? 'done' : 'review', 'pr');
-        this.notify(run, s, 'pr');
+        this.notify(run, s, s.auto ? 'auto' : 'pr');
         if (s.mode === 'pr') {
           s.stepAt = this.now();
           return 'end';
@@ -374,8 +389,50 @@ export class ShipService {
   private notify(run: ChatRun, s: RunShip, event: ShipEvent): void {
     if (s.notified?.includes(event)) return;
     s.notified = [...(s.notified ?? []), event];
-    this.deps.notify?.(basename(run.options.folder) || run.options.folder, event);
+    this.deps.notify?.(basename(run.options.folder) || run.options.folder, event, s.prUrl);
   }
+
+  /**
+   * vboards.autoMerge=low: a lista automática que terminou é avaliada UMA vez (run.autoShip). Se autoShipBlock deixar
+   * (antes pelo risco da IA, depois pelo do diff no cartão), sobe sem PIN; senão guarda o motivo e espera o PIN.
+   */
+  async autoShip(run: ChatRun): Promise<void> {
+    // Marcada já no começo: um relógio seguinte não repete, e um reinício no meio deixa como estava (com PIN).
+    run.autoShip = { at: this.now() };
+    const blocked = (why: string) => {
+      run.autoShip = { at: this.now(), blocked: why };
+      this.deps.runs.persist();
+    };
+    const cfg = await this.deps.folderConfig(run.options.folder).catch(() => undefined);
+    // Desligado: só fica marcada (ligar depois não sobe as listas antigas).
+    if (cfg?.autoMerge !== 'low') return void this.deps.runs.persist();
+    const pre = autoShipBlock(run, cfg, maxRisk(...run.items.map((i) => i.risk ?? 'medium')));
+    if (pre) return blocked(pre);
+    const p = await this.prepare(run.id);
+    if ('error' in p) return blocked(p.error);
+    const why = autoShipBlock(run, cfg, p.risk);
+    if (why) return blocked(`${why} ${p.riskWhy.join('; ')}`.trim());
+    if (p.risky.length) return blocked(tr('O diff muda hooks/CI ({0}): sobe só com PIN.', [p.risky.join(', ')]));
+    const r = await this.approve(run.id, shipApprovalOf(p), { auto: true });
+    if ('error' in r) return blocked(r.error);
+    this.deps.runs.journalShipped(run, 'auto');
+  }
+}
+
+/**
+ * Pura: por que esta lista NÃO sobe sozinha (sem PIN), ou undefined. Exige TODAS: vboards.autoMerge=low e ship=merge;
+ * lista automática do VBoards; cada item com o plano aprovado no VBoards (approvedAt), em 'review', aprovado no portão
+ * e sem volta de correção; risco final baixo. O CI verde é cobrado depois, na etapa 'ci' (no-ci nunca passa sem PIN).
+ */
+export function autoShipBlock(run: Pick<ChatRun, 'auto' | 'items'>, cfg: Pick<FolderConfig, 'ship' | 'autoMerge'>, risk: RiskLevel): string | undefined {
+  if (cfg.autoMerge !== 'low') return tr('vboards.autoMerge desligado: sobe só com PIN.');
+  if (cfg.ship !== 'merge') return tr('vboards.ship não é merge: sobe só com PIN.');
+  if (!run.auto) return tr('Só a lista automática do VBoards (com portão) sobe sozinha.');
+  if (run.items.some((i) => !i.vboardsTaskId || !i.approvedAt)) return tr('Plano sem aprovação registrada no VBoards (approvedAt): sobe só com PIN.');
+  if (run.items.some((i) => i.state !== 'review' || i.gate !== 'pass')) return tr('Nem todo item passou no portão: sobe só com PIN.');
+  if (run.items.some((i) => i.retried)) return tr('Um item precisou de volta de correção no portão: sobe só com PIN.');
+  if (risk !== 'low') return tr('Risco {0}: sobe só com PIN.', [riskLabel(risk)]);
+  return undefined;
 }
 
 const samePath = (a: string, b: string): boolean => a.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase() === b.replace(/[\\/]+/g, '/').replace(/\/$/, '').toLowerCase();

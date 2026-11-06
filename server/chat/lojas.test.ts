@@ -10,7 +10,7 @@ import { bumpVersion, parseTranslation, pinRequired, releaseCut, StoreService, s
 
 const TOKEN = `github_pat_${'T'.repeat(40)}`;
 const FOLDER = 'D:/Projects/peptpro/helix-app';
-const cfg = (o: Partial<FolderConfig> = {}): FolderConfig => ({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', copy: [], ship: 'merge', ciMinutes: 30, store: 'ota+build', storeWorkflow: 'store.yml', ...o });
+const cfg = (o: Partial<FolderConfig> = {}): FolderConfig => ({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', copy: [], ship: 'merge', ciMinutes: 30, autoMerge: 'off', riskPaths: [], store: 'ota+build', storeWorkflow: 'store.yml', ...o });
 const products: Product[] = [{ id: 'peptpro', name: 'PeptPro', cardName: 'PeptPro', repos: [{ path: FOLDER, role: 'app' }, { path: 'D:/Projects/peptpro/helix-server', role: 'server' }] }];
 const entry = (o: Partial<JournalEntry>): JournalEntry => ({ at: 1, folder: FOLDER, stage: 'deployed', ...o });
 

@@ -10,6 +10,19 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Risco e merge automático
+
+- **Risco de cada tarefa:** o Refinar e a triagem devolvem `risk` (baixo, médio ou alto) e o motivo; o diff ganha um
+  risco calculado: alto em `.github/`, `.husky/`, `.githooks/`, migrations, login/pagamento/assinatura, `.env`,
+  lockfiles, dependências, plugins do `app.json` e `eas.json`, e nos caminhos de `vboards.riskPaths`; médio acima de
+  `vboards.riskLines` linhas (padrão 300) ou com volta de correção no portão. Vale o maior entre a IA e o diff, e o
+  calculado nunca é rebaixado. O risco aparece no relatório do portão e num selo no cartão do Subir.
+- **Merge automático (`vboards.autoMerge=low`, desligado por padrão):** a lista automática do VBoards sobe sozinha, sem
+  PIN, só se tudo valer: `vboards.ship=merge`, plano aprovado no VBoards (`approvedAt`), portão aprovado sem volta de
+  correção, risco final baixo e CI de PR verde. Repo sem CI de PR nunca sobe sozinho. Ao subir sozinho, avisa no celular
+  com o link do PR e registra "auto" no registro por projeto; quando não sobe, o cartão diz por quê.
+- **Só liga pela tela local** (com confirmação) **ou pelo cartão com PIN do Jarvis**, num pedido seu pela página:
+  WhatsApp, voz, VBoards e agendamentos nunca ligam.
 ### Projeto novo a partir do molde
 
 - **Novo projeto:** botão na barra do topo com um assistente em 4 etapas: a ideia, as perguntas do briefing (nome,

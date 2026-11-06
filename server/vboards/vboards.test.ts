@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentInfo } from '../../shared/types';
 import { setQuiet } from '../log';
-import { baseFromUrl, decideCompletion, matchFolders, parseFolderConfig, reportKey, taskFolders, parseRefineOutput, parseRefines, refinePrompt, REFINE_LIMITS, readFolderConfig, resolveConfig, validateFolderConfig, writeFolderConfig, REVIEW_SUMMARY_MAX, SUMMARY_MAX, TodoTracker, TODOS_QUIET_MS, VBoardsService, type FolderConfig } from './vboards';
+import { baseFromUrl, decideCompletion, matchFolders, parseFolderConfig, reportKey, taskFolders, parseRefineOutput, parseRefines, taskRisk, refinePrompt, REFINE_LIMITS, readFolderConfig, resolveConfig, validateFolderConfig, writeFolderConfig, REVIEW_SUMMARY_MAX, SUMMARY_MAX, TodoTracker, TODOS_QUIET_MS, VBoardsService, type FolderConfig } from './vboards';
 
 setQuiet(true);
 const flush = () => new Promise((ok) => setTimeout(ok, 0));
@@ -405,10 +405,10 @@ describe('configuração da pasta (git config --local vboards.*)', () => {
   it('padrões: desligado, claude, US$ 2, revisor claude com sonnet; agy é o Antigravity', () => {
     expect(parseFolderConfig('vboards.qa npx playwright test')).toMatchObject({ qa: 'npx playwright test' });
     expect(validateFolderConfig({ qa: 'npx playwright test' })).toEqual({ values: { qa: 'npx playwright test' } });
-    expect(parseFolderConfig(undefined)).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off', ciMinutes: 30 });
+    expect(parseFolderConfig(undefined)).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off', ciMinutes: 30, autoMerge: 'off', riskPaths: [] });
     const out = 'vboards.card PostsBuilder\nvboards.auto TRUE\nvboards.provider agy\nvboards.budget 0.75\nvboards.check npm ci && npm test\nvboards.reviewer codex\nvboards.copy .env, config/local.json, ../fora, /etc/passwd';
-    expect(parseFolderConfig(out)).toEqual({ card: 'PostsBuilder', auto: true, provider: 'antigravity', budget: 0.75, check: 'npm ci && npm test', reviewer: 'codex', copy: ['.env', 'config/local.json'], ship: 'off', ciMinutes: 30 });
-    expect(parseFolderConfig('vboards.auto yes\nvboards.budget -1\nvboards.provider gpt\nvboards.reviewermodel opus')).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'opus', copy: [], ship: 'off', ciMinutes: 30 });
+    expect(parseFolderConfig(out)).toEqual({ card: 'PostsBuilder', auto: true, provider: 'antigravity', budget: 0.75, check: 'npm ci && npm test', reviewer: 'codex', copy: ['.env', 'config/local.json'], ship: 'off', ciMinutes: 30, autoMerge: 'off', riskPaths: [] });
+    expect(parseFolderConfig('vboards.auto yes\nvboards.budget -1\nvboards.provider gpt\nvboards.reviewermodel opus')).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'opus', copy: [], ship: 'off', ciMinutes: 30, autoMerge: 'off', riskPaths: [] });
   });
 });
 
@@ -419,7 +419,7 @@ describe('abertura automática (opt-in)', () => {
     { cardId: 'c2', subtaskId: 's1', text: 'X', cardTitle: 'outro' },
     { cardId: 'c3', subtaskId: 's1', text: 'Y', cardTitle: 'Agentic Office' },
   ];
-  const cfg = (auto: boolean): FolderConfig => ({ auto, provider: 'codex', budget: 1, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off', ciMinutes: 30 });
+  const cfg = (auto: boolean): FolderConfig => ({ auto, provider: 'codex', budget: 1, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off', ciMinutes: 30, autoMerge: 'off', riskPaths: [] });
   function setup(withAuto = true) {
     const fetchMock = vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify(String(url).includes('/api/agent-tasks?') ? { tasks } : { ok: true }), { status: 200 }));
     const auto = vi.fn();
@@ -515,8 +515,8 @@ describe('Refinar (plano só de leitura)', () => {
   const fence = (o: unknown) => `Li o repositório.\n\`\`\`json\n${JSON.stringify(o)}\n\`\`\``;
   it('lê o último bloco json, valida as formas e corta nos limites', () => {
     const good = { plan: 'Mexer em a.ts', questions: ['Qual tela?'], subtasks: ['Criar rota', 'Testar'] };
-    expect(parseRefineOutput(`${fence({ plan: 'velho', subtasks: [] })}\n${fence(good)}`)).toEqual(good);
-    expect(parseRefineOutput(fence({ plan: 'só plano' }))).toEqual({ plan: 'só plano', questions: [], subtasks: [] });
+    expect(parseRefineOutput(`${fence({ plan: 'velho', subtasks: [] })}\n${fence(good)}`)).toEqual({ ...good, risks: [{ risk: 'medium' }, { risk: 'medium' }] });
+    expect(parseRefineOutput(fence({ plan: 'só plano' }))).toEqual({ plan: 'só plano', questions: [], subtasks: [], risks: [] });
     expect(parseRefineOutput(JSON.stringify(good))).toBeUndefined();
     expect(parseRefineOutput('```json\n{quebrado\n```')).toBeUndefined();
     expect(parseRefineOutput(fence({ plan: 1, subtasks: [] }))).toBeUndefined();
@@ -529,6 +529,25 @@ describe('Refinar (plano só de leitura)', () => {
     expect(big.questions[0].length).toBeLessThanOrEqual(REFINE_LIMITS.question);
     expect(big.subtasks).toHaveLength(REFINE_LIMITS.subtasks);
     expect(big.subtasks[0].length).toBeLessThanOrEqual(REFINE_LIMITS.subtask);
+    expect(big.risks).toHaveLength(REFINE_LIMITS.subtasks);
+  });
+  it('subtarefa com risco: {text, risk, riskWhy} (tolerante), texto puro = medium, alinhado com subtasks', () => {
+    const r = parseRefineOutput(fence({ plan: 'p', subtasks: [{ text: 'Trocar cor do botão', risk: 'low', riskWhy: 'só estilo' }, 'Ajustar texto', { text: 'Mexer no paywall', risk: 'ALTO' }, { risk: 'low' }, { text: 'x', risk: 'talvez' }] }))!;
+    expect(r.subtasks).toEqual(['Trocar cor do botão', 'Ajustar texto', 'Mexer no paywall', 'x']);
+    expect(r.risks).toEqual([{ risk: 'low', riskWhy: 'só estilo' }, { risk: 'medium' }, { risk: 'high' }, { risk: 'medium' }]);
+    expect(refinePrompt({ cardTitle: 'C', description: 'd', subtasks: [] })).toContain('"risk": "low|medium|high"');
+  });
+  it('tarefa da fila: risk/riskWhy/approvedAt tolerantes (sem approvedAt válido = ausente)', () => {
+    expect(taskRisk({ risk: 'low', riskWhy: 'estilo', approvedAt: '2026-11-06T10:00:00Z' })).toEqual({ risk: 'low', riskWhy: 'estilo', approvedAt: '2026-11-06T10:00:00.000Z' });
+    expect(taskRisk({ risk: 'xyz', approvedAt: 'ontem' })).toEqual({ risk: 'medium' });
+    expect(taskRisk({ approvedAt: 0 })).toEqual({});
+    expect(taskRisk({ approvedAt: 1_700_000_000_000 }).approvedAt).toBe(new Date(1_700_000_000_000).toISOString());
+  });
+  it('vboards.autoMerge (off padrão | low), riskPaths e riskLines', () => {
+    expect(parseFolderConfig('vboards.automerge low\nvboards.riskpaths src/core/**, *.tf\nvboards.risklines 120')).toMatchObject({ autoMerge: 'low', riskPaths: ['src/core/**', '*.tf'], riskLines: 120 });
+    expect(parseFolderConfig('vboards.automerge sim')).toMatchObject({ autoMerge: 'off', riskPaths: [] });
+    expect(validateFolderConfig({ autoMerge: 'low', riskPaths: 'a/**, *.sql', riskLines: '50' })).toEqual({ values: { autoMerge: 'low', riskPaths: 'a/**, *.sql', riskLines: '50' } });
+    for (const bad of [{ autoMerge: 'medium' }, { autoMerge: 'high' }, { riskLines: '0' }, { riskLines: 'x' }]) expect(validateFolderConfig(bad)).toHaveProperty('error');
   });
 
   it('pedidos da fila: ausentes (VBoards antigo) ou estragados = nenhum; o prompt leva card, descrição e subtarefas', () => {
@@ -565,7 +584,7 @@ describe('Refinar (plano só de leitura)', () => {
       folders: async () => o.folders ?? ['/p/payposts-web', '/p/outro'],
       cardOf: async (f) => (f.endsWith('payposts-web') ? 'PostsBuilder' : undefined),
       chat: { open: () => ({ agentId: 'chat:1' }) },
-      folderConfig: async () => ({ auto: false, provider: 'codex', budget: 1, reviewer: 'claude', copy: [], ship: 'off', ciMinutes: 30 }),
+      folderConfig: async () => ({ auto: false, provider: 'codex', budget: 1, reviewer: 'claude', copy: [], ship: 'off', ciMinutes: 30, autoMerge: 'off', riskPaths: [] }),
       refine,
       notify,
       fetch: fetchMock as unknown as typeof fetch,
@@ -583,7 +602,7 @@ describe('Refinar (plano só de leitura)', () => {
     expect(s.svc.refineList()).toMatchObject([{ cardId: 'c9', state: 'running' }]);
     s.finish();
     await settle();
-    expect(s.posts[1]).toEqual({ email: 'eu@x', cardId: 'c9', status: 'ready', plan: 'P', questions: [], subtasks: ['s1'] });
+    expect(s.posts[1]).toEqual({ email: 'eu@x', cardId: 'c9', status: 'ready', plan: 'P', questions: [], subtasks: ['s1'], risks: [{ risk: 'medium' }] });
     expect(s.notify).toHaveBeenCalledWith('Posts Builder', 'ready');
     expect(s.svc.refineList()).toMatchObject([{ cardId: 'c9', state: 'ready' }]);
   });

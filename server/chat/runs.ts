@@ -26,6 +26,7 @@ import type { Provider } from '../../shared/types';
 import type { ChatOpener } from '../vboards/vboards';
 import type { QuotaBlock } from './quota';
 import { fixRequest, gatePassed, gateReport, type CheckResult, type QaResult, type ReviewResult } from './gate';
+import { diffRisk, finalRisk, parseRisk } from './risk';
 import type { ChatService } from './service';
 import { appendJournal, trimJournal, type JournalStage } from './journal';
 import type { WorktreeOps } from './types';
@@ -282,7 +283,10 @@ export class RunService {
       if (itemPrompt({ context }, text).length > CHAT_TEXT_MAX) return bad(tr('Item longo demais: contexto e item passam de {0} caracteres.', [CHAT_TEXT_MAX]));
       const task = typeof o.vboardsTaskId === 'string' && o.vboardsTaskId ? o.vboardsTaskId : undefined;
       if (task && !this.deps.vboards) return bad(tr('VBoards desligado: a lista não pode ter tarefas dele.'));
-      items.push({ text, ...(task ? { vboardsTaskId: task } : {}), state: 'pending' });
+      // Risco e aprovação do plano só vêm do servidor (a abertura automática do VBoards), nunca do corpo do pedido.
+      const risk = auto && typeof o.risk === 'string' ? { risk: parseRisk(o.risk), ...(typeof o.riskWhy === 'string' && o.riskWhy ? { riskWhy: o.riskWhy } : {}) } : {};
+      const approvedAt = auto && typeof o.approvedAt === 'string' && o.approvedAt ? { approvedAt: o.approvedAt } : {};
+      items.push({ text, ...(task ? { vboardsTaskId: task } : {}), ...risk, ...approvedAt, state: 'pending' });
     }
     const given = (b.options && typeof b.options === 'object' ? b.options : {}) as Record<string, unknown>;
     const options = Object.fromEntries(OPTION_KEYS.filter((k) => given[k] !== undefined).map((k) => [k, given[k]])) as unknown as RunAgentOptions;
@@ -685,6 +689,7 @@ export class RunService {
     let checks: CheckResult | undefined;
     let review: ReviewResult | undefined;
     let qa: QaResult | undefined;
+    let diff = '';
     try {
       if (auto.check && this.deps.gate) checks = await this.deps.gate.checks(auto.check, w.path);
       // QA visual: depois do check (e só se ele passou); falhar só avisa no relatório, não reprova.
@@ -692,7 +697,7 @@ export class RunService {
         qa = await this.deps.gate.qa(auto.qa, w.path, this.itemQaDir(run, item)!).catch((err): QaResult => ({ ok: false, tail: errMsg(err), shots: [] }));
         item.shots = qa.shots;
       }
-      const diff = (await this.deps.worktrees?.diff(w)) ?? '';
+      diff = (await this.deps.worktrees?.diff(w)) ?? '';
       if (diff.trim() && this.deps.gate) review = await this.deps.gate.review(auto, diff);
     } catch (err) {
       checks = { ok: false, tail: errMsg(err) };
@@ -707,7 +712,7 @@ export class RunService {
       // Uma volta só: o próximo fim de rodada (turnEnded → finish) passa de novo pelo portão e termina em 'review'.
       if (this.deps.chat.send(agentId, { text: fixRequest(checks, review) }) === 'ok') return;
     }
-    item.report = gateReport({ branch: w.branch, checks, qa, review, summary: this.deps.chat.lastReply(agentId), retried: item.retried, missing: w.missing });
+    item.report = gateReport({ branch: w.branch, checks, qa, review, summary: this.deps.chat.lastReply(agentId), retried: item.retried, missing: w.missing, risk: finalRisk([item], diffRisk(diff, { reworked: item.retried, extra: auto.riskPaths, maxLines: auto.riskLines })) });
     item.state = 'review';
     item.endedAt = this.now();
     this.metric(run, item);

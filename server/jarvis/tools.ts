@@ -23,6 +23,7 @@ import { askHuman, type HumanAnswer, type McpTool } from '../chat/permission';
 import { LEDGER_OPEN_MS, projectLedger, type JournalEntry } from '../chat/journal';
 import type { RunService } from '../chat/runs';
 import type { ShipService } from '../chat/ship';
+import { riskLabel } from '../chat/risk';
 import type { StoreService } from '../chat/lojas';
 import type { Product } from '../vboards/products';
 import { parseOptions, type ProjectsService } from '../projects/create';
@@ -262,7 +263,7 @@ export class JarvisTools {
       ),
       t('release_cut', 'SAFE. Release package of an app (folder or product): tasks deployed since the last version, proposed semver and the "what is new" text in pt/en/es. Titles come from PRs: wrapped as untrusted data.', obj({ app: S('App folder (path or name) or product') }, ['app']), async (a) => this.releaseCut(a)),
       t('release_submit', 'GATED, always (critical card with PIN). Sends the app version for store review: dispatches the repo store workflow (kind=submit). Use the version from release_cut.', obj({ app: S(), version: S('x.y.z from release_cut'), ...REASON }, ['app', 'version']), async (a) => this.releaseSubmit(a)),
-      t('projects_config_set','GATED. Changes settings of a folder (keys: card, auto, provider, budget, check, reviewer, reviewerModel, copy).', obj({ folder: S(), values: { type: 'object' }, ...REASON }, ['folder', 'values']), async (a) => this.projectsConfigSet(a)),
+      t('projects_config_set','GATED. Changes settings of a folder (keys: card, auto, provider, budget, check, reviewer, reviewerModel, copy, ship, base, remote, deploy, ciMinutes, autoMerge, riskPaths, riskLines). autoMerge=low lets low-risk tasks ship WITHOUT PIN: only from a clean turn of the owner on the page.', obj({ folder: S(), values: { type: 'object' }, ...REASON }, ['folder', 'values']), async (a) => this.projectsConfigSet(a)),
       // --- uso
       t('usage_accounts', 'SAFE. Accounts and their 5h/week quota.', obj({}), async () => ok(this.deps.accounts?.() ?? [])),
       t('usage_spend', 'SAFE. Spend (US$, tokens) of each chat agent.', obj({}), async () => ok(this.spend())),
@@ -550,6 +551,7 @@ export class JarvisTools {
       tr('SHA: {0}', [p.sha]),
       tr('Remoto: {0} · modo: {1} · deploy: {2}', [p.remote, p.mode, p.deploy]),
       tr('Portão: {0}', [p.gate]),
+      tr('Risco: {0}{1}', [riskLabel(p.risk), p.riskWhy.length ? ` (${clip(p.riskWhy.join('; '), 400)})` : '']),
       ...(p.risky.length ? [tr('ATENÇÃO: muda hooks/CI que rodam com a credencial do dono: {0}', [p.risky.join(', ')])] : []),
       tr('Diff: {0}', [clip(p.stat, 600) || tr('(vazio)')]),
     ];
@@ -593,8 +595,15 @@ export class JarvisTools {
     if ('error' in v) return fail(v.error);
     const keys = Object.entries(v.values);
     if (!keys.length) return fail(tr('Nada para mudar.'));
+    // Subir sem PIN: só a tela local ou um pedido limpo da página (nunca WhatsApp, voz, VBoards, agendamento ou turno contaminado).
+    const autoMerge = v.values.autoMerge === 'low';
+    if (autoMerge && this.tainted()) return fail(tr('vboards.autoMerge=low só liga pela tela local ou por um pedido seu na página, nunca por WhatsApp, voz ou dado de fora. Nada foi feito.'));
     const before = folderConfigView(await this.deps.folderConfig(f.path)) as unknown as Record<string, unknown>;
-    const facts = [tr('Mudar o git config --local de {0}:', [f.path]), ...keys.map(([k, val]) => `vboards.${k}: ${maskSecrets(String(before[k] ?? ''))} → ${val ? maskSecrets(val) : tr('(padrão)')}`)];
+    const facts = [
+      tr('Mudar o git config --local de {0}:', [f.path]),
+      ...(autoMerge ? [tr('ATENÇÃO: isto permite subir sem PIN tarefas de risco baixo (push, PR e merge com CI verde, e o deploy do repo).')] : []),
+      ...keys.map(([k, val]) => `vboards.${k}: ${maskSecrets(String(before[k] ?? ''))} → ${val ? maskSecrets(val) : tr('(padrão)')}`),
+    ];
     const refused = await this.gate('projects_config_set', { folder: f.path, keys: keys.map(([k]) => k) }, facts, a.reason);
     if (refused) return fail(refused);
     const err = await this.deps.writeFolderConfig(f.path, v.values);
