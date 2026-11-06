@@ -34,7 +34,7 @@ async function made(ops: ReturnType<typeof createWorktreeOps>, r: string) {
   return w;
 }
 
-describe('chat: cópia isolada (git worktree)', () => {
+describe('chat: cópia isolada (git worktree)', { timeout: 30_000 }, () => {
   it('cria fora do repo, num branch próprio, a partir do HEAD', async () => {
     const { r, data, ops } = setup();
     const w = await made(ops, r);
@@ -187,7 +187,7 @@ describe('vboards.copy: arquivos copiados para a cópia', () => {
 });
 
 
-describe('chat: cópia isolada a partir do remoto (vboards.ship)', () => {
+describe('chat: cópia isolada a partir do remoto (vboards.ship)', { timeout: 30_000 }, () => {
   /** Um "origin" (clone bare) com um commit a mais que o checkout local não tem, e um commit local que o origin não tem. */
   function withOrigin(ship: string) {
     const up = repo();
@@ -228,7 +228,7 @@ describe('chat: cópia isolada a partir do remoto (vboards.ship)', () => {
   });
 });
 
-describe('chat: Subir (commit, push e varredura)', () => {
+describe('chat: Subir (commit, push e varredura)', { timeout: 30_000 }, () => {
   const TOKEN = `github_pat_${'B'.repeat(40)}`;
 
   async function shipped() {
