@@ -11087,6 +11087,63 @@ html.is-replay #world {
   gap: 6px;
 }
 
+/* Triagem e perguntas do VBoards (ui/vboards.ts triageItem). */
+.ui-triage.is-waiting {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+
+.ui-triage__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ui-triage__chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--ui-line-strong);
+  color: var(--ui-muted);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.ui-triage__chip--wait {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: var(--ui-bg-solid);
+  font-weight: 600;
+}
+
+.ui-triage__chip--ok {
+  border-color: rgba(120, 220, 150, 0.6);
+  color: #8fe3a8;
+}
+
+.ui-triage__chip--warn {
+  border-color: rgba(255, 200, 110, 0.6);
+  color: #ffd08a;
+}
+
+.ui-triage__chip--bad {
+  border-color: rgba(255, 130, 130, 0.6);
+  color: #ff9d9d;
+}
+
+.ui-triage__questions {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+}
+
+.ui-triage__answer {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 /* Gatilhos (ui/triggers.ts): reaproveita o visual da lista; dias da semana, prévia e histórico. */
 .ui-trig__days {
   display: flex;
@@ -11341,6 +11398,38 @@ html.is-replay #world {
   .ui-ship__step.is-current .ui-ship__dot {
     animation: none;
   }
+}
+
+.ui-runs__shots {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ui-runs__shot {
+  display: block;
+  width: 96px;
+  height: 64px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--ui-border, rgba(255, 255, 255, 0.15));
+  background: rgba(0, 0, 0, 0.25);
+  transition: transform 0.12s, border-color 0.12s;
+}
+
+.ui-runs__shot:hover,
+.ui-runs__shot:focus-visible {
+  transform: translateY(-1px) scale(1.04);
+  border-color: var(--ui-accent, #6ea8fe);
+}
+
+.ui-runs__shot img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+  display: block;
 }
 
 .ui-runs__comment {

@@ -23,7 +23,7 @@ interface NotifyView {
 const ROUTINES = ['briefing', 'closing', 'weekly'] as const;
 const routineLabel = (k: (typeof ROUTINES)[number]): string => (k === 'closing' ? tr('Horário do fechamento do dia') : k === 'weekly' ? tr('Horário do resumo semanal') : tr('Horário do briefing'));
 
-interface FolderConfig { card?: string; auto: boolean; provider: string; budget: number; check?: string; reviewer: string; reviewerModel?: string; copy?: string; ship?: string; base?: string; remote?: string; deploy?: string; ciMinutes?: number }
+interface FolderConfig { card?: string; auto: boolean; provider: string; budget: number; check?: string; qa?: string; reviewer: string; reviewerModel?: string; copy?: string; ship?: string; base?: string; remote?: string; deploy?: string; ciMinutes?: number }
 
 const PROVIDERS = ['claude', 'codex', 'agy'];
 
@@ -37,6 +37,7 @@ export class VBoardsConfigGroup {
   private readonly check = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 500, placeholder: 'npm ci && npm test' } });
   private readonly reviewer = select(PROVIDERS);
   private readonly reviewerModel = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 60 } });
+  private readonly qa = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 500, placeholder: 'npx playwright test --project=qa' } });
   private readonly copy = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 500, placeholder: '.env, apps/web/.env.local' } });
   private readonly ship = h('select', { class: 'ui-rename__input' }, h('option', { attrs: { value: 'off' }, text: tr('off: nunca sobe') }), h('option', { attrs: { value: 'pr' }, text: tr('pr: abre só o PR') }), h('option', { attrs: { value: 'merge' }, text: tr('merge: com CI verde, faz o merge') }));
   private readonly base = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 100, placeholder: 'main' } });
@@ -78,7 +79,7 @@ export class VBoardsConfigGroup {
   );
   private readonly save = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar na pasta'), on: { click: () => void this.store() } });
   private readonly status = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
-  private readonly fields = [this.card, this.auto, this.provider, this.budget, this.check, this.reviewer, this.reviewerModel, this.copy, this.ship, this.base, this.remote, this.deploy, this.ciMinutes];
+  private readonly fields = [this.card, this.auto, this.provider, this.budget, this.check, this.qa, this.reviewer, this.reviewerModel, this.copy, this.ship, this.base, this.remote, this.deploy, this.ciMinutes];
 
   constructor() {
     this.folder.addEventListener('change', () => void this.load());
@@ -93,6 +94,7 @@ export class VBoardsConfigGroup {
       row(tr('Agente (vboards.provider)'), this.provider),
       row(tr('Orçamento por item, US$ (vboards.budget)'), this.budget),
       row(tr('Checagens (vboards.check): a cópia não tem node_modules nem .env, então o comando instala o que precisar'), this.check),
+      row(tr('QA visual (vboards.qa): roda depois das checagens e grava PNGs na pasta $HABBLAUD_QA_DIR; falhar só avisa'), this.qa),
       row(tr('Revisor (vboards.reviewer)'), this.reviewer),
       row(tr('Modelo do revisor (vboards.reviewerModel)'), this.reviewerModel),
       row(tr('Copiar para a cópia isolada (vboards.copy): caminhos relativos separados por vírgula; ficam fora do Juntar'), this.copy),
@@ -192,6 +194,7 @@ export class VBoardsConfigGroup {
     this.provider.value = c.provider;
     this.budget.value = String(c.budget);
     this.check.value = c.check ?? '';
+    this.qa.value = c.qa ?? '';
     this.reviewer.value = c.reviewer;
     this.reviewerModel.value = c.reviewerModel ?? '';
     this.copy.value = c.copy ?? '';
@@ -206,7 +209,7 @@ export class VBoardsConfigGroup {
   }
 
   private async store(): Promise<void> {
-    const config = { card: this.card.value, auto: this.auto.checked, provider: this.provider.value, budget: this.budget.value, check: this.check.value, reviewer: this.reviewer.value, reviewerModel: this.reviewerModel.value, copy: this.copy.value, ship: this.ship.value, base: this.base.value, remote: this.remote.value, deploy: this.deploy.value, ciMinutes: this.ciMinutes.value };
+    const config = { card: this.card.value, auto: this.auto.checked, provider: this.provider.value, budget: this.budget.value, check: this.check.value, qa: this.qa.value, reviewer: this.reviewer.value, reviewerModel: this.reviewerModel.value, copy: this.copy.value, ship: this.ship.value, base: this.base.value, remote: this.remote.value, deploy: this.deploy.value, ciMinutes: this.ciMinutes.value };
     try {
       const res = await fetch('/api/vboards/config', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: this.folder.value, config }) });
       const body = (await res.json().catch(() => ({}))) as { config?: FolderConfig; editable?: boolean; error?: string };

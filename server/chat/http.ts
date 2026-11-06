@@ -2,6 +2,7 @@
 // interativo) ou, pela porta do celular (login + HTTPS), só com "chat" em HABBLAUD_REMOTE_ALLOW. O MCP do permission
 // tool (/api/chat/mcp/:agentId) é chamado pelo `claude.exe`, sem Origin: vale só do loopback, pela porta local e com o
 // Bearer do próprio agente.
+import { createReadStream } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tr } from '../../shared/i18n';
 import type { DaySummary, SummaryMode } from '../../shared/summary';
@@ -28,7 +29,7 @@ export interface ChatRouteDeps {
   /** Ferramentas office_* e ligações entre agentes (delegation.ts); sem ela, só o permission tool. */
   delegation?: Pick<Delegation, 'tools' | 'links'>;
   /** Listas que rodam um agente por item (runs.ts); sem ela, 404. */
-  runs?: Pick<RunService, 'list' | 'get' | 'create' | 'stop' | 'continue' | 'merge' | 'discard' | 'diff' | 'feedback'>;
+  runs?: Pick<RunService, 'list' | 'get' | 'create' | 'stop' | 'continue' | 'merge' | 'discard' | 'diff' | 'feedback' | 'shotPath'>;
   /** "Subir" (ship.ts): o cartão (prepare) e a aprovação com PIN (approve); sem ele, 404. */
   ship?: Pick<ShipService, 'prepare' | 'approve'>;
   /** PIN de aprovação (permissions/pin.ts): o "Subir" sempre pede; sem PIN definido = 403. */
@@ -55,6 +56,7 @@ const MCP_ROUTE = /^\/api\/chat\/mcp\/([^/]+)$/;
 const ROLE_ROUTE = /^\/api\/chat\/roles\/([^/]+)$/;
 const RUN_ROUTE = /^\/api\/chat\/runs\/([^/]+)(?:\/(stop|continue|merge|discard|diff|ship|ship\/prepare|vscode))?$/;
 const FEEDBACK_ROUTE = /^\/api\/chat\/runs\/([^/]+)\/items\/(\d{1,4})\/feedback$/;
+const SHOT_ROUTE = /^\/api\/chat\/runs\/([^/]+)\/items\/(\d{1,4})\/shots\/([^/]+)$/;
 const TRIGGER_ROUTE = /^\/api\/chat\/triggers\/([^/]+)(?:\/(test))?$/;
 
 function isLoopback(addr: string | undefined): boolean {
@@ -225,6 +227,15 @@ export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
       if (method !== 'POST') return notAllowed(res, 'POST');
       const r = await d.runs.feedback(decode(feedback[1]), Number(feedback[2]), await readJson(req));
       return 'ok' in r ? sendJson(res, 202, {}) : sendJson(res, r.status, { error: r.error });
+    }
+    // Capturas do QA visual (vboards.qa): só o que o portão registrou no item, com o caminho real dentro da pasta dele.
+    const shot = SHOT_ROUTE.exec(path);
+    if (shot && d.runs) {
+      if (method !== 'GET') return notAllowed(res, 'GET');
+      const file = d.runs.shotPath(decode(shot[1]), Number(shot[2]), decode(shot[3]));
+      if (!file) return sendJson(res, 404, { error: tr('captura não encontrada') });
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+      return void createReadStream(file).on('error', () => res.destroy()).pipe(res);
     }
     const runRoute = RUN_ROUTE.exec(path);
     if (runRoute && d.runs) {

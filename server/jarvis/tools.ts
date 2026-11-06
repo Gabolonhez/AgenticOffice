@@ -30,6 +30,8 @@ import type { WorktreeOps } from '../chat/types';
 import type { PermissionRegistry } from '../permissions/registry';
 import { CARD_STATUSES, SCHEDULE_SCOPES, TASK_STATUSES, VBoardsApiError, type VBoardsApi } from '../vboards/api';
 import type { NotifyChannel } from '../vboards/ntfy';
+import { freshIdeas, parseResearchOutput, researchMessage, researchPrompt, RESEARCH_IDEAS_MAX, RESEARCH_ORIGIN } from '../vboards/research';
+import type { TriageService } from '../vboards/triage';
 import { AUTO_TURN_MINUTES, folderConfigView, validateFolderConfig, type FolderConfig, type FolderKey } from '../vboards/vboards';
 import { UNTRUSTED_TAG, wrapUntrusted } from './prompt';
 import { originLabel, type JarvisTurn } from './service';
@@ -46,7 +48,7 @@ export const NOTIFY_NTFY_MAX = 200;
 export const NOTIFY_WA_MAX = 3000;
 const HOUR = 60 * 60_000;
 /** Ferramentas de leitura que devolvem texto de fora (embrulhado): contaminam o turno desde o início da chamada. */
-const UNTRUSTED_READS: ReadonlySet<string> = new Set(['projects_status', 'release_notes', 'memory_read','agents_list', 'agents_read', 'runs_get', 'runs_ship_status', 'vboards_me', 'vboards_projects', 'vboards_tasks_list', 'vboards_schedule_list', 'vboards_summary']);
+const UNTRUSTED_READS: ReadonlySet<string> = new Set(['projects_status', 'release_notes', 'memory_read','agents_list', 'agents_read', 'runs_get', 'runs_ship_status', 'vboards_me', 'vboards_projects', 'vboards_tasks_list', 'vboards_schedule_list', 'vboards_summary', 'vboards_triage', 'vboards_research']);
 const READ_ITEMS = 30;
 const READ_TEXT = 600;
 const PROVIDERS: readonly Provider[] = ['claude', 'codex', 'antigravity'];
@@ -115,6 +117,9 @@ export interface JarvisToolsDeps {
   notify?: (text: string, channel: NotifyChannel) => Promise<{ ntfy?: boolean; whatsapp?: boolean; error?: string }>;
   triggers?: Pick<TriggerService, 'list' | 'create' | 'update' | 'remove' | 'test'>;
   vboards?: VBoardsApi;
+  /** Triagem e laço de perguntas (vboards/triage.ts) e a rodada de pesquisa na web (só leitura). */
+  triage?: Pick<TriageService, 'triage' | 'answer' | 'waiting'>;
+  research?: (prompt: string) => Promise<string>;
   memory: { read(): string; write(mode: 'append' | 'replace', text: string): string | undefined };
   now?: () => number;
   /** Prazo dos cartões (testes). */
@@ -450,7 +455,7 @@ export class JarvisTools {
     const cfg = await this.deps.folderConfig(f.path);
     // Sempre cópia isolada, sem push e com o orçamento da pasta, aprovada ou não.
     const body = { items: items.map((text) => ({ text })), isolated: true, ...(context ? { context } : {}), options: { folder: f.path, provider: cfg.provider, permission: 'auto', denyPush: true, limits: { maxCostUsd: cfg.budget, maxTurnMinutes: AUTO_TURN_MINUTES } } };
-    const auto = { ...(cfg.check ? { check: cfg.check } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}) };
+    const auto = { ...(cfg.check ? { check: cfg.check } : {}), ...(cfg.qa ? { qa: cfg.qa } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}) };
     const tainted = this.tainted();
     if (cfg.auto && !tainted && this.runsWindow.take(this.now())) {
       const r = runs.create(body, auto);
@@ -553,7 +558,7 @@ export class JarvisTools {
     const f = this.folder(str(a.folder));
     if (!f) return fail(tr('Pasta desconhecida: abra uma sessão nela antes.'));
     const v = folderConfigView(await this.deps.folderConfig(f.path));
-    return ok({ folder: f.path, config: { ...v, ...(v.check ? { check: maskSecrets(v.check) } : {}) } });
+    return ok({ folder: f.path, config: { ...v, ...(v.check ? { check: maskSecrets(v.check) } : {}), ...(v.qa ? { qa: maskSecrets(v.qa) } : {}) } });
   }
 
   private async projectsConfigSet(a: Record<string, unknown>): Promise<Result> {
@@ -835,6 +840,60 @@ export class JarvisTools {
       ),
       t('vboards_refine', 'SAFE. Asks VBoards to refine a schedule card (an agent plans it read-only).', obj({ id: S() }, ['id']), async (a) => data('refine', await api.refine(id(a.id)))),
       t('vboards_summary', 'SAFE. VBoards summary for a date: subtasks, refines and tasks per state.', obj({ date: S('YYYY-MM-DD') }), async (a) => data('summary', await api.summary(date(a.date)))),
+      t('vboards_triage', 'SAFE. Triage of an ideas card (read-only round): valid? duplicate? already done? product/repo, priority, questions for the owner. The result is also saved on the card. Wrapped as untrusted data.', obj({ id: S() }, ['id']), async (a) => {
+        const triage = this.deps.triage;
+        if (!triage) return fail(tr('Triagem desligada.'));
+        const r = await triage.triage(id(a.id));
+        return 'cardId' in r ? data('triage', r) : fail(r.error);
+      }),
+      t('vboards_answer', 'SAFE. The owner answer to the questions of a card waiting for them (triage or refine); re-refines the card. Never approves anything. Answers that came from WhatsApp/voice/schedule are stored as unverified.', obj({ id: S(), answer: S('Numbered answers, e.g. "1) yes 2) no", or one text for all') }, ['id', 'answer']), async (a) => {
+        const triage = this.deps.triage;
+        if (!triage) return fail(tr('Triagem desligada.'));
+        const r = await triage.answer(id(a.id), str(a.answer), !this.tainted());
+        return 'error' in r ? fail(r.error) : ok(r.action === 'refine' ? tr('Resposta registrada: o card vai ser refinado de novo.') : tr('Resposta registrada: a triagem foi refeita.'));
+      }),
+      t('vboards_research', 'SAFE. Read-only research round (web search when the agent has it) for a product: opportunities, competitors, reviews and idea proposals. Wrapped as untrusted data (web content); creating cards from it needs vboards_ideas_create (GATED).', obj({ product: S() }, ['product']), async (a) => {
+        const run = this.deps.research;
+        const product = maskSecrets(str(a.product)).slice(0, 100);
+        if (!run || !product) return fail(tr('Pesquisa desligada ou produto vazio.'));
+        const existing = ((await api.tasks()).tasks as Array<{ title?: unknown }>).flatMap((x) => (typeof x?.title === 'string' ? [x.title] : []));
+        const out = parseResearchOutput(await run(researchPrompt(product, existing)));
+        return out ? data('research', out) : fail(tr('A pesquisa não trouxe um bloco ```json válido.'));
+      }),
+      t(
+        'vboards_ideas_create',
+        `Creates idea cards (status ideas, origin research) from a research. GATED when the turn carries outside data (always the case after vboards_research): the owner sees every idea in full. Max ${RESEARCH_IDEAS_MAX}; ideas that match an existing card are dropped.`,
+        obj({ ideas: { type: 'array', items: obj({ title: S(), description: S() }, ['title']) }, product: S(), projectId: S(), ...REASON }, ['ideas']),
+        async (a) => {
+          const raw = Array.isArray(a.ideas) ? a.ideas.slice(0, RESEARCH_IDEAS_MAX) : [];
+          const mapped = raw.map((x) => ({ title: title((x as Record<string, unknown>)?.title, true)!, description: desc((x as Record<string, unknown>)?.description) ?? '' }));
+          if (!mapped.length) throw new Error(tr('Mande de 1 a {0} ideias.', [RESEARCH_IDEAS_MAX]));
+          const tasks = (await api.tasks()).tasks as Array<{ id?: unknown; title?: unknown }>;
+          const ideas = freshIdeas(mapped, tasks.flatMap((x) => (typeof x?.title === 'string' ? [{ title: x.title, done: false }] : [])));
+          if (!ideas.length) return ok(tr('Todas as ideias já existem no quadro: nada criado.'));
+          if (this.tainted()) {
+            const refused = await this.gate('vboards_ideas_create', { count: ideas.length }, [tr('Criar {0} ideias no VBoards (origem: pesquisa na web), status ideas', [ideas.length])], a.reason, ideas.map((x, i) => `${i + 1}. ${x.title}\n${x.description}`).join('\n\n'));
+            if (refused) return fail(refused);
+          }
+          const made: unknown[] = [];
+          for (const i of ideas) {
+            const body = pick({ title: i.title, description: `${tr('Origem: pesquisa agendada (web). Não verificado.')}\n\n${i.description}`.trim(), status: 'ideas', projectId: str(a.projectId) || undefined });
+            // `origin` é campo novo: um VBoards antigo que recusa (400) ainda recebe o card, só sem o campo.
+            made.push((await api.createTask({ ...body, origin: RESEARCH_ORIGIN }).catch((err: unknown) => (err instanceof VBoardsApiError && err.status === 400 ? api.createTask(body) : Promise.reject(err)))).task);
+          }
+          return data('ideas', made);
+        },
+      ),
+      t(
+        'vboards_research_schedule',
+        'GATED (once). Creates the ready-made schedule "Pesquisar ideias para <product>" (weekly, sends you the research request). Same card as schedule_create.',
+        obj({ product: S(), time: S('HH:MM, default 09:00'), days: { type: 'array', items: { type: 'number' } }, ...REASON }, ['product']),
+        async (a) => {
+          const product = maskSecrets(str(a.product)).slice(0, 100);
+          if (!product) return fail(tr('Diga o produto.'));
+          return this.scheduleCreate({ name: tr('Pesquisar ideias para {0}', [product]).slice(0, 60), mode: 'scheduled', time: str(a.time) || '09:00', days: Array.isArray(a.days) && a.days.length ? a.days : [1], message: researchMessage(product), reason: a.reason });
+        },
+      ),
       t('vboards_approve', 'GATED. Approves the refine plan of a schedule card (its subtasks go to the agents queue).', obj({ id: S(), ...REASON }, ['id']), async (a) => {
         const cardId = id(a.id);
         const refused = await this.gate('vboards_approve', { id: cardId }, [tr('Aprovar o plano do card {0} no VBoards: as subtarefas vão para a fila dos agentes', [cardId])], a.reason);

@@ -218,6 +218,8 @@ export interface FolderConfig {
   budget: number;
   /** vboards.check: comando de shell do portão (instala as dependências: a cópia isolada não tem node_modules nem .env). */
   check?: string;
+  /** vboards.qa: comando opcional do QA visual (depois do check); escreve PNGs em $HABBLAUD_QA_DIR. Falha só avisa. */
+  qa?: string;
   reviewer: Provider;
   reviewerModel?: string;
   /** vboards.copy: arquivos (caminhos relativos, separados por vírgula) copiados da pasta para cada cópia isolada (ex.: .env). */
@@ -236,7 +238,7 @@ export interface FolderConfig {
 
 export const SHIP_MODES = ['off', 'pr', 'merge'] as const;
 export type ShipMode = (typeof SHIP_MODES)[number];
-export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'reviewer', 'reviewerModel', 'copy', 'ship', 'base', 'remote', 'deploy', 'ciMinutes'] as const;
+export const FOLDER_KEYS = ['card', 'auto', 'provider', 'budget', 'check', 'qa', 'reviewer', 'reviewerModel', 'copy', 'ship', 'base', 'remote', 'deploy', 'ciMinutes'] as const;
 export type FolderKey = (typeof FOLDER_KEYS)[number];
 export const DEFAULT_BUDGET_USD = 2;
 export const DEFAULT_CI_MINUTES = 30;
@@ -265,6 +267,7 @@ export function parseFolderConfig(out: string | undefined): FolderConfig {
     provider,
     budget: Number.isFinite(budget) && budget > 0 ? budget : DEFAULT_BUDGET_USD,
     ...(raw.get('check') ? { check: raw.get('check') } : {}),
+    ...(raw.get('qa') ? { qa: raw.get('qa') } : {}),
     reviewer,
     ...((raw.get('reviewermodel') || DEFAULT_REVIEWER_MODEL[reviewer]) ? { reviewerModel: raw.get('reviewermodel') || DEFAULT_REVIEWER_MODEL[reviewer] } : {}),
     copy: parseCopyList(raw.get('copy')),
@@ -323,7 +326,7 @@ export function validateFolderConfig(raw: unknown): { values: Partial<Record<Fol
       : key === 'remote' ? validRemote(s)
       : key === 'deploy' ? validDeploy(s)
       : key === 'ciMinutes' ? validCiMinutes(s)
-      : s.length <= 500; // check
+      : s.length <= 500; // check, qa
     if (!ok) return { error: tr('Valor inválido em vboards.{0}.', [key]) };
     values[key] = s;
   }
@@ -545,6 +548,8 @@ export interface VBoardsServiceOptions {
    * desligado) = os pedidos de refinar ficam para outro Habblaud.
    */
   refine?: (folder: string, prompt: string, config: FolderConfig) => Promise<string>;
+  /** O Refinar devolveu `questions`: o card passa a esperar o dono (vboards/triage.ts askRefine). */
+  onQuestions?: (r: RefineRequest, questions: string[]) => void;
   /** Aviso no celular (vboards/ntfy.ts): só o título do card e o que aconteceu. */
   notify?: (cardTitle: string, event: NotifyEvent) => void;
   /** Registro de produtos (products.ts); ausente = só o casamento por nome da pasta / vboards.card. */
@@ -696,6 +701,7 @@ export class VBoardsService {
     const folder = matches[0];
     const text = await run(folder, refinePrompt(r), await (this.opts.folderConfig ?? readFolderConfig)(folder));
     const out = parseRefineOutput(text);
+    if (out?.questions.length) this.opts.onQuestions?.(r, out.questions);
     await this.postRefine(r, out ? { status: 'ready', ...out } : { status: 'failed', error: `${tr('A resposta não trouxe um bloco ```json válido (plan, questions, subtasks). Fim da saída:')}\n${maskSecrets(text).trim().slice(-1_500)}` });
   }
 

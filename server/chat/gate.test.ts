@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { gatePassed, gateReport, parseReview, refineArgs, refinerFor, REPORT_MAX, reviewerFor, runChecks } from './gate';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { gatePassed, gateReport, listShots, parseReview, refineArgs, refinerFor, REPORT_MAX, reviewerFor, runChecks, runQa } from './gate';
 
 const cwd = process.cwd();
 
@@ -15,6 +18,33 @@ describe('portão: checagens', () => {
   it('passou do prazo: reprova', async () => {
     expect(await runChecks('node -e "setTimeout(() => {}, 20000)"', cwd, 300)).toMatchObject({ ok: false });
   }, 15_000);
+});
+
+describe('portão: QA visual', () => {
+  const dir = () => join(mkdtempSync(join(tmpdir(), 'hb-qa-')), 'out');
+  it('o comando recebe HABBLAUD_QA_DIR e os PNGs viram capturas (até o limite, só .png)', async () => {
+    const d = dir();
+    const script = "const fs=require('fs'),p=require('path');const d=process.env.HABBLAUD_QA_DIR;for(const n of ['b.png','a.png','c.png','nota.txt'])fs.writeFileSync(p.join(d,n),'x')";
+    const r = await runQa(`node -e "${script}"`, cwd, d);
+    expect(r.ok).toBe(true);
+    expect(r.shots).toEqual(['a.png', 'b.png', 'c.png']);
+    expect(listShots(d, 2)).toEqual(['a.png', 'b.png']);
+  });
+
+  it('falha não reprova: o relatório só avisa, e o portão segue passando', async () => {
+    const r = await runQa('node -e "process.exit(2)"', cwd, dir());
+    expect(r.ok).toBe(false);
+    expect(gatePassed({ ok: true, tail: '' }, undefined)).toBe(true);
+    expect(gateReport({ branch: 'b', checks: { ok: true, tail: '' }, qa: r })).toContain('QA visual: FALHOU');
+    expect(gateReport({ branch: 'b', qa: { ok: true, tail: '', shots: ['a.png'] } })).toContain('QA visual: 1 captura');
+  });
+
+  it('passada nova limpa as capturas antigas', async () => {
+    const d = dir();
+    await runQa('node -e "1"', cwd, d);
+    writeFileSync(join(d, 'velha.png'), 'x');
+    expect((await runQa('node -e "1"', cwd, d)).shots).toEqual([]);
+  });
 });
 
 describe('portão: revisão e relatório', () => {

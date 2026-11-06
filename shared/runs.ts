@@ -27,6 +27,8 @@ export interface RunItem {
   resume?: boolean;
   /** Lista automática: o resultado do portão na última passada (checagens + revisão). */
   gate?: 'pass' | 'fail';
+  /** Lista automática: nomes dos PNGs do QA visual (GET /api/chat/runs/:id/items/:n/shots/:nome). */
+  shots?: string[];
 }
 
 /** Uma linha de <dataDir>/chat/run-metrics.jsonl: um item de lista que terminou (briefing e usage_metrics do Jarvis). */
@@ -48,6 +50,8 @@ export interface RunMetric {
 export interface RunAuto {
   /** vboards.check: comando de shell rodado na cópia isolada. */
   check?: string;
+  /** vboards.qa: comando do QA visual, depois do check; os PNGs vão em $HABBLAUD_QA_DIR. */
+  qa?: string;
   reviewer: Provider;
   reviewerModel?: string;
 }

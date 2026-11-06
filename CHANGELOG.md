@@ -30,6 +30,20 @@ do meio (0.**3**.0).
   (fine-grained; fica só neste computador, em `~/.habblaud/github.json` com permissão 600, ou em `HABBLAUD_GITHUB_TOKEN`).
 - **Abrir no VS Code:** abre a cópia isolada de uma lista no VS Code; sem o comando `code`, mostra o caminho para copiar.
 
+### Triagem, perguntas e pesquisa do VBoards
+
+- **Triagem das ideias:** cada ideia nova do VBoards passa por uma rodada só de leitura que diz se ela é válida, duplicada
+  ou já feita, a qual produto e repositório pertence, a prioridade e o que falta perguntar. O resultado vai para o card, para
+  o registro por projeto e para a tela do VBoards. Ferramenta do Jarvis: `vboards_triage`. `HABBLAUD_TRIAGE=0` desliga a
+  varredura automática.
+- **Laço de perguntas:** quando a triagem ou o Refinar devolvem perguntas, o card fica "Aguardando você" (selo na lista e no
+  briefing) e o Jarvis pergunta na conversa, no ntfy e no WhatsApp, numeradas. Responda na tela do card, no Jarvis ou com
+  "Jarvis, resposta do card X: ..."; a resposta volta como contexto e refina de novo. Resposta vinda do WhatsApp é marcada
+  como não verificada e nunca aprova nada.
+- **Pesquisa agendada:** modelo "Pesquisar ideias para <produto>" (`vboards_research_schedule`): uma rodada só de leitura,
+  com busca na web, resume oportunidades, concorrentes e avaliações. Criar os cards em "ideas" (origem `research`) pede
+  cartão de aprovação.
+
 ### Escritório 3D
 
 - **Escritório 3D:** o botão **3D** da barra do topo troca o escritório 2D por um escritório em 3D, onde cada agente vira um
@@ -50,6 +64,11 @@ do meio (0.**3**.0).
 - **Segurança:** pedido por voz conta como de fora (o microfone ouve o ambiente): ações pedem cartão com PIN, e o que
   parece PIN ou senha falado não chega ao Jarvis. O modelo de voz só tem uma ferramenta, perguntar ao Jarvis.
 - A leitura em voz alta das respostas na gaveta segue a língua da página (antes, sempre pt-BR).
+### Escritório autônomo: áudio e QA visual
+
+- **Áudio do WhatsApp:** mande um áudio para o Jarvis (na conversa com você mesmo) e ele é transcrito no Whisper local, sem sair do computador. A resposta começa com "Entendi: «…»" para você conferir, e o pedido entra como dado de fora (nunca vale como ordem sua). Áudio grande demais é recusado; o prazo da transcrição cresce com o tamanho. Sem o Whisper, o Jarvis responde o que falta, agora com o passo a passo para Windows (release do whisper.cpp, `scoop`, `winget` para o ffmpeg, `HABBLAUD_WHISPER_BIN`). Pede ao VBoards o campo `audio` na caixa e `GET /api/v1/jarvis/inbox/:id/audio`.
+- **QA visual no portão:** nova chave `vboards.qa` por pasta, um comando (ex.: script do Playwright) rodado depois do `vboards.check`, que grava PNGs em `HABBLAUD_QA_DIR`. As capturas (até 6) aparecem como miniaturas clicáveis no item da lista; se o QA falhar, o relatório só avisa e não reprova.
+
 ### Escritório autônomo: fundação
 
 - **Produtos com vários repositórios:** em **Configurações › Produtos e repositórios** (`~/.habblaud/products.json`), um
