@@ -27,6 +27,7 @@ import type { ChatOpener } from '../vboards/vboards';
 import type { QuotaBlock } from './quota';
 import { fixRequest, gatePassed, gateReport, type CheckResult, type ReviewResult } from './gate';
 import type { ChatService } from './service';
+import { appendJournal, trimJournal, type JournalStage } from './journal';
 import type { WorktreeOps } from './types';
 
 export const RUNS_KEEP = 20;
@@ -37,14 +38,25 @@ const OPTION_KEYS = ['folder', 'provider', 'account', 'model', 'roleId', 'permis
 export interface RunDeps {
   /** `record`: o gasto do agente do item, para a linha de métricas. */
   chat: Pick<ChatService, 'check' | 'open' | 'turnOutcome' | 'lastReply' | 'stop' | 'onTurnEnd' | 'restoreCwd' | 'send'> & Partial<Pick<ChatService, 'record'>>;
-  /** `reopen`: comentários da revisão voltaram ao agente; a subtarefa dele volta a 'running' no VBoards. */
-  vboards?: { begin(raw: unknown, open: ChatOpener): Promise<{ agentId: string } | { spawn: unknown } | { status: number; error: string }>; reopen?(agentId: string): boolean };
+  /**
+   * `reopen`: comentários da revisão voltaram ao agente; a subtarefa dele volta a 'running' no VBoards. `settle`: Juntar
+   * (done, merged) e Descartar (failed, discarded, com o motivo) avisam o VBoards.
+   */
+  vboards?: {
+    begin(raw: unknown, open: ChatOpener): Promise<{ agentId: string } | { spawn: unknown } | { status: number; error: string }>;
+    reopen?(agentId: string): boolean;
+    settle?(id: string, s: { state: 'done' | 'failed'; stage?: string; summary?: string }): boolean;
+  };
   worktrees?: WorktreeOps;
   /** Portão das listas automáticas (gate.ts runChecks/reviewDiff); ausente = o item vai para 'review' sem checar. */
   gate?: { checks(cmd: string, cwd: string): Promise<CheckResult>; review(auto: RunAuto, diff: string): Promise<ReviewResult> };
   file: string;
   /** <dataDir>/chat/run-metrics.jsonl: uma linha por item que terminou (ausente = sem métricas). */
   metricsFile?: string;
+  /** <dataDir>/chat/journal.jsonl: uma linha por etapa de cada item (journal.ts; ausente = sem registro). */
+  journalFile?: string;
+  /** id do produto da pasta (vboards/products.ts), para o registro. */
+  productOf?: (folder: string) => string | undefined;
   /** Listas rodando ao mesmo tempo, somando todas as pastas (padrão 2, mínimo 1). */
   maxParallel?: number;
   /** Cota da conta acima do limite (quota.ts), pela conta da lista ou a padrão do provedor; undefined = livre ou desconhecida. */
@@ -104,6 +116,20 @@ export function trimMetrics(file: string, now: number): void {
 }
 
 const itemPrompt = (run: Pick<ChatRun, 'context'>, text: string) => (run.context ? `${run.context}\n\n${text}` : text);
+
+/** Título do item: a primeira linha, sem o "Tarefa do VBoards (card X):" do começo. */
+export const itemTitle = (i: Pick<RunItem, 'text' | 'vboardsTaskId'>): string => {
+  const line = i.text.trim().split(/\r?\n/)[0] ?? '';
+  return truncate((i.vboardsTaskId ? line.replace(/^.*?\):\s*/, '') : line).trim() || line, 200);
+};
+
+/** Mensagem do commit do Juntar: assunto com a primeira tarefa (e quantas mais), corpo com todas. */
+export function mergeMessage(items: ReadonlyArray<Pick<RunItem, 'text' | 'vboardsTaskId' | 'state'>>): string {
+  const done = items.filter((i) => i.state === 'done' || i.state === 'review');
+  const titles = (done.length ? done : items).map(itemTitle);
+  const subject = truncate(titles.length > 1 ? tr('{0} (e mais {1})', [titles[0], titles.length - 1]) : titles[0] ?? tr('Trabalho da cópia isolada'), 72);
+  return titles.length > 1 ? `${subject}\n\n${titles.map((t) => `- ${t}`).join('\n')}` : subject;
+}
 const DIFF_VIEW_MAX = 500_000;
 
 /** Valida o corpo do POST de comentários: 1 a RUN_FEEDBACK_MAX, texto até RUN_FEEDBACK_TEXT_MAX, linha inteira ≥ 1. */
@@ -161,6 +187,7 @@ export class RunService {
     }
     if (!Array.isArray(raw)) return;
     if (this.deps.metricsFile) trimMetrics(this.deps.metricsFile, this.now());
+    if (this.deps.journalFile) trimJournal(this.deps.journalFile, this.now());
     this.runs = raw.filter(
       (r): r is ChatRun => !!r && typeof r === 'object' && typeof r.id === 'string' && Array.isArray(r.items) && !!r.options && typeof r.options.folder === 'string' && r.items.every((i: unknown) => !!i && typeof (i as RunItem).text === 'string'),
     );
@@ -280,6 +307,7 @@ export class RunService {
       ...(auto ? { auto } : {}),
     };
     this.runs = [run, ...this.runs].filter((r, i) => i < RUNS_KEEP || r.state === 'running' || r.state === 'queued');
+    for (const i of items) this.journal(run, i, 'queued');
     // Cota no limite: a automática nem começa; o "Rodar lista" (a pessoa) passa por cima, com aviso.
     if (block && auto) this.pauseForQuota(run, block);
     else {
@@ -308,8 +336,12 @@ export class RunService {
         i.state = 'interrupted';
         i.endedAt = this.now();
         this.metric(run, i);
+        this.journal(run, i, 'failed');
         if (i.agentId) this.deps.chat.stop(i.agentId);
-      } else if (i.state === 'pending') i.state = 'canceled';
+      } else if (i.state === 'pending') {
+        i.state = 'canceled';
+        this.journal(run, i, 'discarded');
+      }
     }
     this.save();
     if (wasRunning) this.pump();
@@ -390,6 +422,7 @@ export class RunService {
     item.startedAt = this.now();
     delete item.endedAt;
     delete item.retried;
+    this.journal(run, item, 'running');
     if (run.state !== 'running') {
       run.resumeTo = run.state;
       run.state = 'running';
@@ -457,12 +490,24 @@ export class RunService {
     const w = run.isolated;
     if (!w || !this.deps.worktrees || w.merged || w.discarded) return { status: 409, error: tr('Esta lista não tem cópia isolada aberta.') };
     if (run.state === 'running') return { status: 409, error: tr('Pare a lista ou espere ela terminar antes.') };
-    const r = how === 'merge' ? await this.deps.worktrees.merge(run.options.folder, w, tr('Lista de {0} itens', [run.items.length])) : await this.deps.worktrees.discard(run.options.folder, w);
+    const r = how === 'merge' ? await this.deps.worktrees.merge(run.options.folder, w, mergeMessage(run.items)) : await this.deps.worktrees.discard(run.options.folder, w);
     if (!r.ok) return { status: 409, error: r.reason };
     if (how === 'merge') w.merged = true;
     else {
       w.discarded = true;
       for (const i of run.items) if (i.agentId) this.deps.chat.restoreCwd(i.agentId);
+    }
+    // O VBoards e o registro: Juntar = feito (merged) nos itens que terminaram; Descartar = falhou (discarded), com o motivo.
+    for (const i of run.items) {
+      const finished = i.state === 'done' || i.state === 'review';
+      if (how === 'merge' && !finished) continue;
+      this.journal(run, i, how === 'merge' ? 'merged' : 'discarded');
+      if (i.vboardsTaskId) {
+        this.deps.vboards?.settle?.(
+          i.vboardsTaskId,
+          how === 'merge' ? { state: 'done', stage: 'merged' } :{ state: 'failed', stage: 'discarded', summary: tr('Descartado no Habblaud: a cópia isolada foi apagada sem juntar ao projeto.') },
+        );
+      }
     }
     this.save();
     return { ok: true };
@@ -510,6 +555,7 @@ export class RunService {
     if (block) return this.pauseForQuota(run, block);
     item.state = 'running';
     item.startedAt = this.now();
+    this.journal(run, item, 'running');
     this.save();
     void this.startItem(run, item);
   }
@@ -594,6 +640,8 @@ export class RunService {
     item.state = end;
     item.endedAt = this.now();
     this.metric(run, item);
+    // Feito numa cópia isolada = espera o Juntar; feito direto na pasta já está no projeto.
+    this.journal(run, item, end === 'failed' ? 'failed' : run.isolated ? 'review' : 'merged');
     const text = end === 'done' ? (item.agentId && this.deps.chat.lastReply(item.agentId)) || '' : reason || tr('O agente terminou sem responder.');
     if (text) item.summary = truncate(text.replace(/\s+/g, ' ').trim(), SUMMARY_MAX);
     if (end === 'failed' && run.stopOnFail) return this.halt(run, tr('Parou: um item falhou.'));
@@ -624,6 +672,7 @@ export class RunService {
     item.state = 'review';
     item.endedAt = this.now();
     this.metric(run, item);
+    this.journal(run, item, 'review');
     item.summary = truncate(item.report.replace(/\s+/g, ' ').trim(), SUMMARY_MAX);
     this.advance(run);
   }
@@ -644,6 +693,24 @@ export class RunService {
       tokens: spend?.tokens ?? 0,
       provider: run.options.provider,
       ...(run.options.model ? { model: run.options.model } : {}),
+    });
+  }
+
+  /** Uma etapa do item no registro por projeto (journal.ts). */
+  private journal(run: ChatRun, item: RunItem, stage: JournalStage): void {
+    if (!this.deps.journalFile) return;
+    const folder = run.options.folder;
+    const product = this.deps.productOf?.(folder);
+    const task = item.vboardsTaskId;
+    const cut = task ? task.indexOf(':') : -1;
+    appendJournal(this.deps.journalFile, {
+      at: this.now(),
+      ...(product ? { product } : {}),
+      folder,
+      ...(cut > 0 ? { cardId: task!.slice(0, cut), subtaskId: task!.slice(cut + 1) } : {}),
+      stage,
+      ref: `${run.id}#${run.items.indexOf(item)}`,
+      title: itemTitle(item),
     });
   }
 
