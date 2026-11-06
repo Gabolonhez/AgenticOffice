@@ -8,6 +8,7 @@ import { tr } from '../../shared/i18n';
 import type { DaySummary, SummaryMode } from '../../shared/summary';
 import { resolveCliBin } from '../chat/bins';
 import { INHERITED_SESSION_VARS } from '../pty/manager';
+import { withoutSecrets } from '../secret-env';
 import { buildDigest, digestToList, localMidnight, type DigestInput } from './digest';
 
 export const AI_TIMEOUT_MS = 90_000;
@@ -30,7 +31,7 @@ export function claudeRunner(cwd: string, bin = resolveCliBin('claude'), timeout
     new Promise((ok, fail) => {
       if (!bin) return fail(new Error(tr('Claude Code não encontrado')));
       mkdirSync(cwd, { recursive: true });
-      const env: NodeJS.ProcessEnv = { ...process.env };
+      const env = withoutSecrets(process.env);
       for (const k of INHERITED_SESSION_VARS) delete env[k];
       const args = [...bin.prefix, '-p', '--model', model, '--output-format', 'json', '--tools', '', '--strict-mcp-config', '--no-session-persistence'];
       const proc = spawn(bin.file, args, { cwd, env, shell: false, windowsHide: true });

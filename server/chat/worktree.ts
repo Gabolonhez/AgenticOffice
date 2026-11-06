@@ -10,6 +10,7 @@ import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { maskSecrets } from '../../shared/activity';
 import { tr } from '../../shared/i18n';
+import { withoutSecrets } from '../secret-env';
 import { parseFolderConfig } from '../vboards/vboards';
 import type { ShipWorktreeOps } from './types';
 
@@ -31,7 +32,7 @@ export function noPushEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 
 const realGit: Git = (args, cwd, opts) =>
   new Promise((ok) => {
-    execFile('git', args, { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024, ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}), ...(opts?.timeout ? { timeout: opts.timeout } : {}) }, (err, stdout, stderr) => {
+    execFile('git', args, { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env: { ...withoutSecrets(process.env), ...(opts?.env ?? {}) }, ...(opts?.timeout ? { timeout: opts.timeout } : {}) }, (err, stdout, stderr) => {
       const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? ((err as { code: number }).code) : 1) : 0;
       ok({ code, out: `${stdout}${err ? stderr : ''}`.trim() });
     });

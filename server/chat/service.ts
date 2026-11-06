@@ -13,6 +13,7 @@ import type { Provider } from '../../shared/types';
 import type { AccountsService } from '../accounts/service';
 import type { Office } from '../model/office';
 import { INHERITED_SESSION_VARS } from '../pty/manager';
+import { withoutSecrets } from '../secret-env';
 import { resolveCliBin, type CliBin } from './bins';
 import { agyDriver } from './drivers/agy';
 import { claudeDriver, claudeMcpConfig } from './drivers/claude';
@@ -665,7 +666,7 @@ export class ChatService {
     };
     const driver = DRIVERS[rec.provider];
     const inv = driver.invocation(spec);
-    const env: NodeJS.ProcessEnv = { ...process.env };
+    const env = withoutSecrets(process.env);
     for (const k of INHERITED_SESSION_VARS) delete env[k];
     for (const [k, v] of Object.entries(inv.env)) if (v !== undefined) env[k] = v;
     if (spec.denyPush) Object.assign(env, noPushEnv(env));

@@ -76,6 +76,7 @@ import { createWorktreeOps } from './chat/worktree';
 import { quotaBlock } from './chat/quota';
 import { readMetrics, RunService } from './chat/runs';
 import { ShipService } from './chat/ship';
+import { takeSecrets } from './secret-env';
 import { GitHub, GitHubTokenStore } from './chat/github';
 import { openInVsCode } from './chat/bins';
 import { refinerFor, reviewDiff, runChecks, runQa } from './chat/gate';
@@ -364,6 +365,9 @@ const chatOff = chatOffReason({ inDocker: config.inDocker, ptyOptIn, terminal: c
 // Ponte com o VBoards (vboards/vboards.ts): git config --global vboards.url/vboards.token/user.email ou
 // HABBLAUD_VBOARDS_URL/_TOKEN/_EMAIL; HABBLAUD_VBOARDS=0 desliga. A fila só é buscada com o Novo agente ligado.
 const vboardsConfig = await loadVBoardsConfig(process.env);
+// Lida a configuração, os segredos do Habblaud saem do process.env: nenhum processo filho (agente, portão, terminal,
+// hooks do git) herda o token do GitHub nem os outros (secret-env.ts).
+const envSecrets = takeSecrets(process.env);
 // Avisos ao dono (opcional, vboards/ntfy.ts): ntfy e/ou WhatsApp (WA-AKG), o horário do briefing e o provedor do Jarvis.
 const ntfy = new NotifySettings(join(config.dataDir, 'notify.json'));
 // API v1 do VBoards (vboards/api.ts): só com um token vb_ (ferramentas vboards_* do Jarvis e a caixa do WhatsApp).
@@ -516,7 +520,7 @@ const runs = chat
 late.runs = runs;
 // "Subir" (chat/ship.ts): push do branch agentic/*, PR, CI, merge e deploy pelo GitHub, sempre com o PIN. Token em
 // HABBLAUD_GITHUB_TOKEN ou <dataDir>/github.json (600, gravado só pelo próprio computador).
-const githubToken = new GitHubTokenStore(join(config.dataDir, 'github.json'));
+const githubToken = new GitHubTokenStore(join(config.dataDir, 'github.json'), { HABBLAUD_GITHUB_TOKEN: envSecrets.HABBLAUD_GITHUB_TOKEN });
 const ship = runs
   ? new ShipService({
       runs,
