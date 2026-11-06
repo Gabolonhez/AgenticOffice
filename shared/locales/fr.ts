@@ -4245,4 +4245,7 @@ export const FR: Readonly<Record<string, string>> = {
   // server/projects/scaffold.ts
   "Molde não encontrado em {0}.": "Modèle introuvable dans {0}.",
   "A pasta {0} já existe: nada foi sobrescrito.": "Le dossier {0} existe déjà : rien n'a été écrasé.",
+  "Configurar o deploy: secrets e host próprios. Os workflows de deploy do molde não foram ativados{0}.": "Configurer le déploiement : secrets et hôte propres. Les workflows de déploiement du modèle n'ont pas été activés{0}.",
+  " (modelos em {0})": " (modèles dans {0})",
+  "Configurar o deploy (secrets e host próprios)": "Configurer le déploiement (secrets et hôte propres)",
 };

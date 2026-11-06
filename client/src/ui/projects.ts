@@ -25,6 +25,7 @@ export const STEP_LABELS = (): Record<string, string> => ({
   copy: tr('Copiar o molde'),
   personalize: tr('Personalizar nome, bundle id e cores'),
   ci: tr('CI de pull request e eas.json'),
+  deploy: tr('Configurar o deploy (secrets e host próprios)'),
   git: tr('git init e commit inicial'),
   github: tr('Repositórios privados no GitHub'),
   register: tr('Registrar o produto e as chaves vboards.*'),

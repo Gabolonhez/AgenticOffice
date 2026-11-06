@@ -12,9 +12,9 @@ import type { Product, ProductRepo } from '../vboards/products';
 import type { FolderKey } from '../vboards/vboards';
 import { cardsFromSpec, listDrafts, loadBrief, loadSpec, parseBrief, projectDir, repoName, saveDraft, saveSpec, SLUG_RE, type Brief, type BriefQuestion, type PartRole } from './brief';
 import { createRepo, OWNER_RE } from './github-repo';
-import { copyTemplate, personalize, writePipelineFiles } from './scaffold';
+import { copyTemplate, DEPLOY_TEMPLATES, personalize, writePipelineFiles } from './scaffold';
 
-export const STEP_IDS = ['copy', 'personalize', 'ci', 'git', 'github', 'register', 'vboards', 'agent'] as const;
+export const STEP_IDS = ['copy', 'personalize', 'ci', 'deploy', 'git', 'github', 'register', 'vboards', 'agent'] as const;
 export type StepId = (typeof STEP_IDS)[number];
 export type StepStatus = 'pending' | 'running' | 'done' | 'manual' | 'skipped' | 'failed';
 
@@ -255,6 +255,11 @@ export class ProjectsService {
       case 'ci': {
         const made = st.repos.flatMap((r) => writePipelineFiles(r.path, r.role).map((f) => `${r.role}/${f}`));
         return { status: 'done', ...(made.length ? { note: made.join(', ') } : {}) };
+      }
+      case 'deploy': {
+        // O deploy é do dono: secrets e host próprios. Os workflows do molde apontam para o servidor do app base.
+        const parked = st.repos.filter((r) => existsSync(join(r.path, DEPLOY_TEMPLATES))).map((r) => `${r.role}/docs/deploy-templates`);
+        return { status: 'manual', note: tr('Configurar o deploy: secrets e host próprios. Os workflows de deploy do molde não foram ativados{0}.', [parked.length ? tr(' (modelos em {0})', [parked.join(', ')]) : '']) };
       }
       case 'git': {
         const err = await each(async (r) => {

@@ -18,7 +18,8 @@ do meio (0.**3**.0).
   Criar pede o PIN de aprovação. O molde (`HABBLAUD_TEMPLATE_DIR`, padrão `app-base` na pasta dos projetos) é copiado
   para `<HABBLAUD_PROJECTS_ROOT>/<slug>/<slug>-app|server|web` sem `node_modules`, `.git`, `.env`, pastas nativas nem
   credenciais, e nunca por cima de uma pasta que já existe. Depois: nome, slug, bundle id, package e cores
-  personalizados, workflow de CI de pull request e `eas.json`, `git init` com o commit inicial, repositórios privados no
+  personalizados, workflow de CI de pull request e `eas.json` (os workflows de deploy do molde não ficam ativos: vão como
+  modelo para `docs/deploy-templates/` e o deploy vira passo manual, com secrets e host próprios), `git init` com o commit inicial, repositórios privados no
   GitHub (opcional; sem a permissão Administration o passo vira manual com a instrução), o produto no registro com as
   chaves `vboards.*` (ship desligado), o card no VBoards com os cards iniciais da spec (opcional) e um agente que abre a
   sala nova no escritório. A criação é retomável: rodar de novo tenta só o que falta. Nada faz push nem deploy.

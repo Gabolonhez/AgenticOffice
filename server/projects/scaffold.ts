@@ -29,12 +29,20 @@ export function copyTemplate(src: string, dest: string): string | undefined {
     filter: (from) => {
       if (from === src) return true;
       const st = lstatSync(from);
+      // Workflows do molde fazem deploy (ssh no servidor do app base, push em main): nunca entram ativos no projeto novo.
+      if (st.isDirectory() && basename(from) === 'workflows' && basename(dirname(from)) === '.github') return false;
       return !st.isSymbolicLink() && !skipEntry(basename(from), st.isDirectory());
     },
   });
+  // Ficam só como modelo, fora de .github/workflows (o GitHub não roda nada daqui).
+  const workflows = join(src, '.github', 'workflows');
+  if (existsSync(workflows)) cpSync(workflows, join(tmp, DEPLOY_TEMPLATES), { recursive: true, filter: (from) => !lstatSync(from).isSymbolicLink() });
   renameSync(tmp, dest);
   return undefined;
 }
+
+/** Onde os workflows de deploy do molde ficam, desativados, no projeto novo. */
+export const DEPLOY_TEMPLATES = join('docs', 'deploy-templates');
 
 // ------------------------------------------------------------------ personalização
 

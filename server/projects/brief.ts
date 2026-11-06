@@ -151,7 +151,7 @@ export function specMarkdown(b: Brief): string {
     '',
     '1. Copiar o molde (só as partes escolhidas, sem node_modules, .git, .env nem pastas nativas).',
     '2. Personalizar nome, slug, bundle id, package e cores.',
-    '3. Workflow de CI de PR (install, typecheck, test, build) e eas.json no app.',
+    '3. Workflow de CI de PR (install, typecheck, test, build) e eas.json no app. Os workflows de deploy do molde ficam desativados em docs/deploy-templates/ (o deploy pede secrets e host próprios).',
     '4. git init e commit inicial em cada repo.',
     '5. Repositórios privados no GitHub e o remote origin (opcional; o primeiro push é do dono).',
     '6. Registrar o produto no Habblaud (products.json) e as chaves vboards.* de cada repo (check, qa e ship desligados).',

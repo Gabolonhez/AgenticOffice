@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -43,6 +43,8 @@ function fakeTemplate(root: string): string {
   put(join(t, 'base-server', 'package.json'), pkg('appbase-server'));
   put(join(t, 'base-server', 'package-lock.json'), lock('appbase-server'));
   put(join(t, 'base-server', 'prisma', 'schema.prisma'), '');
+  put(join(t, 'base-server', '.github', 'workflows', 'production.yml'), 'on:\n  push:\n    branches: [main]\njobs:\n  d:\n    steps:\n      - uses: appleboy/ssh-action@v1\n');
+  put(join(t, 'base-app', '.github', 'workflows', 'deploy.yml'), 'on:\n  push:\n    branches: [main]\njobs:\n  d:\n    steps:\n      - run: eas build --profile production\n');
   put(join(t, 'base-web', 'package.json'), pkg('appbase-web').replace(/\t/g, '  '));
   put(join(t, 'base-web', 'package-lock.json'), lock('appbase-web'));
   put(join(t, 'base-web', '.next', 'cache'), '');
@@ -234,7 +236,7 @@ describe('ProjectsService', () => {
     const r = svc.start('treino-pro', { github: true, githubOwner: 'Virex-Tech', vboards: true, agent: true });
     if ('error' in r) throw new Error(r.error);
     const end = await r.done;
-    expect(end.steps.map((s) => `${s.id}:${s.status}`)).toEqual(['copy:done', 'personalize:done', 'ci:done', 'git:done', 'github:done', 'register:done', 'vboards:done', 'agent:done']);
+    expect(end.steps.map((s) => `${s.id}:${s.status}`)).toEqual(['copy:done', 'personalize:done', 'ci:done', 'deploy:manual', 'git:done', 'github:done', 'register:done', 'vboards:done', 'agent:done']);
     const repo = join(tmp, 'Projects', 'treino-pro', 'treino-pro-app');
     expect(execFileSync('git', ['log', '--format=%s'], { cwd: repo, encoding: 'utf8' }).trim()).toBe('chore: projeto Treino Pro criado a partir do molde app-base');
     expect(execFileSync('git', ['ls-files'], { cwd: repo, encoding: 'utf8' })).toContain('.github/workflows/ci.yml');
@@ -243,7 +245,7 @@ describe('ProjectsService', () => {
     expect(d.writeFolderConfig).toHaveBeenCalledWith(repo, expect.objectContaining({ ship: 'off', auto: 'false' }));
     expect(createCard.mock.calls[0][0]).toMatchObject({ title: 'Treino Pro', subtasks: expect.arrayContaining([expect.stringMatching(/^\[app\]/)]) });
     expect(openAgent).toHaveBeenCalledWith(repo, expect.stringContaining('spec.md'));
-    expect(svc.state('treino-pro')?.steps.every((s) => s.status === 'done')).toBe(true);
+    expect(svc.state('treino-pro')?.steps.find((s) => s.id === 'deploy')?.note).toMatch(/secrets e host próprios.*docs\/deploy-templates/);
   });
 
   it('retoma do passo que falhou sem refazer o que está feito; GitHub 403 fica manual', async () => {
@@ -257,15 +259,23 @@ describe('ProjectsService', () => {
     const first = svc.start('treino-pro', opts);
     if ('error' in first) throw new Error(first.error);
     const a = await first.done;
-    expect(a.steps.map((s) => s.status)).toEqual(['done', 'done', 'done', 'done', 'manual', 'failed', 'pending', 'pending']);
-    expect(a.steps[4].note).toMatch(/Administration: write/);
+    expect(a.steps.map((s) => s.status)).toEqual(['done', 'done', 'done', 'manual', 'done', 'manual', 'failed', 'pending', 'pending']);
+    expect(a.steps[5].note).toMatch(/Administration: write/);
     // Uma nova instância (reinício) lê o create.json: a cópia não é refeita (refazer recusaria, as pastas existem).
     broken = false;
     const again = new ProjectsService(deps({ fetchImpl: g.fetchImpl, writeFolderConfig })).start('treino-pro', opts);
     if ('error' in again) throw new Error(again.error);
     const b = await again.done;
-    expect(b.steps.map((s) => s.status)).toEqual(['done', 'done', 'done', 'done', 'manual', 'done', 'skipped', 'skipped']);
+    expect(b.steps.map((s) => s.status)).toEqual(['done', 'done', 'done', 'manual', 'done', 'manual', 'done', 'skipped', 'skipped']);
     expect(execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: join(tmp, 'Projects', 'treino-pro', 'treino-pro-server'), encoding: 'utf8' }).trim()).toBe('1');
+    // Nenhum workflow ativo publica: só o CI de pull request; os de deploy do molde ficam como modelo desativado.
+    for (const role of ['app', 'server']) {
+      const repo = join(tmp, 'Projects', 'treino-pro', `treino-pro-${role}`);
+      expect(readdirSync(join(repo, '.github', 'workflows'))).toEqual(['ci.yml']);
+      const ci = readFileSync(join(repo, '.github', 'workflows', 'ci.yml'), 'utf8');
+      expect(ci).not.toMatch(/push:|ssh|deploy|eas (build|submit)|secrets\./);
+      expect(readdirSync(join(repo, 'docs', 'deploy-templates')).length).toBe(1);
+    }
   });
 
   it('recusa começar numa pasta de produto que já existe', () => {
