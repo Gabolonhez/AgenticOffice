@@ -46,6 +46,7 @@ import { WorldSocialNotifier } from './world/away-summary';
 import { worldGate } from './world/settings-world';
 import { worldSectionMode } from './world/world-model';
 import { SceneSwitch, type CitySceneHost } from './world/scene-switch';
+import { Office3dSwitch, type Office3dHost } from './world/office3d-switch';
 import { worldSource } from '../net/world';
 import { FreeArea } from './viewport';
 import { tr } from '../../../shared/i18n';
@@ -61,7 +62,7 @@ function isTypingTarget(t: EventTarget | null): boolean {
   return t.isContentEditable || t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
 }
 
-export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi, city?: CitySceneHost): void {
+export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi, city?: CitySceneHost, office3d?: Office3dHost): void {
   const storage = safeLocalStorage();
   let prefs: UiPrefs = loadPrefs(storage);
   let selection: Selection = world.getSelection();
@@ -87,6 +88,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
   /** Botão Mundo e a ida e volta da cidade (só quando app.ts monta a cena). */
   let scene: SceneSwitch | null = null;
   const inCity = () => !!scene?.inCity;
+  /** Botão 3D e a ida e volta do escritório 3D. */
+  let scene3d: Office3dSwitch | null = null;
+  const in3d = () => !!scene3d?.is3d;
 
   const ctx: UiContext = {
     store,
@@ -131,6 +135,11 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
       if (inCity() && city) {
         if (action === 'overview') city.recenter();
         else city.zoomBy(action === 'zoomIn' ? 1.25 : 1 / 1.25);
+        return;
+      }
+      if (in3d() && office3d) {
+        if (action === 'overview') office3d.recenter();
+        else office3d.zoomBy(action === 'zoomIn' ? 1.25 : 1 / 1.25);
         return;
       }
       if (canvas.open) return canvas.camera(action);
@@ -269,6 +278,29 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
       void sw.visitOwn();
     };
   }
+  // Botão 3D: o escritório em 3D (pacote importado nas Configurações), carregado sob demanda por app.ts.
+  if (office3d) {
+    office3d.bind({
+      pick: (id) => ctx.select(id ? { type: 'agent', id } : null),
+      openSettings: () => settings.toggle(topbar.settingsBtn),
+    });
+    scene3d = new Office3dSwitch(
+      ctx,
+      office3d,
+      () => {
+        if (inCity()) scene?.close();
+      },
+      inCity,
+      () => {
+        if (in3d()) {
+          canvas.toggle(false);
+          if (ctx.isNarrow() && panels.sidebar) ctx.togglePanel('sidebar', false);
+        }
+        invalidate();
+      },
+    );
+    topbar.addSceneButton(scene3d.button);
+  }
   help = new HelpDialog();
   // Fila do VBoards: subtarefas do quadro do time esperando um agente (contador ao lado do "precisa de você").
   const vboards = new VBoardsPanel(ctx);
@@ -306,6 +338,7 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
 
   const components: UiComponent[] = [topbar, sidebar, drawer, terminal, pty, history, deliveries, feed, toasts, settings, empty, banner, tip, notifier, splash, timelapse, sound, day, summary, updateToaster, invite, worldChip, vboards, canvas];
   if (scene) components.push(scene);
+  if (scene3d) components.push(scene3d);
   root.append(worldSocial.el);
   components.push(worldSocial);
 
@@ -412,6 +445,9 @@ export function createUI(root: HTMLElement, store: OfficeStore, world: WorldApi,
         e.preventDefault();
       } else if (selection) {
         ctx.select(null);
+        e.preventDefault();
+      } else if (in3d()) {
+        scene3d?.close();
         e.preventDefault();
       }
       return;
