@@ -517,7 +517,9 @@ export class RunService {
       for (const i of run.items) if (i.agentId) this.deps.chat.restoreCwd(i.agentId);
     }
     // O VBoards e o registro: Juntar = feito (merged) nos itens que terminaram; Descartar = falhou (discarded), com o motivo.
-    for (const i of run.items) {
+    // Descartar com PR aberto (vboards.ship=pr): só limpa a cópia; o PR segue no GitHub e o status dele fica no VBoards.
+    const prOpen = how === 'discard' && !!run.ship?.prUrl;
+    for (const i of prOpen ? [] : run.items) {
       const finished = i.state === 'done' || i.state === 'review';
       if (how === 'merge' && !finished) continue;
       this.journal(run, i, how === 'merge' ? 'merged' : 'discarded');

@@ -29,6 +29,7 @@ import { ZipError } from '../assets3d/zip';
 import { serveAsset } from './assets3d';
 import { ptyRequestProblem } from './pty';
 import type { TriageService } from '../vboards/triage';
+import type { PinCheck } from '../permissions/pin';
 import type { VBoardsService } from '../vboards/vboards';
 
 export interface ApiDeps {
@@ -60,7 +61,7 @@ export interface ApiDeps {
    * PIN de aprovação dos cartões críticos (server/permissions/pin.ts): GET /api/approval-pin {set, all, lockedUntil?}
    * (local, ou o celular com "permissions"); POST {pin?, current?, all?} só pelo próprio computador.
    */
-  approvalPin?: { view(): unknown; update(b: { pin?: unknown; current?: unknown; all?: unknown }): Promise<string | undefined> };
+  approvalPin?: { view(): unknown; update(b: { pin?: unknown; current?: unknown; all?: unknown }): Promise<string | undefined>; check?(pin: unknown): Promise<PinCheck>; triesLeft?(): number };
   /**
    * Rotas das mensagens pelo escritório (/api/messages, a caixa de entrada do plugin em /api/mod/inbox e a do auxiliar
    * do Codex em /api/codex/bridge/*, server/messages/http.ts). Só existem com ServerConfig.messages (a trava do
@@ -680,14 +681,15 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       } else if (path === '/api/vboards/config') {
         const editable = !isRemote(req);
         const masked = <T extends { config: { check?: string; qa?: string } }>(r: T): T => (editable ? r : { ...r, config: { ...r.config, ...(r.config.check ? { check: maskSecrets(r.config.check) } : {}), ...(r.config.qa ? { qa: maskSecrets(r.config.qa) } : {}) } });
-        const answer = (r: Awaited<ReturnType<typeof vb.folderSettings>>) => ('error' in r ? sendJson(res, r.status, { error: r.error }) : sendJson(res, 200, { ...masked(r), editable }));
+        const answer = (r: Awaited<ReturnType<typeof vb.saveFolderSettings>>) => ('error' in r ? sendJson(res, r.status, { error: r.error, ...(r.pin ? { pin: r.pin } : {}) }) : sendJson(res, 200, { ...masked(r), editable }));
         if (isRead) {
           const folder = url.searchParams.get('folder');
           if (folder === null) vb.configFolders().then((folders) => sendJson(res, 200, { folders, editable }), (err) => fail(res, err));
           else vb.folderSettings(folder).then(answer, (err) => fail(res, err));
         } else if (method === 'POST') {
           readJson(req)
-            .then((body) => vb.saveFolderSettings(body))
+            // Ligar o que sobe ou publica sem PIN a cada vez (autoMerge=low, ship=merge, store≠off) pede o PIN no corpo.
+            .then((body) => vb.saveFolderSettings(body, deps.approvalPin?.check && deps.approvalPin.triesLeft ? { check: (p) => deps.approvalPin!.check!(p), triesLeft: () => deps.approvalPin!.triesLeft!() } : undefined))
             .then(answer)
             .catch((err) => fail(res, err));
         } else methodNotAllowed(res, 'GET, POST');

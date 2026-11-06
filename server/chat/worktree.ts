@@ -12,6 +12,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { maskSecrets } from '../../shared/activity';
 import { tr } from '../../shared/i18n';
 import { withoutSecrets } from '../secret-env';
+import { policyFile, readPolicy } from '../vboards/policy';
 import { parseFolderConfig } from '../vboards/vboards';
 import type { ShipWorktreeOps } from './types';
 
@@ -92,7 +93,8 @@ export function createWorktreeOps(dataDir: string, git: Git = realGit): ShipWork
   return {
     async create(repo, agentId, label) {
       if ((await git(['rev-parse', '--show-toplevel'], repo)).code !== 0) return { error: tr('A pasta não é um repositório git.') };
-      const cfg = parseFolderConfig((await git(['config', '--get-regexp', '^vboards\\.'], repo)).out);
+      // Só o git config da própria pasta (--local) e a política sensível do Habblaud (ship, base, remote: vboards/policy.ts).
+      const cfg = parseFolderConfig((await git(['config', '--local', '--get-regexp', '^vboards\\.'], repo)).out, readPolicy(policyFile(dataDir), repo));
       // vboards.ship ligado: a cópia nasce do remoto atualizado (a base do PR), não do HEAD local.
       const start = cfg.ship === 'off' ? 'HEAD' : await remoteBase(git, repo, cfg.remote ?? 'origin', cfg.base);
       if (typeof start !== 'string') return start;

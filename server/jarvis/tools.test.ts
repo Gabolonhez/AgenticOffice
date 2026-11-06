@@ -220,6 +220,10 @@ describe('Jarvis: SAFE com limites do servidor', () => {
     const auto = setup('deny', { folderConfig: async () => cfg({ auto: true, check: 'npm test' }) });
     await auto.call('runs_create', { folder: 'proj', items: ['a', 'b'] });
     expect(auto.runs.create).toHaveBeenCalledWith(expect.objectContaining({ isolated: true, options: expect.objectContaining({ denyPush: true, limits: expect.objectContaining({ maxCostUsd: 3 }) }) }), expect.objectContaining({ check: 'npm test' }));
+    // Como a abertura automática do VBoards: o risco da pasta no portão e a política congelada (subir/loja sozinhos).
+    const risky = setup('deny', { folderConfig: async () => cfg({ auto: true, riskPaths: ['src/core/**'], riskLines: 50 }) });
+    await risky.call('runs_create', { folder: 'proj', items: ['a'] });
+    expect(risky.runs.create).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ riskPaths: ['src/core/**'], riskLines: 50, policy: expect.objectContaining({ riskPaths: 'src/core/**', riskLines: '50', autoMerge: 'off' }) }));
     const manual = setup('deny');
     expect((await manual.call('runs_create', { folder: 'proj', items: ['a'] })).isError).toBe(true);
     expect(manual.runs.create).not.toHaveBeenCalled();
@@ -555,6 +559,15 @@ describe('projects_config_set: vboards.autoMerge (subir sem PIN)', () => {
       expect(s.writeFolderConfig).not.toHaveBeenCalled();
     });
   }
+
+  it('ship=merge e store≠off também nunca ligam por turno contaminado', async () => {
+    for (const values of [{ ship: 'merge' }, { store: 'ota' }]) {
+      const s = setup('allow');
+      s.setTurn({ origin: 'whatsapp', seq: 1 });
+      expect((await s.call('projects_config_set', { folder: 'proj', values })).isError).toBe(true);
+      expect(s.writeFolderConfig).not.toHaveBeenCalled();
+    }
+  });
 
   it('desligar (off) segue o caminho normal do cartão', async () => {
     const s = setup('allow');

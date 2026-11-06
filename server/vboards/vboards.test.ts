@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentInfo } from '../../shared/types';
 import { setQuiet } from '../log';
-import { baseFromUrl, decideCompletion, matchFolders, parseFolderConfig, reportKey, taskFolders, parseRefineOutput, parseRefines, taskRisk, refinePrompt, REFINE_LIMITS, readFolderConfig, resolveConfig, validateFolderConfig, writeFolderConfig, REVIEW_SUMMARY_MAX, SUMMARY_MAX, TodoTracker, TODOS_QUIET_MS, VBoardsService, type FolderConfig } from './vboards';
+import { policyFile, readPolicy } from './policy';
+import { baseFromUrl, decideCompletion, policyChangeNeedsPin, repoTag, matchFolders, parseFolderConfig, reportKey, taskFolders, parseRefineOutput, parseRefines, taskRisk, refinePrompt, REFINE_LIMITS, readFolderConfig, resolveConfig, validateFolderConfig, writeFolderConfig, REVIEW_SUMMARY_MAX, SUMMARY_MAX, TodoTracker, TODOS_QUIET_MS, VBoardsService, type FolderConfig } from './vboards';
 
 setQuiet(true);
 const flush = () => new Promise((ok) => setTimeout(ok, 0));
@@ -200,6 +201,25 @@ describe('serviço', () => {
     expect(updates.map((u) => u.status)).toEqual(['running', 'review', 'running', 'review']);
     expect(updates[2].summary).toBeUndefined();
     expect(updates[3].summary).toContain('rodada 2');
+  });
+
+  it('reopen limpa a etapa e o PR da rodada anterior', async () => {
+    const { svc, calls, setAgents, setReply } = setup({ chat: true, outcome: 'review' });
+    await svc.poll();
+    svc.stop();
+    await svc.begin({ id: 'c1:s1', folder: '/p/payposts-web' });
+    setReply('Branch: agentic/lista-1');
+    setAgents([mainAgent({ id: 'chat:1', chat: true, status: 'idle' })]);
+    await svc.check();
+    await flush();
+    expect(svc.settle('c1:s1', { state: 'review', stage: 'pr', prUrl: 'https://github.com/o/r/pull/1' })).toBe(true);
+    await flush();
+    expect(svc.reopen('chat:1')).toBe(true);
+    await flush();
+    const last = calls.filter((c) => c.url.endsWith('/update')).map((c) => JSON.parse(String(c.init.body))).at(-1);
+    expect(last.status).toBe('running');
+    expect(last).not.toHaveProperty('stage');
+    expect(last).not.toHaveProperty('prUrl');
   });
 
   it('com o chat: o pedido editado na janela vale no lugar do texto da tarefa', async () => {
@@ -498,6 +518,65 @@ describe('tela de configuração das pastas', () => {
   });
 });
 
+describe('política sensível fora do git config (folder-policy.json)', () => {
+  it('chave sensível no git config é ignorada e vira aviso; a do arquivo vale', () => {
+    const out = 'vboards.automerge low\nvboards.ship merge\nvboards.risklines 99999\nvboards.store ota\nvboards.check npm test';
+    const c = parseFolderConfig(out);
+    expect(c).toMatchObject({ autoMerge: 'off', ship: 'off', check: 'npm test' });
+    expect(c.riskLines).toBeUndefined();
+    expect(c.store).toBeUndefined();
+    expect(c.legacy).toEqual(['autoMerge', 'ship', 'riskLines', 'store']);
+    // No arquivo: vale e não avisa; o do git config continua ignorado (nunca importado).
+    const d = parseFolderConfig(out, { ship: 'pr' });
+    expect(d).toMatchObject({ ship: 'pr', autoMerge: 'off' });
+    expect(d.legacy).toEqual(['autoMerge', 'riskLines', 'store']);
+  });
+
+  it('grava as sensíveis no arquivo (não no git config), tira a cópia antiga e lê de volta', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'hb-vb-pol-'));
+    const data = mkdtempSync(join(tmpdir(), 'hb-vb-data-'));
+    execFileSync('git', ['init', '-q'], { cwd: dir });
+    execFileSync('git', ['config', 'vboards.automerge', 'low'], { cwd: dir });
+    expect((await readFolderConfig(dir, data)).legacy).toEqual(['autoMerge']);
+    expect(await writeFolderConfig(dir, { ship: 'pr', autoMerge: 'off', check: 'npm test' }, data)).toBeUndefined();
+    const git = execFileSync('git', ['config', '--local', '--get-regexp', '^vboards\\.'], { cwd: dir, encoding: 'utf8' });
+    expect(git).toContain('vboards.check npm test');
+    expect(git).not.toMatch(/ship|automerge/i);
+    expect(readPolicy(policyFile(data), dir)).toEqual({ ship: 'pr', autoMerge: 'off' });
+    const c = await readFolderConfig(dir, data);
+    expect(c).toMatchObject({ ship: 'pr', autoMerge: 'off', check: 'npm test' });
+    expect(c.legacy).toBeUndefined();
+    // Sem a pasta de dados, nada sensível é gravado.
+    expect(await writeFolderConfig(dir, { ship: 'merge' })).toEqual(expect.any(String));
+  });
+
+  it('PIN: ligar autoMerge=low, ship=merge ou store≠off (ou mexer ligado); desligar e o resto não pedem', () => {
+    const base = parseFolderConfig(undefined);
+    expect(policyChangeNeedsPin(base, { autoMerge: 'low' })).toBe(true);
+    expect(policyChangeNeedsPin(base, { ship: 'merge' })).toBe(true);
+    expect(policyChangeNeedsPin(base, { store: 'ota' })).toBe(true);
+    expect(policyChangeNeedsPin(base, { ship: 'pr', base: 'main', ciMinutes: '30', check: 'x', auto: 'true' })).toBe(false);
+    const armed = parseFolderConfig(undefined, { autoMerge: 'low', ship: 'merge' });
+    expect(policyChangeNeedsPin(armed, { riskLines: '99999' })).toBe(true);
+    expect(policyChangeNeedsPin(armed, { autoMerge: 'low', ship: 'merge' })).toBe(false);
+    expect(policyChangeNeedsPin(armed, { autoMerge: 'off' })).toBe(false);
+    expect(policyChangeNeedsPin(armed, { check: 'npm test' })).toBe(false);
+  });
+
+  it('POST da configuração: ligar autoMerge sem PIN é recusado; com PIN grava', async () => {
+    const writeConfig = vi.fn(async () => undefined);
+    const svc = new VBoardsService({ config: { base: 'https://vb.example', token: 't', email: 'e' }, agents: () => [], roomPath: () => undefined, folders: async () => ['/p/api'], folderConfig: async () => parseFolderConfig(undefined), writeConfig });
+    const check = vi.fn(async (p: unknown) => (p === '1234' ? ('ok' as const) : p ? ('wrong' as const) : ('missing' as const)));
+    const pin = { check, triesLeft: () => 4 };
+    expect(await svc.saveFolderSettings({ folder: '/p/api', config: { autoMerge: 'low' } }, pin)).toMatchObject({ status: 403, pin: 'missing' });
+    expect(await svc.saveFolderSettings({ folder: '/p/api', config: { autoMerge: 'low' } })).toMatchObject({ status: 403, pin: 'unset' });
+    expect(writeConfig).not.toHaveBeenCalled();
+    expect(await svc.saveFolderSettings({ folder: '/p/api', config: { autoMerge: 'low' }, pin: '1234' }, pin)).toMatchObject({ folder: '/p/api' });
+    expect(writeConfig).toHaveBeenCalledWith('/p/api', { autoMerge: 'low' });
+    expect(await svc.saveFolderSettings({ folder: '/p/api', config: { check: 'npm test' } })).toMatchObject({ folder: '/p/api' });
+  });
+});
+
 describe('git config --local de verdade', () => {
   it('grava, lê de volta e tira (tirar o que não existe não é erro)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hb-vb-cfg-'));
@@ -544,8 +623,8 @@ describe('Refinar (plano só de leitura)', () => {
     expect(taskRisk({ approvedAt: 1_700_000_000_000 }).approvedAt).toBe(new Date(1_700_000_000_000).toISOString());
   });
   it('vboards.autoMerge (off padrão | low), riskPaths e riskLines', () => {
-    expect(parseFolderConfig('vboards.automerge low\nvboards.riskpaths src/core/**, *.tf\nvboards.risklines 120')).toMatchObject({ autoMerge: 'low', riskPaths: ['src/core/**', '*.tf'], riskLines: 120 });
-    expect(parseFolderConfig('vboards.automerge sim')).toMatchObject({ autoMerge: 'off', riskPaths: [] });
+    expect(parseFolderConfig(undefined, { autoMerge: 'low', riskPaths: 'src/core/**, *.tf', riskLines: '120' })).toMatchObject({ autoMerge: 'low', riskPaths: ['src/core/**', '*.tf'], riskLines: 120 });
+    expect(parseFolderConfig(undefined, { autoMerge: 'sim' })).toMatchObject({ autoMerge: 'off', riskPaths: [] });
     expect(validateFolderConfig({ autoMerge: 'low', riskPaths: 'a/**, *.sql', riskLines: '50' })).toEqual({ values: { autoMerge: 'low', riskPaths: 'a/**, *.sql', riskLines: '50' } });
     for (const bad of [{ autoMerge: 'medium' }, { autoMerge: 'high' }, { riskLines: '0' }, { riskLines: 'x' }]) expect(validateFolderConfig(bad)).toHaveProperty('error');
   });
@@ -597,7 +676,7 @@ describe('Refinar (plano só de leitura)', () => {
     await s.svc.poll();
     s.svc.stop();
     await settle();
-    expect(s.refine).toHaveBeenCalledWith('/p/payposts-web', expect.stringContaining('Fazer X'), expect.objectContaining({ provider: 'codex' }));
+    expect(s.refine).toHaveBeenCalledWith('/p/payposts-web', expect.stringContaining('Fazer X'), expect.objectContaining({ provider: 'codex' }), undefined);
     expect(s.posts).toEqual([{ email: 'eu@x', cardId: 'c9', status: 'running' }]);
     expect(s.svc.refineList()).toMatchObject([{ cardId: 'c9', state: 'running' }]);
     s.finish();
@@ -698,6 +777,36 @@ describe('VBoards: token vb_ recusado na fila', () => {
   });
 });
 
+describe('Refinar num produto com vários repos', () => {
+  const product = { id: 'helix', name: 'PeptPro', cardName: 'PeptPro', repos: [{ path: '/p/helix-app', role: 'app' as const }, { path: '/p/helix-server', role: 'server' as const }, { path: '/p/peptpro-web', role: 'web' as const }] };
+  it('roda no repo server com os outros como leitura extra e pede a etiqueta em cada subtarefa', async () => {
+    const posts: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes('/api/agent-tasks?')) return new Response(JSON.stringify({ tasks: [], refines: [{ cardId: 'c1', cardTitle: 'PeptPro', description: 'Login com Google', subtasks: [] }] }), { status: 200 });
+      posts.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    const refine = vi.fn(async (_f: string, _p: string, _c: FolderConfig, _x?: string[]) => '```json\n{"plan":"P","questions":[],"subtasks":["[server] rota do Google","[app] botão"]}\n```');
+    const svc = new VBoardsService({ config: { base: 'https://vb.dev', token: 't', email: 'eu@x' }, agents: () => [], roomPath: () => undefined, folders: async () => [], chat: { open: () => ({ agentId: 'chat:1' }) }, folderConfig: async () => parseFolderConfig(undefined), refine, products: () => [product], fetch: fetchMock as unknown as typeof fetch });
+    await svc.poll();
+    svc.stop();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    await new Promise((ok) => setTimeout(ok, 0));
+    expect(refine).toHaveBeenCalledWith('/p/helix-server', expect.stringContaining('[app] /p/helix-app'), expect.anything(), ['/p/helix-app', '/p/peptpro-web']);
+    expect(refine.mock.calls[0][1]).toContain('Comece o texto de CADA subtarefa com a etiqueta');
+    expect(posts.at(-1)).toMatchObject({ status: 'ready', subtasks: ['[server] rota do Google', '[app] botão'] });
+    // A abertura automática acha a pasta pela etiqueta que o Refinar pôs.
+    expect(taskFolders({ cardTitle: 'PeptPro', text: '[server] rota do Google' }, [], [product])).toEqual({ paths: ['/p/helix-server'] });
+    expect(taskFolders({ cardTitle: 'PeptPro', text: '[app] botão' }, [], [product])).toEqual({ paths: ['/p/helix-app'] });
+    expect(taskFolders({ cardTitle: 'PeptPro', text: '[peptpro-web] rodapé' }, [], [product])).toEqual({ paths: ['/p/peptpro-web'] });
+  });
+
+  it('repoTag: o papel quando é único, senão o nome da pasta', () => {
+    const repos = [{ path: '/p/a-app', role: 'app' as const }, { path: '/p/b-app', role: 'app' as const }, { path: '/p/api', role: 'server' as const }];
+    expect(repos.map((r) => repoTag(repos, r))).toEqual(['a-app', 'b-app', 'server']);
+  });
+});
+
 describe('produto com vários repos (products.json)', () => {
   const product = { id: 'posts', name: 'Posts Builder', cardName: 'Posts Builder', repos: [{ path: '/p/posts-server', role: 'server' as const }, { path: '/p/posts-web', role: 'web' as const }] };
   function setup(text: string, repo?: string) {
@@ -771,9 +880,9 @@ describe('taskFolders e as chaves novas da pasta', () => {
   it('vboards.ship/base/remote: valida e lê, padrão off', () => {
     expect(validateFolderConfig({ ship: 'pr', base: 'develop', remote: 'upstream' })).toEqual({ values: { ship: 'pr', base: 'develop', remote: 'upstream' } });
     for (const bad of [{ ship: 'push' }, { base: '-x' }, { base: 'a..b' }, { remote: 'a b' }]) expect(validateFolderConfig(bad)).toHaveProperty('error');
-    expect(parseFolderConfig('vboards.ship MERGE\nvboards.base release/1\nvboards.remote origin')).toMatchObject({ ship: 'merge', base: 'release/1', remote: 'origin' });
-    expect(parseFolderConfig('vboards.ship sim\nvboards.base --upload-pack=x')).toMatchObject({ ship: 'off' });
-    expect(parseFolderConfig('vboards.base --upload-pack=x').base).toBeUndefined();
+    expect(parseFolderConfig(undefined, { ship: 'MERGE', base: 'release/1', remote: 'origin' })).toMatchObject({ ship: 'merge', base: 'release/1', remote: 'origin' });
+    expect(parseFolderConfig(undefined, { ship: 'sim', base: '--upload-pack=x' })).toMatchObject({ ship: 'off' });
+    expect(parseFolderConfig(undefined, { base: '--upload-pack=x' }).base).toBeUndefined();
   });
 
   it('reportKey: ligação antiga (só o status) não reenvia; etapa nova reenvia', () => {

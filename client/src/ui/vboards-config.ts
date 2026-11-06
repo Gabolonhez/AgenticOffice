@@ -1,5 +1,6 @@
-// Configurações › VBoards por pasta (GET/POST /api/vboards/config): lê e grava o `git config --local vboards.*` da
-// pasta escolhida, a única fonte (o servidor usa a mesma). Só pastas conhecidas. Pela porta do celular é só leitura:
+// Configurações › VBoards por pasta (GET/POST /api/vboards/config): lê e grava a configuração da pasta escolhida (as
+// chaves comuns no `git config --local vboards.*`; as de subir, merge e loja no Habblaud, fora do alcance dos agentes:
+// ligar autoMerge=low, ship=merge ou a loja pede o PIN). Só pastas conhecidas. Pela porta do celular é só leitura:
 // vboards.check é um comando de shell e vboards.auto abre agentes sozinho. Some com o VBoards desligado (404) ou sem
 // acesso (403). Junto, os avisos ao dono (GET/POST /api/vboards/notify): ntfy, WhatsApp (WA-AKG), o canal e o horário
 // do briefing do Jarvis, globais e com a mesma regra (a chave do WA-AKG nunca volta à página). JarvisConfigGroup: o
@@ -18,13 +19,14 @@ interface NotifyView {
   briefing?: { time: string; days: number[] };
   closing?: { time: string; days: number[] };
   weekly?: { time: string; days: number[] };
+  triage?: boolean;
   editable?: boolean;
 }
 
 const ROUTINES = ['briefing', 'closing', 'weekly'] as const;
 const routineLabel = (k: (typeof ROUTINES)[number]): string => (k === 'closing' ? tr('Horário do fechamento do dia') : k === 'weekly' ? tr('Horário do resumo semanal') : tr('Horário do briefing'));
 
-interface FolderConfig { card?: string; auto: boolean; provider: string; budget: number; check?: string; qa?: string; reviewer: string; reviewerModel?: string; copy?: string; ship?: string; base?: string; remote?: string; deploy?: string; ciMinutes?: number; store?: string; storeWorkflow?: string; otaChannel?: string; versionBump?: string; autoMerge?: string; riskPaths?: string; riskLines?: number }
+interface FolderConfig { card?: string; auto: boolean; provider: string; budget: number; check?: string; qa?: string; reviewer: string; reviewerModel?: string; copy?: string; ship?: string; base?: string; remote?: string; deploy?: string; ciMinutes?: number; store?: string; storeWorkflow?: string; otaChannel?: string; versionBump?: string; autoMerge?: string; riskPaths?: string; riskLines?: number; legacy?: string[] }
 
 const PROVIDERS = ['claude', 'codex', 'agy'];
 
@@ -68,6 +70,7 @@ export class VBoardsConfigGroup {
     time: h('input', { class: 'ui-rename__input', type: 'time' }) as HTMLInputElement,
     days: [tr('dom'), tr('seg'), tr('ter'), tr('qua'), tr('qui'), tr('sex'), tr('sáb')].map((d) => ({ label: d, box: h('input', { type: 'checkbox' }) as HTMLInputElement })),
   }));
+  private readonly triage = h('input', { type: 'checkbox' });
   private readonly ntfySave = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar avisos'), on: { click: () => void this.storeNtfy() } });
   private readonly ntfyStatus = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
   private readonly ntfyGroup = h(
@@ -85,9 +88,13 @@ export class VBoardsConfigGroup {
     h('p', { class: 'ui-set__hint', text: tr('Briefing do Jarvis: um resumo no horário escolhido (vazio = desligado), na conversa dele, no ntfy (a manchete) e no WhatsApp (inteiro).') }),
     h('p', { class: 'ui-set__hint', text: tr('O fechamento do dia (feito, travado, o que fica para amanhã) e o resumo semanal (por projeto, com o custo) saem pelos mesmos canais; vêm desligados.') }),
     ...this.routines.flatMap((r) => [h('label', { class: 'ui-set ui-set--routine' }, h('span', { class: 'ui-set__label', text: r.label }), r.time), h('div', { class: 'ui-set__days' }, ...r.days.map((d) => h('label', { class: 'ui-spawn__check' }, d.box, h('span', { text: d.label }))))]),
+    h('label', { class: 'ui-spawn__check' }, this.triage, h('span', { text: tr('Triagem automática das ideias novas do VBoards (a cada 2 min; vem desligada)') })),
     this.ntfySave,
     this.ntfyStatus,
   );
+  /** PIN de aprovação: o servidor só pede ao ligar o que sobe ou publica sem PIN a cada vez. */
+  private readonly pin = h('input', { class: 'ui-rename__input', type: 'password', attrs: { maxlength: 64, autocomplete: 'off' } });
+  private readonly legacy = h('p', { class: 'ui-set__hint is-error', hidden: true });
   private readonly save = h('button', { class: 'ui-btn', type: 'button', text: tr('Gravar na pasta'), on: { click: () => void this.store() } });
   private readonly status = h('p', { class: 'ui-set__hint', attrs: { role: 'status', 'aria-live': 'polite' } });
   private readonly fields = [this.card, this.auto, this.provider, this.budget, this.check, this.qa, this.reviewer, this.reviewerModel, this.copy, this.ship, this.base, this.remote, this.deploy, this.ciMinutes, this.storeMode, this.storeWorkflow, this.otaChannel, this.versionBump, this.autoMerge, this.riskPaths, this.riskLines];
@@ -98,8 +105,9 @@ export class VBoardsConfigGroup {
       'div',
       { class: 'ui-set-group', hidden: true },
       h('h3', { text: tr('VBoards por pasta') }),
-      h('p', { class: 'ui-set__hint', text: tr('Fica no git config --local da pasta. A abertura automática vem desligada: ligada, as subtarefas da fila que só combinam com esta pasta viram uma lista numa cópia isolada, sem push, e terminam esperando a sua revisão. Juntar é sempre um clique seu.') }),
+      h('p', { class: 'ui-set__hint', text: tr('As chaves comuns ficam no git config --local da pasta; as de subir, merge e loja ficam no Habblaud, onde os agentes não gravam. A abertura automática vem desligada: ligada, as subtarefas da fila que só combinam com esta pasta viram uma lista numa cópia isolada, sem push, e terminam esperando a sua revisão. Juntar é sempre um clique seu.') }),
       row(tr('Pasta'), this.folder),
+      this.legacy,
       row(tr('Card (vboards.card)'), this.card),
       h('label', { class: 'ui-spawn__check' }, this.auto, h('span', { text: tr('Abrir sozinho (vboards.auto)') })),
       row(tr('Agente (vboards.provider)'), this.provider),
@@ -125,6 +133,7 @@ export class VBoardsConfigGroup {
       row(tr('Canal do OTA automático (vboards.otaChannel)'), this.otaChannel),
       row(tr('Versão nova (vboards.versionBump)'), this.versionBump),
       this.loja.el,
+      row(tr('PIN de aprovação (só para ligar merge automático, ship=merge ou a loja)'), this.pin),
       this.save,
       this.status,
       this.ntfyGroup,
@@ -155,11 +164,12 @@ export class VBoardsConfigGroup {
     this.waKey.value = '';
     this.waKey.placeholder = b.wa?.apiKeySet ? tr('guardada (deixe vazio para manter)') : '';
     this.channel.value = b.channel ?? 'ntfy';
+    this.triage.checked = b.triage === true;
     for (const r of this.routines) {
       r.time.value = b[r.key]?.time ?? '';
       r.days.forEach((d, i) => (d.box.checked = !!b[r.key]?.days.includes(i)));
     }
-    for (const f of [this.ntfy, this.waUrl, this.waSession, this.waOwner, this.waKey, this.channel, ...this.routines.flatMap((r) => [r.time, ...r.days.map((d) => d.box)])]) f.disabled = !editable;
+    for (const f of [this.ntfy, this.waUrl, this.waSession, this.waOwner, this.waKey, this.channel, this.triage, ...this.routines.flatMap((r) => [r.time, ...r.days.map((d) => d.box)])]) f.disabled = !editable;
     setHidden(this.ntfySave, !editable);
     if (!editable) {
       const on = [b.configured ? 'ntfy' : '', b.waConfigured ? 'WhatsApp' : ''].filter(Boolean).join(', ');
@@ -171,7 +181,7 @@ export class VBoardsConfigGroup {
     try {
       const wa = this.waUrl.value.trim() ? { url: this.waUrl.value, sessionId: this.waSession.value, ownerJid: this.waOwner.value, ...(this.waKey.value ? { apiKey: this.waKey.value } : {}) } : { url: '' };
       const schedules = Object.fromEntries(this.routines.map((r) => [r.key, { time: r.time.value, days: r.days.flatMap((d, i) => (d.box.checked ? [i] : [])) }]));
-      const res = await fetch('/api/vboards/notify', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: this.ntfy.value, channel: this.channel.value, wa, ...schedules }) });
+      const res = await fetch('/api/vboards/notify', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: this.ntfy.value, channel: this.channel.value, wa, triage: this.triage.checked, ...schedules }) });
       const body = (await res.json().catch(() => ({}))) as NotifyView & { error?: string };
       if (!res.ok) throw new Error(body.error ?? tr('erro {0}', [res.status]));
       this.showNtfy(body);
@@ -232,7 +242,10 @@ export class VBoardsConfigGroup {
     this.otaChannel.value = c.otaChannel === 'preview' ? '' : (c.otaChannel ?? '');
     this.versionBump.value = c.versionBump ?? 'auto';
     void this.loja.setFolder(this.folder.value, !!c.store && c.store !== 'off');
-    for (const f of this.fields) f.disabled = !editable;
+    for (const f of [...this.fields, this.pin]) f.disabled = !editable;
+    // Valores antigos dessas chaves no git config são ignorados (um agente pode tê-los gravado): configurar aqui de novo.
+    setText(this.legacy, c.legacy?.length ? tr('Estas chaves estavam no git config da pasta e agora são ignoradas (ficam no Habblaud, fora do alcance dos agentes): {0}. Configure de novo aqui.', [c.legacy.map((k) => `vboards.${k}`).join(', ')]) : '');
+    setHidden(this.legacy, !c.legacy?.length);
     setHidden(this.save, !editable);
     this.say(editable ? '' : tr('Só leitura pela porta do celular: mude no próprio computador.'));
   }
@@ -241,11 +254,12 @@ export class VBoardsConfigGroup {
     const config = { card: this.card.value, auto: this.auto.checked, provider: this.provider.value, budget: this.budget.value, check: this.check.value, qa: this.qa.value, reviewer: this.reviewer.value, reviewerModel: this.reviewerModel.value, copy: this.copy.value, ship: this.ship.value, base: this.base.value, remote: this.remote.value, deploy: this.deploy.value, ciMinutes: this.ciMinutes.value, store: this.storeMode.value === 'off' ? '' : this.storeMode.value, storeWorkflow: this.storeWorkflow.value, otaChannel: this.otaChannel.value, versionBump: this.versionBump.value === 'auto' ? '' : this.versionBump.value, autoMerge: this.autoMerge.value, riskPaths: this.riskPaths.value, riskLines: this.riskLines.value };
     if (config.autoMerge === 'low' && this.loadedAutoMerge !== 'low' && !confirm(tr('Ligar o merge automático? Isto permite subir sem PIN tarefas de risco baixo desta pasta.'))) return;
     try {
-      const res = await fetch('/api/vboards/config', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: this.folder.value, config }) });
+      const res = await fetch('/api/vboards/config', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder: this.folder.value, config, ...(this.pin.value ? { pin: this.pin.value } : {}) }) });
+      this.pin.value = '';
       const body = (await res.json().catch(() => ({}))) as { config?: FolderConfig; editable?: boolean; error?: string };
       if (!res.ok || !body.config) throw new Error(body.error ?? tr('erro {0}', [res.status]));
       this.show(body.config, body.editable === true);
-      this.say(tr('Gravado no git config da pasta.'));
+      this.say(tr('Configuração da pasta gravada.'));
     } catch (err) {
       this.say(tr('Não gravou: {0}', [(err as Error).message]), true);
     }

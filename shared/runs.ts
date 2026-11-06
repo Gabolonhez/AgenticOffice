@@ -63,6 +63,11 @@ export interface RunAuto {
   /** vboards.riskPaths (globs) e vboards.riskLines: o risco do diff no relatório do portão. */
   riskPaths?: string[];
   riskLines?: number;
+  /**
+   * A política sensível da pasta (server/vboards/policy.ts) congelada ao criar a lista: subir sozinha e a loja depois
+   * do deploy só valem se a política de agora for igual a esta.
+   */
+  policy?: Record<string, string>;
   reviewer: Provider;
   reviewerModel?: string;
 }

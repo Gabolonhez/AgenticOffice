@@ -29,7 +29,6 @@ import { openMainAgent, SessionHistory } from './sources/history';
 import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
 import { defaultProjectsRoot, ProjectsService } from './projects/create';
-import { loadGithubToken } from './projects/github-repo';
 import { createProjectRoutes } from './projects/http';
 import { PermissionRegistry } from './permissions/registry';
 import { ApprovalPin } from './permissions/pin';
@@ -64,7 +63,7 @@ import { OwnerSocial } from './world/social';
 import { BuildingTokens } from './world/tokens';
 import { BuildingUplink } from './world/uplink';
 import { WorldViewer } from './world/viewer';
-import { AUTO_TURN_MINUTES, lastReply, loadVBoardsConfig, readFolderConfig, VBoardsService, writeFolderConfig } from './vboards/vboards';
+import { AUTO_TURN_MINUTES, lastReply, loadVBoardsConfig, policyOf, readFolderConfig, VBoardsService, writeFolderConfig } from './vboards/vboards';
 import { VBoardsApi } from './vboards/api';
 import { JarvisInbox, JarvisService, JARVIS_ID } from './jarvis/service';
 import { JarvisTools } from './jarvis/tools';
@@ -417,6 +416,10 @@ const vboards =
           return path ? lastReply(path, agents.parserFor(id)) : undefined;
         },
         booting: () => office.isBooting(),
+        // Configuração por pasta: chaves comuns no git config; as sensíveis (subir, merge sozinho, loja) no
+        // <dataDir>/chat/folder-policy.json, que só o servidor grava (vboards/policy.ts).
+        folderConfig: (f) => readFolderConfig(f, config.dataDir),
+        writeConfig: (f, v) => writeFolderConfig(f, v, config.dataDir),
         // Opt-in por pasta (git config --local vboards.auto true): uma lista do chat por pasta, na cópia isolada, sem
         // push. Uma lista por pasta, até HABBLAUD_MAX_PARALLEL_RUNS ao mesmo tempo: sem vaga, espera a próxima busca
         // (o create devolve 409). Nunca junta sozinho.
@@ -432,12 +435,13 @@ const vboards =
                   isolated: true,
                   options: { folder, provider: cfg.provider, permission: 'auto', denyPush: true, limits: { maxCostUsd: cfg.budget, maxTurnMinutes: AUTO_TURN_MINUTES } },
                 },
-                { ...(cfg.check ? { check: cfg.check } : {}), ...(cfg.qa ? { qa: cfg.qa } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}), ...(cfg.riskPaths.length ? { riskPaths: cfg.riskPaths } : {}), ...(cfg.riskLines ? { riskLines: cfg.riskLines } : {}) },
+                { ...(cfg.check ? { check: cfg.check } : {}), ...(cfg.qa ? { qa: cfg.qa } : {}), reviewer: cfg.reviewer, ...(cfg.reviewerModel ? { reviewerModel: cfg.reviewerModel } : {}), ...(cfg.riskPaths.length ? { riskPaths: cfg.riskPaths } : {}), ...(cfg.riskLines ? { riskLines: cfg.riskLines } : {}), policy: policyOf(cfg) },
               );
               if ('error' in r && r.status !== 409) log.warnOnce(`vboards:auto:${r.error}`, tr('VBoards: não abriu a lista automática de {0} ({1}).', [folder, r.error]));
             },
         // "Refinar" (o clique já foi no VBoards): uma rodada só de leitura na pasta, pelo vboards.provider.
-        refine: chatOff ? undefined : (folder, prompt, cfg) => refinerFor(cfg.provider, folder, cfg.budget).run(prompt).then((r) => r.text),
+        // Produto com vários repos: os outros vão como leitura extra (extraDirs).
+        refine: chatOff ? undefined : (folder, prompt, cfg, extra) => refinerFor(cfg.provider, folder, cfg.budget, undefined, undefined, false, extra).run(prompt).then((r) => r.text),
         // Perguntas do Refinar: o card passa a esperar o dono (vboards/triage.ts).
         onQuestions: (r, questions) => late.triage?.askRefine(r, questions),
         notify: (title, event) => ntfy.notify(title, event),
@@ -529,7 +533,7 @@ late.runs = runs;
 const githubToken = new GitHubTokenStore(join(config.dataDir, 'github.json'), { HABBLAUD_GITHUB_TOKEN: envSecrets.HABBLAUD_GITHUB_TOKEN });
 // Lojas (chat/lojas.ts): depois do deployed de um app, dispara o workflow de OTA/build/submit do próprio repo.
 const lojas = new StoreService({
-  folderConfig: (f) => readFolderConfig(f),
+  folderConfig: (f) => readFolderConfig(f, config.dataDir),
   products,
   token: () => githubToken.get(),
   github: (token) => new GitHub(token),
@@ -542,12 +546,12 @@ const lojas = new StoreService({
 });
 const ship = runs
   ? new ShipService({
-      onDeployed: (folder) => void lojas.afterDeployed(folder),
+      onDeployed: (folder, frozen) => void lojas.afterDeployed(folder, frozen),
       runs,
       worktrees: createWorktreeOps(config.dataDir),
       token: () => githubToken.get(),
       github: (token) => new GitHub(token),
-      folderConfig: (f) => readFolderConfig(f),
+      folderConfig: (f) => readFolderConfig(f, config.dataDir),
       products,
       vboards,
       // Subiu sozinha (vboards.autoMerge=low): o aviso leva o link do PR.
@@ -614,10 +618,11 @@ const projects = chatOff
       dataDir: config.dataDir,
       projectsRoot,
       templateDir,
-      githubToken: () => loadGithubToken(config.dataDir),
+      // O process.env já perdeu o HABBLAUD_GITHUB_TOKEN (takeSecrets): o token vem do mesmo lugar que o do "Subir".
+      githubToken: () => githubToken.get(),
       githubOwner: () => process.env.HABBLAUD_GITHUB_OWNER?.trim() || undefined,
       products: { load: () => loadProducts(productsFile), save: (raw) => saveProducts(productsFile, raw) },
-      writeFolderConfig: (f, v) => writeFolderConfig(f, v),
+      writeFolderConfig: (f, v) => writeFolderConfig(f, v, config.dataDir),
       vboards: vboardsApi,
       // O agente do projeto (Claude, pedindo aprovação a cada ação) faz a sala nova aparecer no escritório.
       openAgent: chat
@@ -628,8 +633,8 @@ const projects = chatOff
           }
         : undefined,
     });
-// Triagem das ideias e laço de perguntas (vboards/triage.ts): uma rodada só de leitura, sem repositório (HABBLAUD_TRIAGE=0
-// desliga a varredura das ideias novas; as ferramentas e as respostas continuam).
+// Triagem das ideias e laço de perguntas (vboards/triage.ts): uma rodada só de leitura, sem repositório. A varredura das
+// ideias novas só roda ligada (Configurações ou HABBLAUD_TRIAGE=1); as ferramentas e as respostas continuam sempre.
 const triage =
   jarvis && vboardsApi?.enabled
     ? new TriageService({
@@ -644,6 +649,7 @@ const triage =
       })
     : undefined;
 late.triage = triage;
+let triageTimer: ReturnType<typeof setInterval> | undefined;
 const jarvisTools =
   chat && permissions && jarvis
     ? new JarvisTools({
@@ -657,8 +663,8 @@ const jarvisTools =
         ship,
         lojas,
         folders: () => chatFolders,
-        folderConfig: (f) => readFolderConfig(f),
-        writeFolderConfig: (f, v) => writeFolderConfig(f, v),
+        folderConfig: (f) => readFolderConfig(f, config.dataDir),
+        writeFolderConfig: (f, v) => writeFolderConfig(f, v, config.dataDir),
         accounts: () =>
           accounts.allEntries().map((a) => {
             const v = accounts.usageView(a.id);
@@ -758,7 +764,13 @@ if (chat) {
   lojas.start();
   triggers?.load();
   triggers?.start();
-  if (process.env.HABBLAUD_TRIAGE !== '0') setInterval(() => void triage?.scan().catch((err) => log.warnOnce(`triage:scan:${errMsg(err)}`, tr('Triagem: falha na varredura das ideias ({0}).', [errMsg(err)]))), 2 * 60_000).unref();
+  // Triagem automática das ideias novas: desligada por padrão; liga em Configurações (notify.json) ou com
+  // HABBLAUD_TRIAGE=1 (=0 desliga mesmo com a opção). Lida a cada volta: ligar na tela vale sem reiniciar.
+  const triageOn = () => process.env.HABBLAUD_TRIAGE === '1' || (process.env.HABBLAUD_TRIAGE !== '0' && ntfy.triage());
+  if (triage) {
+    triageTimer = setInterval(() => void (triageOn() ? triage.scan().catch((err) => log.warnOnce(`triage:scan:${errMsg(err)}`, tr('Triagem: falha na varredura das ideias ({0}).', [errMsg(err)]))) : undefined), 2 * 60_000);
+    triageTimer.unref();
+  }
   jarvisInbox?.start();
   briefing?.start();
   for (const r of extraRoutines) r.start();
@@ -989,6 +1001,9 @@ function shutdown(signal: string): void {
   terminals?.stop();
   runs?.freeze();
   triggers?.stop();
+  ship?.stop();
+  lojas.stop();
+  clearInterval(triageTimer);
   jarvisInbox?.stop();
   briefing?.stop();
   for (const r of extraRoutines) r.stop();

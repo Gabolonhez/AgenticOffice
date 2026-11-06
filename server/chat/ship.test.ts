@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { shipApprovalOf, type ChatRun, type ShipPreview } from '../../shared/runs';
 import type { Product } from '../vboards/products';
-import type { FolderConfig } from '../vboards/vboards';
+import { policyOf, type FolderConfig } from '../vboards/vboards';
 import { GitHubError } from './github';
 import { autoShipBlock, NO_CI_GRACE_MS, ShipService, type ShipDeps, type ShipGitHub } from './ship';
 import type { ShipWorktreeOps } from './types';
@@ -362,6 +362,8 @@ describe('ship: merge automático (vboards.autoMerge=low, sem PIN)', () => {
   }
   function autoSetup(o: { config?: Partial<FolderConfig>; item?: Partial<ChatRun['items'][number]>; files?: string[] } = {}) {
     const t = setup({ config: { ...LOW, ...o.config }, runs: [autoRun(o.item)] });
+    // A política congelada ao criar a lista (index.ts): a mesma de agora.
+    t.runs[0].auto!.policy = policyOf(cfg({ ...LOW, ...o.config })) as Record<string, string>;
     const files = o.files ?? ['src/ui/button.tsx'];
     t.worktrees.scan.mockResolvedValue({ names: files, secrets: [] });
     t.worktrees.diff.mockResolvedValue(files.map((f) => `diff --git a/${f} b/${f}\n--- a/${f}\n+++ b/${f}\n@@ -1 +1 @@\n-a\n+b`).join('\n'));
@@ -454,6 +456,19 @@ describe('ship: merge automático (vboards.autoMerge=low, sem PIN)', () => {
     expect(t.runs[0].ship).toBeUndefined();
     expect(t.worktrees.push).not.toHaveBeenCalled();
     expect(t.runs[0].autoShip?.blocked).toMatch(why);
+  });
+
+  it('política mudou depois de criar a lista (ex.: riskLines 99999) ou não foi congelada: sobe só com PIN', async () => {
+    const t = autoSetup();
+    t.runs[0].auto!.policy = { ...t.runs[0].auto!.policy, riskLines: '99999' };
+    await t.ship.tick();
+    expect(t.runs[0].ship).toBeUndefined();
+    expect(t.runs[0].autoShip?.blocked).toMatch(/política/);
+    const t2 = autoSetup();
+    delete t2.runs[0].auto!.policy;
+    await t2.ship.tick();
+    expect(t2.runs[0].autoShip?.blocked).toMatch(/política/);
+    expect(t2.worktrees.push).not.toHaveBeenCalled();
   });
 
   it('autoMerge off (padrão): nada sobe e nada é cobrado; ligar depois não sobe a lista antiga', async () => {

@@ -16,7 +16,8 @@ import { tr } from '../../shared/i18n';
 import { sameApproval, shipActive, shipApprovalOf, type ChatRun, type RiskLevel, type RunShip, type ShipApproval, type ShipPreview, type ShipStep } from '../../shared/runs';
 import { errMsg } from '../log';
 import { productOfFolder, type Product, type RepoRole } from '../vboards/products';
-import type { FolderConfig } from '../vboards/vboards';
+import { samePolicy } from '../vboards/policy';
+import { policyOf, type FolderConfig } from '../vboards/vboards';
 import { ciVerdict, deployVerdict, GitHubError, parseRemote, type GitHub } from './github';
 import type { JournalStage } from './journal';
 import { diffRisk, finalRisk, maxRisk, riskLabel } from './risk';
@@ -45,8 +46,11 @@ export interface ShipDeps {
   notify?: (title: string, event: ShipEvent, url?: string) => void;
   /** Agentes dos itens voltam à pasta do projeto quando a cópia some. */
   restoreCwd?: (agentId: string) => void;
-  /** Depois do deployed (chat/store.ts afterDeployed: OTA/build da loja nos apps). */
-  onDeployed?: (folder: string) => void;
+  /**
+   * Depois do deployed (chat/lojas.ts afterDeployed: OTA/build da loja nos apps). `frozen`: a política congelada da
+   * lista automática (a loja só segue se for igual à de agora); undefined numa lista comum.
+   */
+  onDeployed?: (folder: string, frozen?: Record<string, string> | null) => void;
   now?: () => number;
 }
 
@@ -326,7 +330,7 @@ export class ShipService {
     this.deps.runs.journalShipped(run, 'deployed');
     this.settle(run, 'done', 'deployed');
     this.notify(run, s, 'deployed');
-    this.deps.onDeployed?.(run.options.folder);
+    this.deps.onDeployed?.(run.options.folder, run.auto ? run.auto.policy ?? null : undefined);
     const notes: string[] = [];
     const w = run.isolated;
     if (w && !w.discarded && !w.merged) {
@@ -406,6 +410,8 @@ export class ShipService {
     const cfg = await this.deps.folderConfig(run.options.folder).catch(() => undefined);
     // Desligado: só fica marcada (ligar depois não sobe as listas antigas).
     if (cfg?.autoMerge !== 'low') return void this.deps.runs.persist();
+    // A política sensível de agora tem de ser a congelada ao criar a lista (mudou no meio = só com PIN).
+    if (!samePolicy(run.auto?.policy, policyOf(cfg))) return blocked(tr('A política da pasta (subir, merge, loja) mudou desde que a lista foi criada: sobe só com PIN.'));
     const pre = autoShipBlock(run, cfg, maxRisk(...run.items.map((i) => i.risk ?? 'medium')));
     if (pre) return blocked(pre);
     const p = await this.prepare(run.id);

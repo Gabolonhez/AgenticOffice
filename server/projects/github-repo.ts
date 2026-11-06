@@ -1,26 +1,13 @@
 // Criar um repositório privado no GitHub pela REST (A7), com fetch (sem gh, sem Octokit). Precisa de um token com
 // Administration: write na conta ou na organização; sem essa permissão (403) ou sem token, o passo vira "manual" com a
-// instrução para criar à mão. O token vem de HABBLAUD_GITHUB_TOKEN ou de <dataDir>/github.json ({"token": "..."}, 600)
-// e só vai no cabeçalho Authorization.
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+// instrução para criar à mão. O token vem do GitHubTokenStore (chat/github.ts: HABBLAUD_GITHUB_TOKEN lido antes do
+// takeSecrets, ou <dataDir>/github.json) e só vai no cabeçalho Authorization.
 import { maskSecrets } from '../../shared/activity';
 import { tr } from '../../shared/i18n';
 
 const API = 'https://api.github.com';
 const TIMEOUT_MS = 15_000;
 export const OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
-
-export function loadGithubToken(dataDir: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const fromEnv = env.HABBLAUD_GITHUB_TOKEN?.trim();
-  if (fromEnv) return fromEnv;
-  try {
-    const t = (JSON.parse(readFileSync(join(dataDir, 'github.json'), 'utf8')) as { token?: unknown }).token;
-    return typeof t === 'string' && t.trim() ? t.trim() : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 export type CreateRepoResult = { ok: true; url: string; cloneUrl: string; existed: boolean } | { manual: string } | { error: string };
 

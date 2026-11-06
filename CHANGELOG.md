@@ -10,6 +10,28 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Chaves sensíveis da pasta fora do git config (reconfigure)
+
+- **Onde ficam:** `vboards.autoMerge`, `ship`, `base`, `remote`, `deploy`, `ciMinutes`, `riskPaths`, `riskLines`,
+  `store`, `storeWorkflow`, `otaChannel` e `versionBump` saíram do `git config` da pasta (que a cópia isolada compartilha
+  e um agente no automático conseguia gravar) e passam a viver em `~/.habblaud/chat/folder-policy.json`, gravado só
+  pelo servidor (Configurações › VBoards ou cartão do Jarvis). `card`, `auto`, `provider`, `budget`, `check`, `qa`,
+  `reviewer`, `reviewerModel` e `copy` continuam no git config.
+- **Migração:** valores antigos dessas chaves no git config são ignorados, nunca importados; a tela da pasta avisa
+  quais eram e pede para configurar de novo. Até lá, a pasta fica com Subir, merge automático e loja desligados.
+- **PIN:** ligar `autoMerge=low`, `ship=merge` ou a loja (ou mudar a política com isso ligado) pede o PIN de aprovação
+  na tela; pelo Jarvis, nunca num turno contaminado.
+- **Política congelada:** a lista automática guarda a política da pasta ao nascer; subir sozinha e o OTA depois do
+  deploy só acontecem se ela ainda for a mesma.
+- **Lojas:** aprovar um pedido pendente dispara exatamente o workflow pedido, recusa se a configuração da loja ou o
+  papel do repo mudaram e vence em 24 h.
+- **Triagem automática** das ideias novas do VBoards vem desligada: liga em Configurações › VBoards (ou
+  `HABBLAUD_TRIAGE=1`).
+- **Correções:** Refinar de produto com vários repos roda no repo principal (server), lê os outros e etiqueta cada
+  subtarefa com o repo (`[server]`, `[app]`...); a pesquisa do Jarvis volta a usar a web; Descartar uma lista com PR
+  aberto não marca a tarefa como descartada; o projeto novo acha o token do GitHub; a lista criada pelo Jarvis usa o
+  risco da pasta; subtarefa reaberta perde a etapa e o PR antigos.
+
 ### Risco e merge automático
 
 - **Risco de cada tarefa:** o Refinar e a triagem devolvem `risk` (baixo, médio ou alto) e o motivo; o diff ganha um
@@ -21,7 +43,7 @@ do meio (0.**3**.0).
   PIN, só se tudo valer: `vboards.ship=merge`, plano aprovado no VBoards (`approvedAt`), portão aprovado sem volta de
   correção, risco final baixo e CI de PR verde. Repo sem CI de PR nunca sobe sozinho. Ao subir sozinho, avisa no celular
   com o link do PR e registra "auto" no registro por projeto; quando não sobe, o cartão diz por quê.
-- **Só liga pela tela local** (com confirmação) **ou pelo cartão com PIN do Jarvis**, num pedido seu pela página:
+- **Só liga pela tela local** (com o PIN) **ou pelo cartão com PIN do Jarvis**, num pedido seu pela página:
   WhatsApp, voz, VBoards e agendamentos nunca ligam.
 ### Projeto novo a partir do molde
 

@@ -85,6 +85,13 @@ describe('Refinar: rodada só de leitura por provedor', () => {
     expect(refineArgs('codex', 1, 'pedido')).toEqual(expect.arrayContaining(['exec', '--sandbox', 'read-only', '-']));
     expect(refineArgs('antigravity', 1, 'pedido')).toEqual(expect.arrayContaining(['--mode', 'plan', '--print=pedido']));
     expect(refineArgs('antigravity', 1, 'x').join(' ')).not.toContain('dangerously');
+    // Pesquisa (vboards_research): sem --allowedTools o -p nega WebSearch/WebFetch e a pesquisa roda sem web.
+    const web = refineArgs('claude', 1, 'p', true);
+    expect(web.slice(web.indexOf('--tools'), web.indexOf('--tools') + 4)).toEqual(['--tools', 'WebSearch,WebFetch', '--allowedTools', 'WebSearch,WebFetch']);
+    // Produto com vários repos: os outros entram como leitura extra, e o variádico termina antes da próxima opção.
+    const extra = refineArgs('claude', 1, 'p', false, ['/p/app', '/p/web']);
+    expect(extra.slice(extra.indexOf('--add-dir'), extra.indexOf('--add-dir') + 4)).toEqual(['--add-dir', '/p/app', '/p/web', '--strict-mcp-config']);
+    expect(refineArgs('claude', 1, 'p')).not.toContain('--add-dir');
     const bin = { file: 'x', prefix: [] };
     expect(refinerFor('codex', cwd, 1, () => bin).by).toBe('codex');
     expect(refinerFor('antigravity', cwd, 1, () => bin).by).toBe('agy');
