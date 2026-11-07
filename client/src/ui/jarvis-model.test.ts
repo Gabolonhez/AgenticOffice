@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { historyTail, levelOf, pickVoice, speakable, speechEnvelope, stepVoice, VOICE_OFF, type VoiceEvent, type VoiceUi } from './jarvis-model';
+import { downsample, geminiAudioMessage, geminiToolResponse, historyTail, levelOf, parseGemini, pcm16Base64, pcm16FromBase64, pickVoice, speakable, speechEnvelope, stepVoice, VOICE_OFF, type VoiceEvent, type VoiceUi } from './jarvis-model';
 
 const run = (events: VoiceEvent[], from: VoiceUi = VOICE_OFF) => events.reduce(stepVoice, from);
 
@@ -88,5 +88,41 @@ describe('Jarvis em tela cheia: orb, voz e histórico', () => {
       { seq: 5, who: 'note', text: 'falhou', error: true },
     ]);
     expect(historyTail(Array.from({ length: 20 }, (_, i) => ({ seq: i, at: 0, kind: 'assistant' as const, text: String(i) })), 3).map((l) => l.text)).toEqual(['17', '18', '19']);
+  });
+});
+
+describe('Jarvis em tela cheia: Gemini Live', () => {
+  it('PCM16: 48 kHz → 16 kHz pela média; ida e volta em base64 little-endian', () => {
+    expect(Array.from(downsample(new Float32Array([0, 0.3, 0.6, 1, 1, 1]), 48_000, 16_000)).map((v) => +v.toFixed(2))).toEqual([0.3, 1]);
+    const same = new Float32Array([0.1]);
+    expect(downsample(same, 16_000, 16_000)).toBe(same);
+    const b64 = pcm16Base64(new Float32Array([0, 1, -1, 2]));
+    expect(Array.from(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)))).toEqual([0, 0, 0xff, 0x7f, 0x00, 0x80, 0xff, 0x7f]);
+    expect(Array.from(pcm16FromBase64(b64)).map((v) => +v.toFixed(3))).toEqual([0, 1, -1, 1]);
+  });
+
+  it('mensagens: áudio 16 kHz no realtimeInput, resposta da ferramenta pelo id', () => {
+    expect(geminiAudioMessage('AAA=')).toEqual({ realtimeInput: { audio: { data: 'AAA=', mimeType: 'audio/pcm;rate=16000' } } });
+    expect(geminiToolResponse('c1', 'feito')).toEqual({ toolResponse: { functionResponses: [{ id: 'c1', name: 'ask_jarvis', response: { result: 'feito' } }] } });
+  });
+
+  it('lê setupComplete, áudio, transcrições, interrupção, fim de turno e só a ferramenta ask_jarvis', () => {
+    expect(parseGemini('{"setupComplete":{}}')?.setupComplete).toBe(true);
+    const ev = parseGemini(
+      JSON.stringify({
+        serverContent: {
+          modelTurn: { parts: [{ inlineData: { mimeType: 'audio/pcm;rate=24000', data: 'AAA=' } }, { text: 'pensando' }] },
+          inputTranscription: { text: 'como está' },
+          outputTranscription: { text: 'Tudo' },
+          interrupted: true,
+          turnComplete: true,
+        },
+      }),
+    );
+    expect(ev).toMatchObject({ setupComplete: false, audio: ['AAA='], heard: 'como está', said: 'Tudo', interrupted: true, turnComplete: true, calls: [] });
+    const call = parseGemini(JSON.stringify({ toolCall: { functionCalls: [{ id: 'c1', name: 'ask_jarvis', args: { texto: ' o dia ' } }, { id: 'c2', name: 'outra', args: {} }] } }));
+    expect(call?.calls).toEqual([{ id: 'c1', texto: 'o dia' }]);
+    expect(parseGemini('{"toolCallCancellation":{"ids":["c1"]}}')?.cancelled).toEqual(['c1']);
+    expect(parseGemini('não é json')).toBeNull();
   });
 });

@@ -1,13 +1,14 @@
 // Motores de voz do Jarvis em tela cheia (ui/jarvis.ts), escolhidos em Configurações › Jarvis (server/jarvis/voice.ts):
-// - realtime: OpenAI Realtime por WebRTC com o token efêmero do servidor (a chave nunca vem para cá). O modelo de voz só
-//   tem ask_jarvis(texto): o pedido vai ao servidor (origem 'voice', contaminada) e a resposta volta para ele falar;
+// - realtime: OpenAI Realtime (WebRTC) ou Gemini Live (WebSocket, PCM16) com o token efêmero do servidor (a chave nunca
+//   vem para cá). O modelo de voz só tem ask_jarvis(texto): o pedido vai ao servidor (origem 'voice', contaminada) e a
+//   resposta volta para ele falar;
 // - browser: SpeechRecognition contínuo (parciais na tela) + speechSynthesis na língua da página; sem SpeechRecognition,
 //   o ditado do Habblaud (Whisper local), apertando para falar;
 // - local: ditado (Whisper local) + TTS local pelo servidor (/voice/tts); sem TTS configurado, speechSynthesis com aviso.
 // Todo motor fala com o overlay por `emit` (jarvis-model.ts) e devolve o nível 0..1 para o orb.
 import { getLocale, tr } from '../../../shared/i18n';
 import { pickMimeType, transcribeAudio } from './dictation';
-import { levelOf, pickVoice, shortLang, speakable, speechEnvelope, speechLang, type VoiceEvent } from './jarvis-model';
+import { downsample, geminiAudioMessage, geminiToolResponse, levelOf, parseGemini, pcm16Base64, pcm16FromBase64, pickVoice, shortLang, speakable, speechEnvelope, speechLang, type VoiceEvent } from './jarvis-model';
 
 export type EngineId = 'realtime' | 'browser' | 'local';
 
@@ -52,19 +53,19 @@ export async function askJarvis(text: string): Promise<string> {
   return (await api<{ reply: string }>('/api/chat/jarvis/voice/ask', { text })).reply;
 }
 
-/** Medidor de nível de um stream (microfone ou a voz do realtime) ou de um <audio>. */
+/** Medidor de nível de um stream (microfone ou a voz do realtime), de um <audio> ou de um nó do grafo (voz do Gemini). */
 class Meter {
   private readonly buf: Uint8Array<ArrayBuffer>;
   private constructor(private readonly node: AnalyserNode) {
     this.buf = new Uint8Array(node.fftSize);
   }
-  static of(ctx: AudioContext, src: MediaStream | HTMLMediaElement): Meter | null {
+  static of(ctx: AudioContext, src: MediaStream | HTMLMediaElement | AudioNode): Meter | null {
     try {
       const node = ctx.createAnalyser();
       node.fftSize = 512;
-      const input = src instanceof MediaStream ? ctx.createMediaStreamSource(src) : ctx.createMediaElementSource(src);
+      const input = src instanceof AudioNode ? src : src instanceof MediaStream ? ctx.createMediaStreamSource(src) : ctx.createMediaElementSource(src);
       input.connect(node);
-      // <audio> passa pelo grafo: precisa chegar à saída para continuar tocando.
+      // <audio> e a voz do Gemini passam pelo grafo: precisam chegar à saída para tocar.
       if (!(src instanceof MediaStream)) node.connect(ctx.destination);
       return new Meter(node);
     } catch {
@@ -99,7 +100,7 @@ async function openMic(): Promise<MediaStream> {
 
 // ---------------------------------------------------------------- realtime (OpenAI, WebRTC)
 
-interface RealtimeSessionView { provider: string; token: string; callUrl: string }
+interface RealtimeSessionView { provider: string; token: string; model: string; callUrl: string }
 
 class RealtimeEngine implements VoiceEngine {
   readonly id = 'realtime' as const;
@@ -120,7 +121,7 @@ class RealtimeEngine implements VoiceEngine {
   async start(): Promise<void> {
     const s = await api<RealtimeSessionView>('/api/chat/jarvis/voice/session', { lang: shortLang(getLocale()) });
     if (this.stopped) return;
-    if (s.provider !== 'openai') throw new Error(tr('Gemini Live ainda não está pronto: use OpenAI Realtime ou outro motor de voz.'));
+    if (s.provider !== 'openai') throw new Error(tr('O provedor de voz mudou: feche e abra a voz de novo.'));
     this.mic = await openMic();
     if (this.stopped) return this.stop();
     const ctx = audio();
@@ -234,6 +235,201 @@ class RealtimeEngine implements VoiceEngine {
 
   level(): number {
     return (this.speaking ? this.outMeter : this.micMeter)?.level() ?? 0;
+  }
+}
+
+// ---------------------------------------------------------------- realtime (Gemini Live, WebSocket)
+
+const GEMINI_IN_RATE = 16_000;
+const GEMINI_OUT_RATE = 24_000;
+/** Junta o microfone em blocos de ~40 ms na taxa do AudioContext (o Gemini pede pedaços de 20–40 ms). */
+const MIC_TAP = `registerProcessor('habblaud-mic-tap', class extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = []; this.n = 0; }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (ch) {
+      this.buf.push(ch.slice());
+      this.n += ch.length;
+      if (this.n >= sampleRate / 25) {
+        const out = new Float32Array(this.n);
+        let k = 0;
+        for (const b of this.buf) { out.set(b, k); k += b.length; }
+        this.port.postMessage(out, [out.buffer]);
+        this.buf = [];
+        this.n = 0;
+      }
+    }
+    return true;
+  }
+});`;
+/** O módulo fica registrado no AudioContext compartilhado (que nunca fecha): carrega uma vez. */
+let micTap: Promise<void> | null = null;
+
+class GeminiEngine implements VoiceEngine {
+  readonly id = 'realtime' as const;
+  readonly pushToTalk = false;
+  private ws: WebSocket | null = null;
+  private mic: MediaStream | null = null;
+  private src: MediaStreamAudioSourceNode | null = null;
+  private tap: AudioWorkletNode | null = null;
+  private out: GainNode | null = null;
+  private micMeter: Meter | null = null;
+  private outMeter: Meter | null = null;
+  private readonly playing = new Set<AudioBufferSourceNode>();
+  private playAt = 0;
+  /** Interrompido pelo botão: descarta o resto da fala até o turno acabar. */
+  private muted = false;
+  private heard = '';
+  private said = '';
+  private newTurn = true;
+  private readonly cancelled = new Set<string>();
+  private stopped = false;
+
+  constructor(private readonly host: EngineHost) {}
+
+  async start(): Promise<void> {
+    const s = await api<RealtimeSessionView>('/api/chat/jarvis/voice/session', { lang: shortLang(getLocale()) });
+    if (this.stopped) return;
+    if (s.provider !== 'gemini') throw new Error(tr('O provedor de voz mudou: feche e abra a voz de novo.'));
+    this.mic = await openMic();
+    if (this.stopped) return this.stop();
+    const ctx = audio();
+    if (!ctx?.audioWorklet) throw new Error(tr('Este navegador não toca a voz do Gemini (sem AudioWorklet).'));
+    micTap ??= ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([MIC_TAP], { type: 'text/javascript' }))).catch((err: unknown) => {
+      micTap = null;
+      throw err;
+    });
+    await micTap;
+    if (this.stopped) return;
+    this.micMeter = Meter.of(ctx, this.mic);
+    this.out = ctx.createGain();
+    this.outMeter = Meter.of(ctx, this.out);
+    if (!this.outMeter) this.out.connect(ctx.destination);
+    const ws = (this.ws = new WebSocket(`${s.callUrl}?access_token=${encodeURIComponent(s.token)}`));
+    ws.binaryType = 'arraybuffer';
+    ws.onmessage = (m) => this.onMessage(typeof m.data === 'string' ? m.data : new TextDecoder().decode(m.data as ArrayBuffer));
+    ws.onclose = (e) => {
+      if (!this.stopped) this.host.emit({ type: 'fail', error: e.reason ? tr('O Gemini fechou a conversa de voz: {0}', [e.reason.slice(0, 200)]) : tr('A conexão de voz caiu.') });
+    };
+    await new Promise<void>((ok, fail) => {
+      ws.onopen = () => ok();
+      ws.onerror = () => fail(new Error(tr('O Gemini recusou a conversa de voz.')));
+    });
+    // O setup que vale é o travado no token (servidor, sem fieldMask); este só abre a conversa.
+    this.send({ setup: { model: `models/${s.model}` } });
+  }
+
+  private send(m: unknown): void {
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(m));
+  }
+
+  private onMessage(raw: string): void {
+    const ev = parseGemini(raw);
+    if (!ev || this.stopped) return;
+    if (ev.setupComplete) {
+      this.listen();
+      this.host.emit({ type: 'ready' });
+    }
+    if (ev.heard) {
+      if (this.newTurn) this.heard = '';
+      this.newTurn = false;
+      this.heard += ev.heard;
+      this.host.emit({ type: 'hearing', text: this.heard.trim() });
+    }
+    if (ev.said) {
+      this.said += ev.said;
+      this.host.emit({ type: 'caption', text: this.said.trim() });
+    }
+    for (const a of ev.audio) this.play(a);
+    if (ev.interrupted) this.flush();
+    if (ev.interrupted || ev.turnComplete) {
+      this.muted = false;
+      this.said = '';
+      this.newTurn = true;
+    }
+    for (const id of ev.cancelled) this.cancelled.add(id);
+    for (const c of ev.calls) void this.askTool(c.id, c.texto);
+  }
+
+  /** Microfone → 16 kHz PCM16 → realtimeInput (só depois do setupComplete). */
+  private listen(): void {
+    const ctx = audio();
+    if (!ctx || !this.mic) return;
+    const src = (this.src = ctx.createMediaStreamSource(this.mic));
+    const tap = (this.tap = new AudioWorkletNode(ctx, 'habblaud-mic-tap'));
+    tap.port.onmessage = (m) => this.send(geminiAudioMessage(pcm16Base64(downsample(m.data as Float32Array, ctx.sampleRate, GEMINI_IN_RATE))));
+    src.connect(tap);
+    // A saída do tap é silêncio; ligada ao destino para o navegador processar o nó.
+    tap.connect(ctx.destination);
+  }
+
+  /** Enfileira um pedaço da voz (24 kHz) logo depois do anterior. */
+  private play(b64: string): void {
+    const ctx = audio();
+    if (!ctx || !this.out || this.muted) return;
+    const pcm = pcm16FromBase64(b64);
+    if (!pcm.length) return;
+    const buf = ctx.createBuffer(1, pcm.length, GEMINI_OUT_RATE);
+    buf.copyToChannel(pcm, 0);
+    const node = ctx.createBufferSource();
+    node.buffer = buf;
+    node.connect(this.out);
+    this.playAt = Math.max(this.playAt, ctx.currentTime + 0.05);
+    node.start(this.playAt);
+    this.playAt += buf.duration;
+    if (!this.playing.size) this.host.emit({ type: 'speakStart' });
+    this.playing.add(node);
+    node.onended = () => {
+      this.playing.delete(node);
+      if (!this.playing.size) this.host.emit({ type: 'speakEnd' });
+    };
+  }
+
+  /** Para a fala e esvazia a fila. */
+  private flush(): void {
+    if (!this.playing.size) return;
+    for (const n of this.playing) {
+      n.onended = null;
+      safe(() => n.stop());
+    }
+    this.playing.clear();
+    this.playAt = 0;
+    this.host.emit({ type: 'speakEnd' });
+  }
+
+  private async askTool(id: string, text: string): Promise<void> {
+    this.host.emit({ type: 'ask', text: text || this.heard });
+    let reply: string;
+    try {
+      reply = text ? await askJarvis(text) : tr('Não entendi o pedido.');
+    } catch (err) {
+      reply = tr('Não consegui falar com o Jarvis: {0}', [(err as Error).message]);
+    }
+    if (this.stopped) return;
+    this.host.emit({ type: 'reply', text: reply });
+    if (!this.cancelled.delete(id)) this.send(geminiToolResponse(id, reply));
+  }
+
+  interrupt(): void {
+    this.muted = true;
+    this.flush();
+    this.host.emit({ type: 'interrupt' });
+  }
+
+  stop(): void {
+    this.stopped = true;
+    this.flush();
+    this.ws?.close();
+    if (this.tap) this.tap.port.onmessage = null;
+    this.tap?.disconnect();
+    this.src?.disconnect();
+    this.out?.disconnect();
+    this.mic?.getTracks().forEach((t) => t.stop());
+    this.ws = this.tap = this.src = this.out = this.mic = null;
+  }
+
+  level(): number {
+    return (this.playing.size ? this.outMeter : this.micMeter)?.level() ?? 0;
   }
 }
 
@@ -454,6 +650,6 @@ function safe<T>(fn: () => T): T | undefined {
 }
 
 export function createEngine(v: VoiceViewLite, host: EngineHost): VoiceEngine {
-  if (v.engine === 'realtime') return new RealtimeEngine(host);
+  if (v.engine === 'realtime') return v.provider === 'gemini' ? new GeminiEngine(host) : new RealtimeEngine(host);
   return new PipelineEngine(v.engine, host, v.ttsUrl);
 }

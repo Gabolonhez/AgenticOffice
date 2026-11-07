@@ -149,3 +149,91 @@ function stripUntrusted(text: string): string {
   const m = /^<dados_nao_confiaveis[^>]*>\n?([\s\S]*?)\n?<\/dados_nao_confiaveis>$/.exec(text.trim());
   return m ? m[1] : text;
 }
+
+// ---------------------------------------------------------------- Gemini Live (WebSocket): áudio PCM16 e mensagens
+
+/** O microfone (na taxa do AudioContext) reduzido para `to` Hz pela média de cada janela (o Gemini ouve 16 kHz). */
+export function downsample(input: Float32Array, from: number, to: number): Float32Array {
+  if (from === to) return input;
+  const ratio = from / to;
+  // shortcut: cada bloco arredonda a própria janela (sem levar a fração ao próximo); inaudível na fala.
+  const out = new Float32Array(Math.floor(input.length / ratio));
+  for (let i = 0; i < out.length; i++) {
+    const a = Math.floor(i * ratio);
+    const b = Math.min(input.length, Math.floor((i + 1) * ratio));
+    let sum = 0;
+    for (let j = a; j < b; j++) sum += input[j];
+    out[i] = b > a ? sum / (b - a) : input[Math.min(a, input.length - 1)];
+  }
+  return out;
+}
+
+/** Float32 (-1..1) → PCM16 little-endian em base64 (o realtimeInput.audio). */
+export function pcm16Base64(samples: Float32Array): string {
+  const view = new DataView(new ArrayBuffer(samples.length * 2));
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  const bytes = new Uint8Array(view.buffer);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+/** PCM16 little-endian em base64 (a voz do Gemini, 24 kHz) → Float32 (-1..1). */
+export function pcm16FromBase64(b64: string): Float32Array<ArrayBuffer> {
+  const bin = atob(b64);
+  const out = new Float32Array(bin.length >> 1);
+  for (let i = 0; i < out.length; i++) {
+    const v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
+    out[i] = (v >= 0x8000 ? v - 0x10000 : v) / 0x8000;
+  }
+  return out;
+}
+
+export const geminiAudioMessage = (b64: string) => ({ realtimeInput: { audio: { data: b64, mimeType: 'audio/pcm;rate=16000' } } });
+export const geminiToolResponse = (id: string, reply: string) => ({ toolResponse: { functionResponses: [{ id, name: 'ask_jarvis', response: { result: reply } }] } });
+
+/** O que importa de uma BidiGenerateContentServerMessage (várias partes podem vir juntas). */
+export interface GeminiEvent {
+  setupComplete: boolean;
+  /** PCM16 24 kHz em base64. */
+  audio: string[];
+  /** Pedaços novos da transcrição (entrada e saída), para somar. */
+  heard: string;
+  said: string;
+  interrupted: boolean;
+  turnComplete: boolean;
+  /** Só ask_jarvis (a única ferramenta que o token deixa). */
+  calls: { id: string; texto: string }[];
+  cancelled: string[];
+}
+
+export function parseGemini(raw: string): GeminiEvent | null {
+  type Msg = {
+    setupComplete?: unknown;
+    serverContent?: { modelTurn?: { parts?: { inlineData?: { data?: unknown; mimeType?: unknown } }[] }; inputTranscription?: { text?: unknown }; outputTranscription?: { text?: unknown }; interrupted?: unknown; turnComplete?: unknown };
+    toolCall?: { functionCalls?: { id?: unknown; name?: unknown; args?: { texto?: unknown } }[] };
+    toolCallCancellation?: { ids?: unknown[] };
+  };
+  let m: Msg;
+  try {
+    m = JSON.parse(raw) as Msg;
+  } catch {
+    return null;
+  }
+  if (!m || typeof m !== 'object') return null;
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  const sc = m.serverContent;
+  return {
+    setupComplete: m.setupComplete !== undefined,
+    audio: (sc?.modelTurn?.parts ?? []).map((p) => (str(p.inlineData?.mimeType).startsWith('audio/') ? str(p.inlineData?.data) : '')).filter(Boolean),
+    heard: str(sc?.inputTranscription?.text),
+    said: str(sc?.outputTranscription?.text),
+    interrupted: sc?.interrupted === true,
+    turnComplete: sc?.turnComplete === true,
+    calls: (m.toolCall?.functionCalls ?? []).filter((c) => c.name === 'ask_jarvis').map((c) => ({ id: str(c.id), texto: str(c.args?.texto).trim() })),
+    cancelled: (m.toolCallCancellation?.ids ?? []).filter((x): x is string => typeof x === 'string'),
+  };
+}

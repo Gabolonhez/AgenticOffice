@@ -431,16 +431,19 @@ export class JarvisVoiceGroup {
     'select',
     { class: 'ui-rename__input', attrs: { 'aria-label': tr('Motor de voz') } },
     h('option', { attrs: { value: '' }, text: tr('Automático (realtime se houver chave)') }),
-    h('option', { attrs: { value: 'realtime' }, text: tr('Realtime (OpenAI): conversa natural, pago') }),
+    h('option', { attrs: { value: 'realtime' }, text: tr('Realtime (OpenAI ou Gemini): conversa natural') }),
     h('option', { attrs: { value: 'browser' }, text: tr('Navegador: grátis') }),
     h('option', { attrs: { value: 'local' }, text: tr('Local: Whisper + TTS do computador') }),
   );
   private readonly provider = h(
     'select',
-    { class: 'ui-rename__input', attrs: { 'aria-label': tr('Provedor realtime') } },
+    { class: 'ui-rename__input', attrs: { 'aria-label': tr('Provedor realtime') }, on: { change: () => this.pickProvider() } },
     h('option', { attrs: { value: 'openai' }, text: 'OpenAI Realtime' }),
-    h('option', { attrs: { value: 'gemini' }, text: tr('Gemini Live (em breve)') }),
+    h('option', { attrs: { value: 'gemini' }, text: 'Gemini Live' }),
   );
+  /** A chave e a voz são de cada provedor: trocar o provedor mostra o estado da chave dele. */
+  private keySet: Record<string, boolean> = {};
+  private editable = false;
   private readonly key = h('input', { class: 'ui-rename__input', type: 'password', attrs: { maxlength: 300, autocomplete: 'off' } });
   private readonly voice = h('input', { class: 'ui-rename__input', type: 'text', attrs: { maxlength: 60, placeholder: 'marin' } });
   private readonly ttsUrl = h('input', { class: 'ui-rename__input', type: 'url', attrs: { maxlength: 300, placeholder: 'http://127.0.0.1:8880/v1/audio/speech' } });
@@ -485,16 +488,29 @@ export class JarvisVoiceGroup {
     this.engine.value = v.configured ?? '';
     this.provider.value = v.provider;
     this.key.value = '';
-    this.key.placeholder = v.keySet[v.provider] ? tr('guardada neste computador') : tr('sem chave');
     this.voice.value = v.voice ?? '';
     this.ttsUrl.value = v.ttsUrl ?? '';
     this.ttsVoice.value = v.ttsVoice ?? '';
     this.ttsModel.value = v.ttsModel ?? '';
-    const editable = v.editable !== false;
+    const editable = (this.editable = v.editable !== false);
+    this.keySet = v.keySet;
     for (const f of this.fields) f.disabled = !editable;
     setHidden(this.save, !editable);
-    setHidden(this.forget, !editable || !v.keySet[v.provider]);
+    this.paintProvider();
     setText(this.status, editable ? tr('Em uso: {0}.', [v.engine]) : tr('Só muda pelo próprio computador.'));
+  }
+
+  /** A voz de um provedor não vale no outro (marin não existe no Gemini): troca para o padrão. */
+  private pickProvider(): void {
+    this.voice.value = '';
+    this.paintProvider();
+  }
+
+  private paintProvider(): void {
+    const p = this.provider.value;
+    this.key.placeholder = this.keySet[p] ? tr('guardada neste computador') : tr('sem chave');
+    this.voice.placeholder = p === 'gemini' ? 'Kore' : 'marin';
+    setHidden(this.forget, !this.editable || !this.keySet[p]);
   }
 
   private async store(forget = false): Promise<void> {

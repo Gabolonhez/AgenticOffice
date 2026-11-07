@@ -1,6 +1,6 @@
 // Voz do Jarvis (tela cheia): o motor escolhido, a chave do realtime e o TTS local, em <dataDir>/voice.json (600,
 // gravado só pelo próprio computador; as chaves nunca voltam à página). Três motores:
-//   realtime: OpenAI Realtime (Gemini Live depois) com token efêmero emitido aqui (limite por hora);
+//   realtime: OpenAI Realtime ou Gemini Live com token efêmero emitido aqui (limite por hora);
 //   browser: SpeechRecognition + speechSynthesis do navegador (grátis);
 //   local: Whisper local (server/dictation) + um TTS por HTTP (/v1/audio/speech, OpenAI-compatível), por este servidor.
 // Todo pedido por voz entra no Jarvis com a origem 'voice' (contaminada: o microfone ouve o ambiente). PIN nunca passa

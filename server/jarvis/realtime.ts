@@ -2,7 +2,9 @@
 // O servidor guarda a chave e emite um token efêmero; o navegador abre a conversa direto com o provedor (WebRTC) com
 // esse token e nunca vê a chave. O modelo de voz tem UMA ferramenta, ask_jarvis(texto): ele não chama as do Jarvis.
 // OpenAI: POST /v1/realtime/client_secrets → { value: "ek_…", expires_at (s) }; o navegador faz o POST do SDP em
-// /v1/realtime/calls com o token. Gemini Live: o tipo e a escolha existem, a emissão ainda não (devolve o motivo).
+// /v1/realtime/calls com o token. Gemini Live: POST v1beta/auth_tokens → { name } (o token), travado no setup inteiro
+// (modelo, instruções, voz e só ask_jarvis: sem fieldMask, o setup que o navegador mandar é ignorado); o navegador abre
+// o WebSocket BidiGenerateContentConstrained?access_token=… (https://ai.google.dev/gemini-api/docs/ephemeral-tokens).
 import { tr } from '../../shared/i18n';
 
 export type RealtimeProvider = 'openai' | 'gemini';
@@ -11,6 +13,13 @@ export const OPENAI_REALTIME_MODEL = 'gpt-realtime';
 export const OPENAI_REALTIME_VOICE = 'marin';
 const OPENAI_SECRETS_URL = 'https://api.openai.com/v1/realtime/client_secrets';
 const OPENAI_CALLS_URL = 'https://api.openai.com/v1/realtime/calls';
+export const GEMINI_LIVE_MODEL = 'gemini-3.8-live';
+export const GEMINI_LIVE_VOICE = 'Kore';
+const GEMINI_TOKENS_URL = 'https://generativelanguage.googleapis.com/v1beta/auth_tokens';
+const GEMINI_WS_URL = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained';
+/** Gemini: prazo para abrir a conversa com o token e quanto ela pode durar. */
+export const GEMINI_START_S = 60;
+export const GEMINI_SESSION_S = 30 * 60;
 /** Validade do token efêmero: só precisa durar até o navegador abrir a conversa. */
 export const TOKEN_TTL_S = 120;
 
@@ -71,25 +80,63 @@ export function openaiSecretBody(o: Pick<MintOptions, 'model' | 'voice' | 'lang'
   };
 }
 
+/**
+ * Corpo do POST v1beta/auth_tokens: um uso, 1 min para abrir, 30 min de conversa, e o setup inteiro travado no token.
+ * BLOCKING: o modelo espera a resposta do Jarvis antes de seguir (o padrão do gemini-3.8-live é NON_BLOCKING).
+ */
+export function geminiTokenBody(o: Pick<MintOptions, 'model' | 'voice' | 'lang'>, now: number): Record<string, unknown> {
+  const p = ASK_JARVIS_TOOL.parameters;
+  return {
+    uses: 1,
+    expireTime: new Date(now + GEMINI_SESSION_S * 1000).toISOString(),
+    newSessionExpireTime: new Date(now + GEMINI_START_S * 1000).toISOString(),
+    bidiGenerateContentSetup: {
+      model: `models/${o.model || GEMINI_LIVE_MODEL}`,
+      generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: o.voice || GEMINI_LIVE_VOICE } } } },
+      systemInstruction: { parts: [{ text: voiceInstructions(o.lang) }] },
+      tools: [
+        {
+          functionDeclarations: [
+            {
+              name: ASK_JARVIS_TOOL.name,
+              description: ASK_JARVIS_TOOL.description,
+              parameters: { type: 'OBJECT', properties: { texto: { type: 'STRING', description: p.properties.texto.description } }, required: [...p.required] },
+              behavior: 'BLOCKING',
+            },
+          ],
+        },
+      ],
+      inputAudioTranscription: {},
+      outputAudioTranscription: {},
+    },
+  };
+}
+
 /** Emite o token efêmero no provedor. Erros voltam como texto curto (nunca com a chave). */
 export async function mintRealtime(provider: RealtimeProvider, o: MintOptions): Promise<RealtimeSession | { error: string }> {
-  if (provider === 'gemini') return { error: tr('Gemini Live ainda não está pronto: use OpenAI Realtime ou outro motor de voz.') };
   const f = o.fetch ?? fetch;
+  const now = (o.now ?? Date.now)();
+  const gemini = provider === 'gemini';
   let res: Response;
   try {
-    res = await f(OPENAI_SECRETS_URL, {
+    res = await f(gemini ? GEMINI_TOKENS_URL : OPENAI_SECRETS_URL, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${o.key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(openaiSecretBody(o)),
+      headers: { ...(gemini ? { 'x-goog-api-key': o.key } : { Authorization: `Bearer ${o.key}` }), 'Content-Type': 'application/json' },
+      body: JSON.stringify(gemini ? geminiTokenBody(o, now) : openaiSecretBody(o)),
       signal: AbortSignal.timeout(15_000),
     });
   } catch {
-    return { error: tr('A OpenAI não respondeu.') };
+    return { error: gemini ? tr('O Gemini não respondeu.') : tr('A OpenAI não respondeu.') };
   }
-  const body = (await res.json().catch(() => ({}))) as { value?: unknown; expires_at?: unknown; session?: { model?: unknown }; error?: { message?: unknown } };
-  if (!res.ok) return { error: tr('A OpenAI recusou o token ({0}): {1}', [res.status, String(body.error?.message ?? '').slice(0, 200)]) };
+  const body = (await res.json().catch(() => ({}))) as { value?: unknown; name?: unknown; expires_at?: unknown; session?: { model?: unknown }; error?: { message?: unknown } };
+  const why = String(body.error?.message ?? '').slice(0, 200);
+  if (gemini) {
+    if (!res.ok) return { error: tr('O Gemini recusou o token ({0}): {1}', [res.status, why]) };
+    if (typeof body.name !== 'string' || !body.name) return { error: tr('Resposta do Gemini sem token.') };
+    return { provider, token: body.name, expiresAt: now + GEMINI_START_S * 1000, model: o.model || GEMINI_LIVE_MODEL, callUrl: GEMINI_WS_URL };
+  }
+  if (!res.ok) return { error: tr('A OpenAI recusou o token ({0}): {1}', [res.status, why]) };
   if (typeof body.value !== 'string' || !body.value) return { error: tr('Resposta da OpenAI sem token.') };
-  const now = (o.now ?? Date.now)();
   return {
     provider,
     token: body.value,

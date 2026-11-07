@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { openaiSecretBody } from './realtime';
+import { geminiTokenBody, openaiSecretBody } from './realtime';
 import { effectiveEngine, looksLikePin, validateVoiceConfig, VoiceService, VoiceStore, type VoiceConfig } from './voice';
 
 const okFetch = () =>
@@ -71,8 +71,48 @@ describe('voz do Jarvis', () => {
     expect(JSON.stringify(r)).not.toContain('sk-x');
   });
 
-  it('Gemini: a escolha existe, a emissão ainda não', async () => {
-    expect(await setup({ provider: 'gemini', geminiKey: 'g' }).svc.session('en')).toMatchObject({ status: 502 });
+  it('Gemini: token efêmero travado (modelo, instruções, voz, só ask_jarvis); a chave vai só no cabeçalho', async () => {
+    const f = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ name: 'auth_tokens/abc' }), { status: 200 }));
+    const r = await setup({ provider: 'gemini', geminiKey: 'AIza-secreta' }, { fetch: f as never }).svc.session('pt');
+    expect(r).toEqual({
+      provider: 'gemini',
+      token: 'auth_tokens/abc',
+      expiresAt: 60_000,
+      model: 'gemini-3.8-live',
+      callUrl: 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained',
+    });
+    expect(JSON.stringify(r)).not.toContain('AIza-secreta');
+    const [url, init] = f.mock.calls[0];
+    expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/auth_tokens');
+    expect((init!.headers as Record<string, string>)['x-goog-api-key']).toBe('AIza-secreta');
+    expect(String(init!.body)).not.toContain('AIza-secreta');
+    const body = JSON.parse(String(init!.body));
+    expect(body.bidiGenerateContentSetup.tools).toHaveLength(1);
+    expect(body.bidiGenerateContentSetup.tools[0].functionDeclarations.map((x: { name: string }) => x.name)).toEqual(['ask_jarvis']);
+  });
+
+  it('Gemini: formato do auth_tokens (1 uso, 1 min para abrir, 30 min de conversa, sem fieldMask = setup todo travado)', () => {
+    const b = geminiTokenBody({ lang: 'pt', voice: 'Puck' }, Date.UTC(2026, 0, 1)) as Record<string, any>;
+    expect(b.uses).toBe(1);
+    expect(b.newSessionExpireTime).toBe('2026-01-01T00:01:00.000Z');
+    expect(b.expireTime).toBe('2026-01-01T00:30:00.000Z');
+    expect(b.fieldMask).toBeUndefined();
+    const s = b.bidiGenerateContentSetup;
+    expect(s.model).toBe('models/gemini-3.8-live');
+    expect(s.generationConfig).toEqual({ responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } } });
+    expect(s.systemInstruction.parts[0].text).toContain('Brazilian Portuguese');
+    expect(s.tools[0].functionDeclarations[0]).toMatchObject({ behavior: 'BLOCKING', parameters: { type: 'OBJECT', required: ['texto'] } });
+    expect(s.inputAudioTranscription).toEqual({});
+    expect(s.outputAudioTranscription).toEqual({});
+  });
+
+  it('Gemini recusou ou respondeu sem token: erro curto, sem a chave', async () => {
+    const bad = vi.fn(async () => new Response(JSON.stringify({ error: { code: 400, message: 'API key not valid' } }), { status: 400 }));
+    const r = await setup({ provider: 'gemini', geminiKey: 'AIza-x' }, { fetch: bad as never }).svc.session('en');
+    expect(r).toMatchObject({ status: 502 });
+    expect(JSON.stringify(r)).not.toContain('AIza-x');
+    const empty = vi.fn(async () => new Response('{}', { status: 200 }));
+    expect(await setup({ provider: 'gemini', geminiKey: 'g' }, { fetch: empty as never }).svc.session('en')).toMatchObject({ status: 502 });
   });
 
   it('motor automático: realtime com chave, senão navegador; a view nunca tem a chave', () => {
