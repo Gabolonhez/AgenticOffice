@@ -101,11 +101,13 @@ export const speechLang = (l: Locale): string => SPEECH_LANG[l];
 export const shortLang = (l: Locale): string => l.slice(0, 2);
 
 /** A melhor voz do navegador para a língua: a exata (pt-BR), senão a da família (pt-PT), local antes de remota. */
-export function pickVoice<V extends { lang: string; localService?: boolean }>(voices: readonly V[], lang: string): V | undefined {
+export function pickVoice<V extends { lang: string; localService?: boolean; name?: string }>(voices: readonly V[], lang: string): V | undefined {
   const norm = (s: string) => s.replace('_', '-').toLowerCase();
   const want = norm(lang);
   const fam = want.split('-')[0];
-  const rank = (v: V) => (norm(v.lang) === want ? 0 : norm(v.lang).split('-')[0] === fam ? 2 : 9) + (v.localService ? 0 : 1);
+  // Vozes neurais grátis do navegador (Edge: "... Online (Natural)"; Chrome: "Google ...") soam bem melhor que as locais.
+  const quality = (v: V) => (/natural|neural/i.test(v.name ?? '') ? 0 : /google/i.test(v.name ?? '') ? 0.3 : v.localService ? 0.6 : 0.9);
+  const rank = (v: V) => (norm(v.lang) === want ? 0 : norm(v.lang).split('-')[0] === fam ? 2 : 9) + quality(v);
   const best = [...voices].sort((a, b) => rank(a) - rank(b))[0];
   return best && rank(best) < 9 ? best : undefined;
 }

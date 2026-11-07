@@ -64,6 +64,9 @@ describe('Jarvis em tela cheia: orb, voz e histórico', () => {
     expect(pickVoice(voices, 'pt-BR')?.name).toBe('PT local');
     expect(pickVoice(voices.slice(3), 'pt-BR')?.name).toBe('Portugal');
     expect(pickVoice(voices, 'fr-FR')).toBeUndefined();
+    // As neurais grátis do Edge/Chrome ganham das locais (robóticas), mesmo sendo remotas.
+    const natural = [...voices, { name: 'Microsoft Francisca Online (Natural) - Portuguese (Brazil)', lang: 'pt-BR', localService: false }];
+    expect(pickVoice(natural, 'pt-BR')?.name).toMatch(/Francisca/);
   });
 
   it('texto falado sem markdown nem código', () => {
