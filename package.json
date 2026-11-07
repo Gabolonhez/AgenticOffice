@@ -53,7 +53,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "esbuild": "^0.28.2",
-    "playwright-core": "^1.64.0",
+    "playwright-core": "^1.64.1",
     "three": "^0.187.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
