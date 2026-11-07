@@ -13,13 +13,17 @@ setQuiet(true);
 
 const TOKEN = 't'.repeat(43);
 
-function me(access: WorldAccess): WorldResult<MeResponse> {
+/** `extra`: campos a mais do /v1/me (`player`, `account.reservedName`...). */
+function me(access: WorldAccess, extra: Omit<Partial<MeResponse>, 'account'> & { account?: Partial<MeResponse['account']> } = {}): WorldResult<MeResponse> {
+  const { account, ...rest } = extra;
   return {
     ok: true,
     status: 200,
-    data: { account: { emailMasked: 'a***@exemplo.com', access, locale: 'pt-BR', createdAt: '' }, devices: [] },
+    data: { account: { emailMasked: 'a***@exemplo.com', access, locale: 'pt-BR', createdAt: '', ...account }, devices: [], ...rest },
   };
 }
+
+const PLAYER = { name: 'Ana Pixel', look: 'f' as const, parts: {}, traits: ['games' as const, 'cafeina' as const], intro: 'coffee' as const, visibility: { mode: 'live' as const, closed: false, hideCountry: false, tokensVisible: true, leaderboard: false, compactions: false }, updatedAt: '' };
 
 describe('WorldService: lista de espera', () => {
   let cleanup: () => void;
@@ -40,12 +44,12 @@ describe('WorldService: lista de espera', () => {
     cleanup();
   });
 
-  function start(opts: { access?: WorldAccess | null; terminal?: boolean; meFn?: () => Promise<WorldResult<MeResponse>> } = {}) {
+  function start(opts: { access?: WorldAccess | null; terminal?: boolean; meFn?: () => Promise<WorldResult<MeResponse>>; putPlayer?: WorldClient['putPlayer'] } = {}) {
     const access = opts.access === undefined ? 'waiting' : opts.access;
     if (access) store.save({ deviceId: 'dev1', token: TOKEN, email: 'ana@exemplo.com', access });
     const meFn = vi.fn(opts.meFn ?? (async () => me('waiting')));
     const logout = vi.fn(async () => ({ ok: true as const, status: 204, data: {} }));
-    const client = { me: meFn, logout } as unknown as WorldClient;
+    const client = { me: meFn, logout, putPlayer: opts.putPlayer } as unknown as WorldClient;
     const onChange = vi.fn();
     const service = new WorldService({ config: { enabled: true, dev: true, url: 'http://127.0.0.1:1' }, terminal: opts.terminal ?? true, store, client, onChange });
     services.push(service);
@@ -77,8 +81,35 @@ describe('WorldService: lista de espera', () => {
     expect(meFn).toHaveBeenCalledTimes(2);
   });
 
+  it('o nome reservado no cadastro vai ao status (/v1/me com reservedName) e some com o personagem', async () => {
+    const a = start({ meFn: async () => me('waiting', { account: { reservedName: 'Ana Pixel' } }) });
+    expect((await a.service.status(true)).account).toEqual({ emailMasked: 'a***@exemplo.com', access: 'waiting', reservedName: 'Ana Pixel' });
+    const b = start({ meFn: async () => me('waiting') });
+    expect((await b.service.status(true)).account).not.toHaveProperty('reservedName');
+    const c = start({ meFn: async () => me('waiting', { account: { reservedName: 'Ana Pixel' }, player: PLAYER }) });
+    expect((await c.service.status(true)).account).not.toHaveProperty('reservedName');
+  });
+
+  it('criar o personagem: sem name com a reserva (o pedido vai sem name); conta antiga sem reserva exige o name', async () => {
+    const putPlayer = vi.fn(async (_token: string, body: unknown) => ({ ok: true as const, status: 200, data: { ...PLAYER, ...(body as object) } }));
+    const withReserve = start({ meFn: async () => me('waiting', { account: { reservedName: 'Ana Pixel' } }), putPlayer });
+    await withReserve.service.status(true);
+    const r = await withReserve.service.setCharacter({ name: 'Outro Nome', look: 'f', parts: {}, traits: ['games', 'cafeina'], intro: 'coffee' });
+    expect(r.ok).toBe(true);
+    expect(putPlayer).toHaveBeenCalledTimes(1);
+    expect(putPlayer.mock.calls[0][1]).toEqual({ look: 'f', parts: {}, traits: ['games', 'cafeina'], intro: 'coffee' });
+
+    store.clear();
+    const old = start({ meFn: async () => me('waiting'), putPlayer });
+    await old.service.status(true);
+    expect(await old.service.setCharacter({ look: 'f', parts: {}, traits: ['games', 'cafeina'], intro: 'coffee' })).toEqual({ ok: false, status: 422, code: 'name_invalid' });
+    expect(putPlayer).toHaveBeenCalledTimes(1);
+    expect((await old.service.setCharacter({ name: 'Ana Pixel', look: 'f', parts: {}, traits: ['games', 'cafeina'], intro: 'coffee' })).ok).toBe(true);
+    expect(putPlayer.mock.calls[1][1]).toMatchObject({ name: 'Ana Pixel' });
+  });
+
   it('meta.world.scene: só com a conta aprovada e o personagem; available pede a trava do terminal', () => {
-    const player = { name: 'Ana Pixel', look: 'f' as const, parts: {}, traits: ['games' as const, 'cafeina' as const], intro: 'coffee' as const, visibility: { mode: 'live' as const, closed: false, hideCountry: false, tokensVisible: true, leaderboard: false, compactions: false }, updatedAt: '' };
+    const player = PLAYER;
     const a = start({ access: 'approved' });
     expect(a.service.meta()).not.toHaveProperty('scene');
     store.update({ player });

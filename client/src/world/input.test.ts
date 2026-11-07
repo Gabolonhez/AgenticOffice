@@ -97,3 +97,45 @@ describe('teclado da câmera', () => {
     expect(pans).toEqual([[-90, 0]]);
   });
 });
+
+describe('modalOpen', () => {
+  /** `document` mínimo: alguns elementos e o `querySelector` dos dois seletores que a função usa. */
+  function installDocument(els: { tag: string; open?: boolean; ariaModal?: boolean }[]): () => void {
+    const prev = globalThis.document;
+    const matches = (sel: string, e: (typeof els)[number]): boolean => {
+      if (sel === 'dialog[open]') return e.tag === 'dialog' && !!e.open;
+      if (sel === ':not(dialog)[aria-modal="true"]') return e.tag !== 'dialog' && !!e.ariaModal;
+      if (sel === '[aria-modal="true"]') return !!e.ariaModal;
+      if (sel === ':popover-open') return false;
+      throw new Error(`seletor inesperado no teste: ${sel}`);
+    };
+    globalThis.document = {
+      querySelector: (sel: string) => els.find((e) => sel.split(', ').some((s) => matches(s, e))) ?? null,
+    } as unknown as Document;
+    return () => {
+      globalThis.document = prev;
+    };
+  }
+
+  it('um <dialog> fechado (mesmo com aria-modal) não bloqueia o teclado da cidade', async () => {
+    const { modalOpen } = await import('./input');
+    const restore = installDocument([{ tag: 'dialog', open: false, ariaModal: true }]);
+    try {
+      expect(modalOpen(null)).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it('um <dialog> aberto, ou outro elemento com aria-modal, bloqueia', async () => {
+    const { modalOpen } = await import('./input');
+    for (const els of [[{ tag: 'dialog', open: true }], [{ tag: 'div', ariaModal: true }]]) {
+      const restore = installDocument(els);
+      try {
+        expect(modalOpen(null)).toBe(true);
+      } finally {
+        restore();
+      }
+    }
+  });
+});

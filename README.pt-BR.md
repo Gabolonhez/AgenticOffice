@@ -866,17 +866,18 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 ## Habblaud World
 
 O Habblaud World é uma cidade online em pixel art onde cada Habblaud vira um prédio, aceso ao vivo enquanto os agentes
-trabalham, e cada pessoa passeia com um personagem. **Está em desenvolvimento e vem desligado por padrão:** sem
-`HABBLAUD_WORLD_URL`, nada do World aparece na interface e nada sai do computador.
+trabalham, e cada pessoa passeia com um personagem. **Vem ligado por padrão**, apontando para `server.habblaud.com`;
+**nada sai do computador até você criar a conta** e entrar, e `HABBLAUD_WORLD=0` desliga tudo. O acesso é liberado por
+lista de espera.
 
-**Como ligar.** As variáveis abaixo (no `.env` ou no ambiente) apontam o Habblaud para um servidor do mundo. A seção
-aparece em **Configurações › Habblaud World** e só funciona pelo próprio computador (nunca pela porta do celular); a
+**Como configurar.** As variáveis abaixo (no `.env` ou no ambiente) são opcionais: sem elas, o Habblaud aponta para o
+servidor oficial. A seção aparece na janela **Habblaud World** (o botão de cidade na barra do topo) e só funciona pelo próprio computador (nunca pela porta do celular); a
 conta fica só aqui, em `~/.habblaud/world.json` (permissão 600; no Docker, no volume `/data`).
 
 | Variável | Padrão | Para quê |
 | --- | --- | --- |
-| `HABBLAUD_WORLD_URL` | — (desligado) | Endereço do servidor do mundo, só `https://` ou `wss://` (sem caminho). |
-| `HABBLAUD_WORLD` | ligado | `0` esconde tudo do World (rotas e interface), mesmo com a URL. |
+| `HABBLAUD_WORLD_URL` | `https://server.habblaud.com` | Endereço do servidor do mundo, só `https://` ou `wss://` (sem caminho). |
+| `HABBLAUD_WORLD` | ligado | `0` desliga tudo do World (rotas e interface) e nada sai do computador. |
 | `HABBLAUD_WORLD_DEV` | desligado | `1` aceita um servidor do mundo local sem TLS: `http://127.0.0.1:<porta>` (o `npm run dev` já aceita) ou, de dentro do Docker, `http://host.docker.internal:<porta>`. |
 
 **Privacidade.** Nada do seu trabalho sai do computador. Do prédio saem só o tema, um andar por sala aberta (com um
@@ -886,14 +887,15 @@ mensagens, código, custo, modelo, branch e a sua conta do Claude nunca saem. A 
 [docs/world/privacidade.md](docs/world/privacidade.md). **Ver o que foi enviado**, no cartão Seu prédio, mostra o JSON
 exato da última remessa, com o tamanho em bytes e a resposta do mundo.
 
-**Conta e lista de espera.** Cadastro com e-mail e senha (12 caracteres ou mais; senhas que já vazaram são recusadas),
-código de 6 dígitos por e-mail e o aceite dos Termos de Uso e da Política de Privacidade. Toda conta entra numa lista de
-espera, e o acesso é liberado por lotes: o Habblaud aberto confere sozinho a cada 30 minutos. Até 3 computadores por
-conta (**Dispositivos**, com revogar).
+**Conta e lista de espera.** Cadastro com e-mail, **nome de jogador** (3 a 20 caracteres, único no mundo: fica reservado
+para você enquanto espera na lista e vira o nome do personagem) e senha (12 caracteres ou mais; senhas que já vazaram
+são recusadas), código de 6 dígitos por e-mail e o aceite dos Termos de Uso e da Política de Privacidade. Toda conta
+entra numa lista de espera, e o acesso é liberado por lotes: o Habblaud aberto confere sozinho a cada 30 minutos. Até 3
+computadores por conta (**Dispositivos**, com revogar).
 
-**Personagem.** Nome de jogador (3 a 20 caracteres, único no mundo), o mesmo editor de aparência dos agentes, 2 ou 3
-traços de personalidade e uma frase de apresentação da lista (no mundo não há texto livre além do nome). Dá para criar
-ainda na lista de espera.
+**Personagem.** O nome de jogador escolhido no cadastro (dá para trocar depois, uma vez a cada 30 dias), o mesmo editor
+de aparência dos agentes, 2 ou 3 traços de personalidade e uma frase de apresentação da lista (no mundo não há texto
+livre além do nome). Dá para criar ainda na lista de espera.
 
 **Prédio.** Com a conta liberada e o personagem criado, o prédio sobe sozinho (por WebSocket) e acompanha o escritório
 ao vivo. O cartão **Seu prédio** mostra a conexão, os andares, os agentes, a última remessa e, quando o mundo recusa uma
@@ -1063,8 +1065,8 @@ das contas (letra, e-mail, organização) são lidos no host pelo `docker:up` e 
   sem token, à API pública do GitHub (`api.github.com/repos/marmottajr/habblaud/releases/latest`). Ela não envia nada
   sobre as suas sessões; o GitHub vê só o seu IP e a versão em uso, que vai no `User-Agent`.
   `HABBLAUD_UPDATE_CHECK=0` desliga a consulta.
-  O [Habblaud World](#habblaud-world) (em desenvolvimento, desligado por padrão) só fala com o servidor do mundo com
-  `HABBLAUD_WORLD_URL` configurada: veja [o que sai](docs/world/privacidade.md).
+  O [Habblaud World](#habblaud-world) (ligado por padrão) só manda algo ao servidor do mundo depois de você criar a
+  conta e entrar, e só o que está em [o que sai](docs/world/privacidade.md); `HABBLAUD_WORLD=0` desliga tudo.
   O [celular com login](#celular-com-login-e-https-aprovando-pedidos) também, e ele só existe depois do `npm run remote:setup`.
 - **Sem credenciais:** o Habblaud não lê senhas nem tokens de acesso. Do `.claude.json` de cada conta aproveita só o
   e-mail, a organização e o cache do `/usage`; o uso ao vivo vem do mod (ou do tap de statusline).

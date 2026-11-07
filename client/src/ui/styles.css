@@ -8078,6 +8078,14 @@ html.is-replay #world {
   outline-offset: 1px;
 }
 
+/* Criando com o nome reservado no cadastro: o campo só mostra o nome. */
+.ui-char__name.is-fixed {
+  border-style: dashed;
+  background: rgba(0, 0, 0, 0.12);
+  color: var(--ui-muted);
+  cursor: default;
+}
+
 .ui-char__groups {
   display: flex;
   flex-direction: column;
@@ -9101,28 +9109,103 @@ html.is-replay #world {
    Seção em Configurações (conta, lista de espera, personagem, visibilidade, dispositivos) e o cartão de convite.
    Mesmas cores do resto do painel (tokens do .ui-root); o popover já ocupa a largura do celular com as margens. */
 
-.ui-world {
-  scroll-margin: 8px;
+/* A janela do Habblaud World (ui/world/world-dialog.ts): um <dialog> modal com o botão próprio na barra do topo; o
+   conteúdo (.ui-world) é o de settings-world.ts, e o chip do estado da conta fica no cabeçalho. */
+.ui-world-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border-radius: 14px;
+  background: var(--ui-bg-solid);
+  border: 1px solid var(--ui-line-strong);
+  box-shadow:
+    0 30px 70px rgba(5, 7, 12, 0.55),
+    inset 0 3px 0 rgba(124, 200, 255, 0.35);
+  color: var(--ui-text);
+  font: 13px/1.45 var(--font-ui);
+  overflow: hidden;
 }
 
-.ui-world.is-highlight {
-  animation: ui-help-flash 1.6s ease-out;
+.ui-world-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  animation: ui-dialog-in 0.28s var(--ease);
 }
 
-.ui-world h3:focus {
+.ui-world-dialog::backdrop {
+  background: rgba(8, 10, 16, 0.6);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+.ui-world-dialog__head {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 12px;
+  padding: 16px 14px 12px 22px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(124, 200, 255, 0.16), transparent 55%),
+    linear-gradient(180deg, rgba(124, 200, 255, 0.06), transparent);
+  border-bottom: 1px solid var(--ui-line);
+}
+
+.ui-world-dialog__badge {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: linear-gradient(160deg, var(--ui-accent-soft), rgba(124, 200, 255, 0.28));
+  color: var(--ui-accent);
+}
+
+.ui-world-dialog__badge .ui-px-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.ui-world-dialog__heading {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.ui-world-dialog__title {
+  margin: 0;
+  font: 700 18px/1.25 var(--font-ui);
+}
+
+.ui-world-dialog__title:focus {
   outline: none;
 }
 
-.ui-world__top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 4px;
+.ui-world-dialog__body {
+  min-height: 0;
+  padding: 10px 22px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
-.ui-world__top h3 {
-  margin-bottom: 0;
+@media (max-width: 600px) {
+  .ui-world-dialog__head {
+    padding: 14px 10px 10px 16px;
+  }
+
+  .ui-world-dialog__body {
+    padding: 8px 16px 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-world-dialog[open] {
+    animation: none;
+  }
 }
 
 .ui-world__chip {
@@ -9239,7 +9322,7 @@ html.is-replay #world {
   line-height: 1.45;
 }
 
-.ui-world:has(.ui-world__chip.is-approved) .ui-world__notice {
+.ui-world-dialog:has(.ui-world__chip.is-approved) .ui-world__notice {
   border-color: color-mix(in srgb, var(--st-working) 38%, transparent);
   background: color-mix(in srgb, var(--st-working) 9%, transparent);
 }
@@ -9454,6 +9537,12 @@ html.is-replay #world {
   overflow-wrap: anywhere;
 }
 
+/* "Seu nome de jogador: X (reservado)", na lista de espera. */
+.ui-world__reserved {
+  font-size: 12.5px;
+  color: var(--ui-muted);
+}
+
 .ui-world__player-intro {
   font-size: 12px;
   font-style: italic;
@@ -9603,9 +9692,9 @@ html.is-replay #world {
 }
 
 /* Textos do World com "C" maiúsculo e dígitos ("Criar conta", "Confirmar e-mail"): na Pixelify o "C" parece "O",
-   então os botões principais e o título do cartão usam a fonte do corpo. */
+   então os botões principais e o título do popup usam a fonte do corpo. */
 .ui-world .ui-btn--primary,
-.ui-world-invite .ui-btn--primary {
+.ui-world-popup .ui-btn--primary {
   font: 600 13px/1 var(--font-ui);
   letter-spacing: 0;
 }
@@ -9631,57 +9720,90 @@ html.is-replay #world {
   animation: ui-blink 0.8s steps(2, jump-none) infinite;
 }
 
-/* Cartão de convite ("Conheça o Habblaud World"): no meio da área livre, uma vez só. */
-.ui-world-invite {
-  position: fixed;
-  z-index: 12;
-  top: calc((var(--free-top) + 100vh - var(--free-bottom)) / 2);
-  left: calc((var(--free-left) + 100vw - var(--free-right)) / 2);
-  width: min(440px, calc(100vw - 32px));
-  max-height: calc(100vh - var(--free-top) - var(--free-bottom));
-  overflow-y: auto;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 20px 22px 18px;
+/* Os popups de lançamento do Habblaud World ("Novidade", "Você está na lista de espera", "Acesso liberado!"): um
+   <dialog> modal no top layer (acima de Configurações), centralizado, com o fundo escurecido e rolagem interna. */
+.ui-world-popup {
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  padding: 0;
   border-radius: 14px;
   background: var(--ui-bg-solid);
   border: 1px solid var(--ui-line-strong);
   box-shadow:
     0 30px 70px rgba(5, 7, 12, 0.55),
     inset 0 3px 0 rgba(124, 200, 255, 0.35);
-  animation: ui-empty-in 0.4s var(--ease);
+  color: var(--ui-text);
+  font: 13px/1.45 var(--font-ui);
+  overflow: hidden;
 }
 
-.ui-world-invite__head {
+.ui-world-popup[open] {
+  display: flex;
+  flex-direction: column;
+  animation: ui-dialog-in 0.28s var(--ease);
+}
+
+.ui-world-popup::backdrop {
+  background: rgba(8, 10, 16, 0.6);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+.ui-world-popup__head {
   display: flex;
   align-items: center;
+  flex: none;
   gap: 12px;
+  padding: 20px 22px 14px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(124, 200, 255, 0.16), transparent 55%),
+    linear-gradient(180deg, rgba(124, 200, 255, 0.06), transparent);
+  border-bottom: 1px solid var(--ui-line);
 }
 
-.ui-world-invite__badge {
+.ui-world-popup__badge {
   display: grid;
   place-items: center;
   flex: none;
   width: 44px;
   height: 44px;
   border-radius: 10px;
-  background: var(--ui-accent-soft);
+  background: linear-gradient(160deg, var(--ui-accent-soft), rgba(124, 200, 255, 0.28));
   color: var(--ui-accent);
 }
 
-.ui-world-invite__icon {
+.ui-world-popup__icon {
   width: 24px;
   height: 24px;
 }
 
-.ui-world-invite__title {
+.ui-world-popup__title {
   margin: 0;
   font: 700 18px/1.25 var(--font-ui);
 }
 
-.ui-world-invite__perks {
+.ui-world-popup__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 16px 22px 4px;
+  overflow-y: auto;
+}
+
+.ui-world-popup__lead {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--ui-text);
+}
+
+.ui-world-popup__text {
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.ui-world-popup__perks {
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -9689,12 +9811,12 @@ html.is-replay #world {
   line-height: 1.45;
 }
 
-.ui-world-invite__perks li {
+.ui-world-popup__perks li {
   position: relative;
   padding-left: 16px;
 }
 
-.ui-world-invite__perks li::before {
+.ui-world-popup__perks li::before {
   content: '';
   position: absolute;
   left: 2px;
@@ -9705,7 +9827,7 @@ html.is-replay #world {
   background: var(--st-working);
 }
 
-.ui-world-invite__privacy {
+.ui-world-popup__privacy {
   padding: 8px 10px;
   border-radius: 8px;
   background: var(--ui-accent-soft);
@@ -9714,26 +9836,55 @@ html.is-replay #world {
   line-height: 1.45;
 }
 
-.ui-world-invite__actions {
+.ui-world-popup__actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  flex: none;
   gap: 8px 10px;
+  padding: 14px 22px 18px;
 }
 
-.ui-world-invite__actions .ui-link-btn {
+.ui-world-popup .ui-world-popup__cta {
+  height: 40px;
+  padding: 0 22px;
+  font-size: 14px;
+}
+
+.ui-world-popup__actions .ui-link-btn {
   margin-left: auto;
 }
 
 @media (max-width: 600px) {
-  .ui-world-invite {
-    padding: 16px 16px 14px;
+  .ui-world-popup__head {
+    padding: 16px 16px 12px;
   }
 
-  .ui-world-invite__actions .ui-link-btn {
+  .ui-world-popup__body {
+    padding: 12px 16px 4px;
+  }
+
+  .ui-world-popup__actions {
+    padding: 12px 16px 14px;
+  }
+
+  .ui-world-popup__actions .ui-link-btn {
     margin-left: 0;
   }
 
+  .ui-world-popup .ui-world-popup__cta {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-world-popup[open] {
+    animation: none;
+  }
+}
+
+@media (max-width: 600px) {
   .ui-world__actions .ui-btn--primary {
     flex: 1 1 auto;
     justify-content: center;
@@ -10212,7 +10363,6 @@ html.is-replay #world {
 .ui-root.is-city > .ui-term,
 .ui-root.is-city > .ui-empty,
 .ui-root.is-city > .ui-tip,
-.ui-root.is-city > .ui-world-invite,
 .ui-root.is-city > .ui-lapse,
 .ui-root.is-city > .ui-lapse-vignette,
 .ui-root.is-city .ui-btn-sidebar,

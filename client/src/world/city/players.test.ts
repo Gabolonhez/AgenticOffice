@@ -225,3 +225,35 @@ describe('envio de move', () => {
     expect(dirOf(0.2, 1, 'down')).toBe('down');
   });
 });
+
+describe('MoveSender depois do keepAlive da aba em segundo plano (bug: dois relógios)', () => {
+  it('o keepAlive não cala os ticks: andar depois dele ainda manda move', () => {
+    // No laço da cena o relógio é performance.now() (ms desde o carregamento); o keepAlive da aba escondida rodava com
+    // Date.now() (index.ts) e guardava essa hora, então cada tick via `now - lastAt` negativo e nunca mais mandava: o
+    // servidor ficava com a posição congelada enquanto o personagem andava na tela (enter/like → too_far até um `pos`
+    // chamar `reset`). Agora o keepAlive não recebe nem guarda hora nenhuma.
+    const sent: { x: number; moving: boolean }[] = [];
+    const m = new MoveSender((msg) => sent.push(msg));
+    const perf = 120_000; // ~2 min de página aberta
+    expect(m.tick(perf, { x: 10, y: 10, dir: 'right', moving: false })).toBe(true);
+    m.keepAlive({ x: 10, y: 10, dir: 'right' }); // aba escondida por 30 s
+    // a aba volta e a pessoa anda 20 s
+    let moved = 0;
+    for (let t = perf + 30_000; t < perf + 50_000; t += 16) if (m.tick(t, { x: 10 + (t - perf) / 1000, y: 10, dir: 'right', moving: true })) moved++;
+    expect(moved).toBeGreaterThan(0);
+    expect(sent.at(-1)!.moving).toBe(true);
+  });
+
+  it('keepAlive seguido de tick parado na mesma posição não reenvia (sem duplicata)', () => {
+    const sent: unknown[] = [];
+    const m = new MoveSender((msg) => sent.push(msg));
+    const perf = 120_000;
+    expect(m.tick(perf, { x: 10, y: 10, dir: 'right', moving: false })).toBe(true);
+    m.keepAlive({ x: 10, y: 10, dir: 'right' });
+    expect(sent).toHaveLength(2);
+    // a aba volta com o personagem parado onde estava: nada de novo a mandar, por mais que o tempo passe
+    expect(m.tick(perf + 30_000, { x: 10, y: 10, dir: 'right', moving: false })).toBe(false);
+    expect(m.tick(perf + 60_000, { x: 10, y: 10, dir: 'right', moving: false })).toBe(false);
+    expect(sent).toHaveLength(2);
+  });
+});

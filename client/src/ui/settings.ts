@@ -1,6 +1,6 @@
-// Configurações (popover): opções do escritório, avisos, modo demonstração e Sobre (versão).
+// Configurações (popover): opções do escritório, avisos, modo demonstração e Sobre (versão). O Habblaud World tem a
+// janela própria (ui/world/world-dialog.ts); daqui só sai a dica do tema em Aparência, que também vai para o prédio.
 import { access, remoteLogout } from '../net/access';
-import type { WorldSource } from '../net/world';
 import type { UiComponent, UiContext } from './context';
 import { h, iconButton, setAttr, setHidden, setText } from './dom';
 import { ICONS } from './icons';
@@ -9,8 +9,7 @@ import type { UiPrefs } from './prefs';
 import { SoundSettingsGroup } from './settings-sound';
 import type { SoundControl } from './sound';
 import { AboutGroup } from './version';
-import { WorldSettingsGroup } from './world/settings-world';
-import type { WorldScreen } from './world/world-model';
+import type { WorldThemeLink } from './world/world-dialog';
 import { LOCALE_STORAGE_KEY, LOCALES, normalizeLocale, tr, type Locale } from '../../../shared/i18n';
 import { Office3dImportGroup } from './office3d-settings';
 import { ApprovalPinGroup, GitHubTokenGroup, JarvisConfigGroup, JarvisVoiceGroup, ProductsConfigGroup, VBoardsConfigGroup } from './vboards-config';
@@ -98,8 +97,6 @@ export class SettingsPopover implements UiComponent {
   /** Só na página do celular (porta remota com login): sair deste aparelho. */
   private remoteGroup: HTMLElement;
   private logoutBtn: HTMLButtonElement;
-  /** Habblaud World (some sem `meta.world` ligado). */
-  private world: WorldSettingsGroup;
   private about: AboutGroup;
   private demoBusy = false;
   private anchor: HTMLElement | null = null;
@@ -108,7 +105,8 @@ export class SettingsPopover implements UiComponent {
     private ctx: UiContext,
     private notifier: Notifier,
     sound: SoundControl,
-    world: WorldSource,
+    /** A janela do Habblaud World: a dica do tema em Aparência e o envio do tema ao prédio. */
+    private readonly world: WorldThemeLink,
   ) {
     const sw = (key: BoolPref | 'demo', label: string, hint: string, onToggle: () => void) => {
       const r = switchRow(label, hint, onToggle);
@@ -192,8 +190,7 @@ export class SettingsPopover implements UiComponent {
       ),
     );
 
-    this.world = new WorldSettingsGroup(ctx, world);
-    this.theme.row.append(this.world.themeNote);
+    this.theme.row.append(world.themeNote);
     this.about = new AboutGroup(ctx);
 
     const close = iconButton(ICONS.close, tr('Fechar configurações'), () => this.hide(), 'ui-icon-btn--sm');
@@ -228,7 +225,6 @@ export class SettingsPopover implements UiComponent {
       new JarvisVoiceGroup().el,
       new ApprovalPinGroup().el,
       new GitHubTokenGroup().el,
-      this.world.el,
       this.about.el,
     );
     this.el.addEventListener('toggle', () => {
@@ -267,14 +263,6 @@ export class SettingsPopover implements UiComponent {
     requestAnimationFrame(() => this.about.highlight());
   }
 
-  /** Abre (se fechado) e leva até a seção do Habblaud World, na tela pedida. */
-  showWorld(anchor: HTMLElement, screen?: WorldScreen): void {
-    this.world.show(screen);
-    if (!this.isOpen) this.toggle(anchor);
-    this.render();
-    requestAnimationFrame(() => this.world.highlight());
-  }
-
   hide(): void {
     if (typeof this.el.hidePopover === 'function' && this.isOpen) this.el.hidePopover();
     this.el.classList.remove('is-open');
@@ -310,7 +298,6 @@ export class SettingsPopover implements UiComponent {
     this.soundGroup.render();
     setHidden(this.demoGroup, this.ctx.store.mock || access().remote);
     setHidden(this.remoteGroup, !access().remote);
-    this.world.render(this.isOpen);
     this.about.render();
 
     const notif = this.switches.get('browserNotifications')!;

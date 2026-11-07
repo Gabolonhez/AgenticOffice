@@ -71,10 +71,13 @@ export interface WorldConfig {
   /** HABBLAUD_WORLD diferente de 0 (false, off, no): as rotas /api/world/* existem e a interface mostra a seção. */
   enabled: boolean;
   /**
-   * Base HTTP(S) do servidor do mundo, sem barra no fim (de HABBLAUD_WORLD_URL; `wss://` vira `https://`). Ausente =
-   * não configurado: o recurso fica desligado e nada sai do computador. O WebSocket é a mesma origem com /v1/socket.
+   * Base HTTP(S) do servidor do mundo, sem barra no fim (de HABBLAUD_WORLD_URL ou, sem ela, DEFAULT_WORLD_URL;
+   * `wss://` vira `https://`). Ausente = HABBLAUD_WORLD_URL recusada (`warning` diz por quê): o recurso fica desligado
+   * e nada sai do computador. O WebSocket é a mesma origem com /v1/socket.
    */
   url?: string;
+  /** A URL veio do padrão (HABBLAUD_WORLD_URL ausente ou vazia). */
+  defaultUrl?: true;
   /**
    * `--dev` ou HABBLAUD_WORLD_DEV=1: aceita também `http://` e `ws://` para 127.0.0.1 e host.docker.internal (servidor do
    * mundo local; do container do Habblaud, o host é host.docker.internal).
@@ -182,20 +185,28 @@ export function messagesOffReason(env: NodeJS.ProcessEnv, host: string, inDocker
 }
 
 /**
- * Habblaud World a partir do ambiente. A URL só vale com `https://` ou `wss://` (o token do dispositivo nunca anda sem
- * TLS); `http://` e `ws://` só no modo de desenvolvimento e só para 127.0.0.1 ou host.docker.internal (o servidor do
- * mundo rodando no próprio computador, visto de fora ou de dentro do Docker). Nada de caminho, usuário, senha ou
- * parâmetros: só o endereço do servidor.
+ * O servidor do Habblaud World quando HABBLAUD_WORLD_URL está ausente ou vazia: o World vem ligado por padrão, mas nada
+ * sai do computador antes de a pessoa criar a conta e entrar (server/world/service.ts). HABBLAUD_WORLD=0 desliga tudo.
  */
+export const DEFAULT_WORLD_URL = 'https://server.habblaud.com';
+
 /** Hosts aceitos sem TLS no modo de desenvolvimento: o próprio computador e, de dentro do Docker, o host. */
 const LOCAL_WORLD_HOSTS: readonly string[] = ['127.0.0.1', 'host.docker.internal'];
 
+/**
+ * Habblaud World a partir do ambiente. Sem HABBLAUD_WORLD_URL, DEFAULT_WORLD_URL. A URL só vale com `https://` ou
+ * `wss://` (o token do dispositivo nunca anda sem TLS); `http://` e `ws://` só no modo de desenvolvimento e só para
+ * 127.0.0.1 ou host.docker.internal (o servidor do mundo rodando no próprio computador, visto de fora ou de dentro do
+ * Docker). Nada de caminho, usuário, senha ou parâmetros: só o endereço do servidor. Uma URL definida e recusada não
+ * cai no padrão: o recurso fica desligado, com o motivo em `warning`.
+ */
 export function parseWorldConfig(env: NodeJS.ProcessEnv, argv: string[]): WorldConfig {
   const flag = env.HABBLAUD_WORLD?.trim();
   const enabled = !flag || isTruthy(flag);
   const dev = argv.includes('--dev') || isTruthy(env.HABBLAUD_WORLD_DEV);
+  if (!enabled) return { enabled, dev };
   const raw = env.HABBLAUD_WORLD_URL?.trim();
-  if (!enabled || !raw) return { enabled, dev };
+  if (!raw) return { enabled, dev, url: DEFAULT_WORLD_URL, defaultUrl: true };
   let u: URL;
   try {
     u = new URL(raw);

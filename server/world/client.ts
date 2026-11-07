@@ -172,6 +172,9 @@ export function parseMe(raw: unknown): MeResponse | undefined {
     },
     devices: Array.isArray(v.devices) ? v.devices.slice(0, 16).map(parseDevice).filter((d): d is DeviceInfo => !!d) : [],
   };
+  // O nome de jogador reservado no cadastro (até 64 caracteres); null ou ausente = sem reserva (já há personagem).
+  const reservedName = str(account.reservedName, 64);
+  if (reservedName) me.account.reservedName = reservedName;
   const player = v.player === undefined || v.player === null ? undefined : parsePlayer(v.player);
   if (player) me.player = player;
   // Saiu do mundo (deste ou de outro computador) e ainda não voltou: só o `true` vale.

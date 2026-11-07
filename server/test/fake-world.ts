@@ -21,6 +21,7 @@ import {
   type WorldAccess,
   type WorldUplink,
 } from '../../shared/world/protocol';
+import { parsePlayerName, playerNameKey } from '../../shared/world/names-rules';
 
 export interface FakeRequest {
   method: string;
@@ -38,6 +39,8 @@ interface Account {
   access: WorldAccess;
   code: string;
   player?: Player;
+  /** O nome de jogador do cadastro, reservado até o personagem existir (conta antiga: ausente). */
+  reservedName?: string;
   locale: string;
   invite?: string;
   /** Prédio pausado pelo dono (POST /v1/me/building/pause). */
@@ -163,11 +166,20 @@ export async function startFakeWorld(): Promise<FakeWorld> {
     devices.set(token, { email, deviceId });
     return { deviceId, token, access: accounts.get(email)!.access };
   };
+  /** O nome (pela chave) já é de outra conta: reservado no cadastro ou de um personagem. */
+  const nameTaken = (key: string, self: Account | undefined): boolean =>
+    [...accounts.values()].some((o) => o !== self && (o.player ? playerNameKey(o.player.name) === key : o.reservedName !== undefined && playerNameKey(o.reservedName) === key));
   const me = (email: string, token: string) => {
     const a = accounts.get(email)!;
     const list = [...devices.entries()].filter(([, d]) => d.email === email);
     return {
-      account: { emailMasked: `${email[0]}***${email.slice(email.indexOf('@'))}`, access: a.access, locale: a.locale, createdAt: '2026-10-15T00:00:00Z' },
+      account: {
+        emailMasked: `${email[0]}***${email.slice(email.indexOf('@'))}`,
+        access: a.access,
+        locale: a.locale,
+        createdAt: '2026-10-15T00:00:00Z',
+        reservedName: a.player ? null : (a.reservedName ?? null),
+      },
       ...(a.player ? { player: a.player } : {}),
       left: !!a.left,
       devices: list.map(([t, d], i) => ({ id: d.deviceId, label: `Dispositivo ${i + 1}`, createdAt: '2026-10-15T00:00:00Z', lastSeenAt: '2026-10-15T00:00:00Z', current: t === token })),
@@ -211,10 +223,14 @@ export async function startFakeWorld(): Promise<FakeWorld> {
         return send(res, 200, { algorithm: 'SHA-256', challenge, salt, maxnumber: options.altchaMax, signature: createHmac('sha256', SECRET).update(challenge).digest('hex') });
       }
       if (method === 'POST' && path === '/v1/auth/register') {
+        // O nome é conferido antes do ALTCHA e da senha; `name_taken` vale contra reservas e personagens de qualquer conta.
+        const name = parsePlayerName(b.name);
+        if (!name.ok) return error(res, 422, name.code);
+        if (nameTaken(name.key, undefined)) return error(res, 409, 'name_taken');
         if (!altchaOk(b.altcha)) return error(res, 400, 'altcha_invalid');
         if (b.tos !== 'v1' || typeof b.email !== 'string' || typeof b.password !== 'string') return error(res, 400, 'invalid');
         if (!accounts.has(b.email)) {
-          accounts.set(b.email, { email: b.email, password: b.password, verified: false, access: 'waiting', code: FAKE_CODE, locale: String(b.locale), invite: b.invite as string | undefined });
+          accounts.set(b.email, { email: b.email, password: b.password, verified: false, access: 'waiting', code: FAKE_CODE, locale: String(b.locale), invite: b.invite as string | undefined, reservedName: name.name });
         }
         return send(res, 202, {});
       }
@@ -249,10 +265,14 @@ export async function startFakeWorld(): Promise<FakeWorld> {
       if (method === 'PUT' && path === '/v1/me/player') {
         const a = accounts.get(device!.email)!;
         const input = b as unknown as PlayerInput;
-        for (const other of accounts.values()) {
-          if (other !== a && other.player?.name.toLowerCase() === String(input.name).toLowerCase()) return error(res, 409, 'name_taken');
-        }
-        a.player = { ...input, visibility: a.player?.visibility ?? { ...VISIBILITY_DEFAULTS }, updatedAt: '2026-10-15T12:00:00Z', country: 'BR' };
+        // Criando com reserva: o nome É a reserva (o `name` do corpo é ignorado); sem reserva, o `name` é obrigatório.
+        // Atualizando, `name` ausente mantém.
+        const raw = !a.player && a.reservedName ? a.reservedName : input.name === undefined && a.player ? a.player.name : input.name;
+        const name = parsePlayerName(raw);
+        if (!name.ok) return error(res, 422, name.code);
+        if (nameTaken(name.key, a)) return error(res, 409, 'name_taken');
+        a.player = { ...input, name: name.name, visibility: a.player?.visibility ?? { ...VISIBILITY_DEFAULTS }, updatedAt: '2026-10-15T12:00:00Z', country: 'BR' };
+        delete a.reservedName;
         return send(res, 200, { ...a.player, internalScore: 99 });
       }
       if (method === 'PUT' && path === '/v1/me/visibility') {
@@ -289,7 +309,10 @@ export async function startFakeWorld(): Promise<FakeWorld> {
           format: 'habblaud-world-export',
           version: 1,
           exportedAt: '2026-10-15T12:00:00Z',
-          account: { id: 'acc_1', email: a.email, locale: a.locale, access: a.access, createdAt: '2026-10-15T00:00:00Z', notifyInactivity: a.notifyInactivity ?? true },
+          account: {
+            id: 'acc_1', email: a.email, locale: a.locale, access: a.access, createdAt: '2026-10-15T00:00:00Z', notifyInactivity: a.notifyInactivity ?? true,
+            reservedName: a.player ? null : (a.reservedName ?? null), country: 'BR', signupIp: '127.0.0.1', lastLoginIp: '127.0.0.1', lastLoginAt: '2026-10-15T00:00:00Z',
+          },
           player: a.player ?? null,
           visibility: a.player?.visibility ?? null,
           devices: [...devices.values()].filter((d) => d.email === a.email).map((_d, i) => ({ label: `Dispositivo ${i + 1}`, createdAt: '2026-10-15T00:00:00Z', lastSeenAt: '2026-10-15T00:00:00Z', revokedAt: null })),

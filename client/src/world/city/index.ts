@@ -679,6 +679,8 @@ export function createCityScene(o: CitySceneOptions): CityScene {
   const onVisibility = () => {
     lastTs = 0;
     input.clearKeys();
+    // de volta à aba: o próximo tick reenvia a posição, mesmo que algo tenha ficado preso enquanto ela estava escondida
+    if (!document.hidden) sender?.reset();
   };
 
   // ------------------------------------------------------------------ API
@@ -708,7 +710,7 @@ export function createCityScene(o: CitySceneOptions): CityScene {
       document.addEventListener('visibilitychange', onVisibility);
       keepAlive = setInterval(() => {
         // dentro de um prédio, nenhum passo sai (lá dentro o servidor ignora e o tempo não conta para o afk)
-        if (document.hidden && me && sender && !visit) sender.keepAlive(Date.now(), me);
+        if (document.hidden && me && sender && !visit) sender.keepAlive(me);
       }, KEEPALIVE_MS);
     },
     hide() {

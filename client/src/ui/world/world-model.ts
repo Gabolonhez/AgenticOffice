@@ -1,11 +1,11 @@
-// Habblaud World na interface, parte pura (sem DOM): quando a seção de Configurações e o cartão de convite aparecem, a
-// máquina de estados da seção, as regras de senha, nome de jogador e traços e o texto de cada erro. São conferências
-// de antemão, para responder na hora: quem decide é o servidor (o nome, por exemplo, ainda passa pela lista de
-// palavras bloqueadas, que só ele tem). Também o cartão "Seu prédio" (Fase 2): estado, contagens, motivo de uma
-// remessa recusada, o chip da barra do topo e quando o tema vai para o mundo. Fase 6: a tela "Conta e dados" (aviso de
-// inatividade, baixar os dados, excluir a conta), o recurso por e-mail (conta suspensa ou banida, prédio "não
+// Habblaud World na interface, parte pura (sem DOM): quando a janela do World e os popups de lançamento
+// aparecem, a máquina de estados da seção, as regras de senha, nome de jogador e traços e o texto de cada erro. São
+// conferências de antemão, para responder na hora: quem decide é o servidor (o nome, por exemplo, ainda passa pela
+// lista de palavras bloqueadas, que só ele tem). Também o cartão "Seu prédio" (Fase 2): estado, contagens, motivo de
+// uma remessa recusada, o chip da barra do topo e quando o tema vai para o mundo. Fase 6: a tela "Conta e dados" (aviso
+// de inatividade, baixar os dados, excluir a conta), o recurso por e-mail (conta suspensa ou banida, prédio "não
 // verificado") e a manutenção do mundo. A interface fica em settings-world.ts, building.ts, world-chip.ts e
-// invite-card.ts.
+// world-popups.ts.
 import { PART_KEYS, type AppearanceParts } from '../../../../shared/appearance';
 import type { Appearance } from '../../art/api';
 import { appearanceFromSeed } from '../../art/character/appearance';
@@ -46,12 +46,98 @@ export function worldSectionMode(meta: WorldMeta | undefined, gate: WorldGate): 
   return 'active';
 }
 
-/** Chave do cartão "Conheça o Habblaud World" no localStorage: gravada quando o cartão aparece (ele sai uma vez só). */
-export const INVITE_SEEN_KEY = 'habblaud:world-invite-seen';
+// ------------------------------------------------------------------ os popups de lançamento (world-popups.ts)
 
-/** O cartão de convite aparece? Só para quem ainda não tem conta, pelo próprio computador, e uma vez por navegador. */
-export function shouldShowInvite(meta: WorldMeta | undefined, gate: WorldGate & { replaying: boolean }, seen: string | null): boolean {
-  return worldSectionMode(meta, gate) === 'active' && meta?.state === 'logged_out' && !gate.replaying && seen === null;
+/**
+ * O personagem já foi criado? O servidor local só põe `scene` (e `building`) no meta.world com a conta liberada e o
+ * personagem criado (server/world/service.ts: `hasBuilding`); o modo demonstração faz o mesmo. Antes disso o meta não
+ * diz nada do personagem (o snapshot vai ao celular e à linha do tempo), e é isso que basta aqui.
+ */
+export function hasCharacter(meta: WorldMeta | undefined): boolean {
+  return !!meta && (meta.scene !== undefined || meta.building !== undefined);
+}
+
+/** Chave do cartão de convite antigo (até a 0.11): só o valor `never` ("Não mostrar de novo") continua valendo. */
+export const INVITE_SEEN_KEY = 'habblaud:world-invite-seen';
+/** Popup de lançamento: JSON `{shown, last}` (quantas vezes apareceu e quando foi a última, em ms) ou `never`. */
+export const LAUNCH_KEY = 'habblaud:world-launch';
+/** Popup "Você está na lista de espera": `1` depois de aparecer. */
+export const WAITLIST_SEEN_KEY = 'habblaud:world-waitlist-seen';
+/** Popup "Acesso liberado!": `1` depois de aparecer. */
+export const APPROVED_SEEN_KEY = 'habblaud:world-approved-seen';
+
+/** "Agora não": o popup de lançamento volta depois de 3 dias... */
+export const LAUNCH_RETURN_MS = 3 * 24 * 60 * 60 * 1000;
+/** ...e aparece no máximo 3 vezes no total (a primeira e dois lembretes). */
+export const LAUNCH_MAX_SHOWS = 3;
+
+export type WorldPopupKind = 'launch' | 'waitlist' | 'approved';
+
+/** O que este navegador já viu dos popups (localStorage; sem ele, vale só para a página). */
+export interface WorldPopupMemory {
+  /** Lançamento: quantas vezes apareceu e quando foi a última; `never` = "Não mostrar de novo" ou conta criada. */
+  launch: { shown: number; last: number } | 'never' | null;
+  waitlistSeen: boolean;
+  approvedSeen: boolean;
+}
+
+export interface WorldPopupDecision {
+  show: WorldPopupKind | null;
+  /** A memória depois desta leitura (com o popup contado), ou null se nada muda. */
+  memory: WorldPopupMemory | null;
+}
+
+export const EMPTY_POPUP_MEMORY: WorldPopupMemory = { launch: null, waitlistSeen: false, approvedSeen: false };
+
+/** Lê a memória dos popups das chaves cruas (a antiga `never` vale como "nunca"; `shown` não bloqueia o lançamento novo). */
+export function parsePopupMemory(raw: { launch: string | null; legacy: string | null; waitlist: string | null; approved: string | null }): WorldPopupMemory {
+  let launch: WorldPopupMemory['launch'] = null;
+  if (raw.launch === 'never' || raw.legacy === 'never') launch = 'never';
+  else if (raw.launch) {
+    try {
+      const v = JSON.parse(raw.launch) as { shown?: unknown; last?: unknown };
+      if (v && typeof v === 'object' && typeof v.shown === 'number' && typeof v.last === 'number' && Number.isFinite(v.shown) && Number.isFinite(v.last)) {
+        launch = { shown: Math.max(0, Math.floor(v.shown)), last: Math.max(0, v.last) };
+      }
+    } catch {
+      // valor torto: como se nunca tivesse aparecido
+    }
+  }
+  return { launch, waitlistSeen: raw.waitlist !== null, approvedSeen: raw.approved !== null };
+}
+
+/** O que gravar em cada chave (null = apagar). */
+export function serializePopupMemory(m: WorldPopupMemory): { launch: string | null; waitlist: string | null; approved: string | null } {
+  return {
+    launch: m.launch === 'never' ? 'never' : m.launch ? JSON.stringify(m.launch) : null,
+    waitlist: m.waitlistSeen ? '1' : null,
+    approved: m.approvedSeen ? '1' : null,
+  };
+}
+
+/**
+ * Qual popup do Habblaud World mostrar agora (um só por vez, pelo estado da conta), e o que gravar na memória:
+ * - launch: sem conta ("Novidade: Habblaud World"); volta a cada 3 dias até 3 vezes, ou nunca mais depois de
+ *   "Não mostrar de novo" ou de uma conta criada (qualquer estado diferente de `logged_out` grava `never`);
+ * - waitlist: na lista de espera, uma vez por navegador (logo depois do cadastro ou ao abrir a página já na espera);
+ * - approved: acesso liberado e personagem ainda não criado, uma vez por navegador.
+ * Só pelo próprio computador com o servidor do World configurado; nunca no timelapse, no modo demonstração ou pela
+ * porta do celular. A memória é gravada quando o popup aparece (fechar a página com ele aberto conta).
+ */
+export function nextWorldPopup(meta: WorldMeta | undefined, gate: WorldGate & { replaying: boolean }, memory: WorldPopupMemory, now: number): WorldPopupDecision {
+  if (gate.fake || gate.replaying || worldSectionMode(meta, gate) !== 'active' || !meta) return { show: null, memory: null };
+  if (meta.state === 'logged_out') {
+    const l = memory.launch;
+    if (l === 'never') return { show: null, memory: null };
+    if (l && (l.shown >= LAUNCH_MAX_SHOWS || now - l.last < LAUNCH_RETURN_MS)) return { show: null, memory: null };
+    return { show: 'launch', memory: { ...memory, launch: { shown: (l?.shown ?? 0) + 1, last: now } } };
+  }
+  // Com conta (na espera ou liberada), o lançamento nunca mais aparece.
+  const base: WorldPopupMemory = memory.launch === 'never' ? memory : { ...memory, launch: 'never' };
+  const changed = base !== memory;
+  if (meta.state === 'waiting' && !memory.waitlistSeen) return { show: 'waitlist', memory: { ...base, waitlistSeen: true } };
+  if (meta.state === 'approved' && !memory.approvedSeen && !hasCharacter(meta)) return { show: 'approved', memory: { ...base, approvedSeen: true } };
+  return { show: null, memory: changed ? base : null };
 }
 
 // ------------------------------------------------------------------ máquina de estados da seção
@@ -83,14 +169,16 @@ export interface WorldUi {
   screen: WorldScreen;
   /** E-mail digitado: passa do cadastro para o código, do "esqueci a senha" para a senha nova e para o login. */
   email: string;
+  /** Nome de jogador digitado no cadastro: volta preenchido se a pessoa voltar da tela do código. */
+  name: string;
   flash: WorldFlash | null;
 }
 
 export type WorldUiEvent =
   | { type: 'server'; state: WorldServerState }
   | { type: 'go'; screen: WorldScreen }
-  /** Cadastro aceito ou login de e-mail ainda não confirmado: o código foi para o e-mail. */
-  | { type: 'code_sent'; email: string }
+  /** Cadastro aceito (com o nome de jogador reservado) ou login de e-mail ainda não confirmado: o código foi para o e-mail. */
+  | { type: 'code_sent'; email: string; name?: string }
   /** "Esqueci a senha": o código da senha nova foi para o e-mail. */
   | { type: 'reset_code_sent'; email: string }
   | { type: 'password_changed' }
@@ -109,7 +197,7 @@ export function screensFor(state: WorldServerState): readonly WorldScreen[] {
 }
 
 export function initialWorldUi(): WorldUi {
-  return { server: null, screen: 'welcome', email: '', flash: null };
+  return { server: null, screen: 'welcome', email: '', name: '', flash: null };
 }
 
 /** A tela continua valendo para o estado da conta? Senão, volta para a de entrada (ex.: saiu da conta → boas-vindas). */
@@ -127,7 +215,7 @@ export function worldReduce(s: WorldUi, e: WorldUiEvent): WorldUi {
     case 'go':
       return fit({ ...s, screen: e.screen, flash: null });
     case 'code_sent':
-      return fit({ ...s, screen: 'verify', email: e.email, flash: 'code_sent' });
+      return fit({ ...s, screen: 'verify', email: e.email, name: e.name ?? s.name, flash: 'code_sent' });
     case 'reset_code_sent':
       return fit({ ...s, screen: 'reset', email: e.email, flash: 'code_sent' });
     case 'password_changed':
@@ -418,7 +506,7 @@ export function worldErrorText(raw: WorldErrorCode | string, action: WorldAction
     case 'method_not_allowed':
       return tr('O pedido saiu num formato que o servidor não aceita. Atualize o Habblaud e tente de novo.');
     case 'not_configured':
-      return tr('O Habblaud World não está ligado neste Habblaud (falta HABBLAUD_WORLD_URL).');
+      return tr('O Habblaud World não está ligado neste Habblaud (HABBLAUD_WORLD_URL recusada; veja o log do servidor).');
     case 'rate_limited':
       return action === 'export'
         ? tr('Dá para baixar os dados uma vez por dia. Tente de novo amanhã.')

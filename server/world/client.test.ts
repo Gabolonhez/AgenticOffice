@@ -37,13 +37,16 @@ describe('WorldClient', () => {
     expect(ch.ok).toBe(true);
     if (!ch.ok) return;
     const altcha = encodeAltchaPayload(ch.data, (await solveAltcha(ch.data))!);
-    const reg = await client.register({ email: 'ana@exemplo.com', password: 'senha-bem-comprida', locale: 'pt-BR', tos: 'v1', altcha });
+    const reg = await client.register({ email: 'ana@exemplo.com', password: 'senha-bem-comprida', name: 'Ana Pixel', locale: 'pt-BR', tos: 'v1', altcha });
     expect(reg).toEqual({ ok: true, status: 202, data: {} });
+    expect(w.requests[1].body).toMatchObject({ email: 'ana@exemplo.com', name: 'Ana Pixel', tos: 'v1' });
     const ver = await client.verify({ email: 'ana@exemplo.com', code: FAKE_CODE });
     expect(ver.ok && ver.data.access).toBe('waiting');
     if (!ver.ok) return;
     const me = await client.me(ver.data.token);
     expect(me.ok && me.data.account.emailMasked).toBe('a***@exemplo.com');
+    // O nome do cadastro vem reservado enquanto não há personagem.
+    expect(me.ok && me.data.account.reservedName).toBe('Ana Pixel');
     expect(w.requests.map((r) => `${r.method} ${r.path} ${r.authorization ? 'auth' : '-'}`)).toEqual([
       'GET /v1/altcha -',
       'POST /v1/auth/register -',
@@ -61,6 +64,23 @@ describe('WorldClient', () => {
     expect(await client.verify({ email: 'ninguem@exemplo.com', code: '000000' })).toEqual({ ok: false, status: 400, code: 'invalid_code' });
     expect(await client.login({ email: 'ninguem@exemplo.com', password: 'x' })).toEqual({ ok: false, status: 401, code: 'invalid_credentials' });
     expect(await client.me('token-que-nao-existe-AAAAAAAAAAAA')).toEqual({ ok: false, status: 401, code: 'unauthorized' });
+  });
+
+  it('cadastro com o nome já em uso: 409 name_taken, antes do ALTCHA; criar o personagem com a reserva vai sem name', async () => {
+    const { w, client } = await fake();
+    const ch = await client.altcha();
+    if (!ch.ok) throw new Error('altcha');
+    const altcha = encodeAltchaPayload(ch.data, (await solveAltcha(ch.data))!);
+    expect(await client.register({ email: 'ana@exemplo.com', password: 'senha-bem-comprida', name: 'Ana Pixel', locale: 'pt-BR', tos: 'v1', altcha })).toMatchObject({ ok: true });
+    expect(await client.register({ email: 'bia@exemplo.com', password: 'senha-bem-comprida', name: 'ANA  PIXEL', locale: 'pt-BR', tos: 'v1', altcha: 'x' })).toEqual({ ok: false, status: 409, code: 'name_taken' });
+    expect(await client.register({ email: 'bia@exemplo.com', password: 'senha-bem-comprida', name: 'a!', locale: 'pt-BR', tos: 'v1', altcha: 'x' })).toEqual({ ok: false, status: 422, code: 'name_invalid' });
+    const ver = await client.verify({ email: 'ana@exemplo.com', code: FAKE_CODE });
+    if (!ver.ok) throw new Error('verify');
+    const p = await client.putPlayer(ver.data.token, { look: 'f', parts: {}, traits: ['games', 'cafeina'], intro: 'coffee' });
+    expect(p.ok && p.data.name).toBe('Ana Pixel');
+    expect(w.requests.find((r) => r.path === '/v1/me/player')!.body).not.toHaveProperty('name');
+    const me = await client.me(ver.data.token);
+    expect(me.ok && me.data.account).not.toHaveProperty('reservedName');
   });
 
   it('logout manda POST com JSON vazio e aceita 204 sem corpo', async () => {
@@ -205,5 +225,14 @@ describe('respostas copiadas campo a campo', () => {
       account: { emailMasked: 'a***@b.co', access: 'approved', locale: 'pt-BR', createdAt: '' },
       devices: [{ id: 'd1', label: '', createdAt: '', lastSeenAt: '', current: true }],
     });
+  });
+
+  it('parseMe: reservedName só quando é texto curto (null, ausente ou esquisito ficam de fora)', () => {
+    const base = { account: { emailMasked: 'a***@b.co', access: 'waiting', locale: 'pt-BR', createdAt: '' }, devices: [] };
+    expect(parseMe({ ...base, account: { ...base.account, reservedName: 'Ana Pixel' } })?.account.reservedName).toBe('Ana Pixel');
+    expect(parseMe({ ...base, account: { ...base.account, reservedName: null } })?.account).not.toHaveProperty('reservedName');
+    expect(parseMe(base)?.account).not.toHaveProperty('reservedName');
+    expect(parseMe({ ...base, account: { ...base.account, reservedName: 7 } })?.account).not.toHaveProperty('reservedName');
+    expect(parseMe({ ...base, account: { ...base.account, reservedName: 'x'.repeat(65) } })?.account).not.toHaveProperty('reservedName');
   });
 });

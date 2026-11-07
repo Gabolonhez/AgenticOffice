@@ -256,34 +256,86 @@ do meio (0.**3**.0).
   antigo continua funcionando. Token sem o escopo ou expirado aparece no painel do VBoards ("o token precisa do escopo
   X", "token expirado ou inválido") em vez de ficar tentando.
 
-### Habblaud World (em desenvolvimento, desligado por padrão)
+## [1.0.3] - 2026-10-16
 
-A base do Habblaud World, a cidade online onde cada Habblaud vira um prédio. Sem `HABBLAUD_WORLD_URL` o recurso fica
-desligado: nada aparece na interface e nada sai do computador (`HABBLAUD_WORLD=0` esconde até as rotas). O que pode
-sair e o que nunca sai está em [`docs/world/privacidade.md`](docs/world/privacidade.md); o README ganhou a seção
-**Habblaud World** completa, nos quatro idiomas.
+### Corrigido
 
-- **Ligar e testar:** `HABBLAUD_WORLD_URL` (só `https://` ou `wss://`), `HABBLAUD_WORLD=0` e `HABBLAUD_WORLD_DEV=1`,
-  que aceita um servidor do mundo local sem TLS em `http://127.0.0.1:<porta>` (o `npm run dev` já aceita) ou, de dentro
-  do Docker, em `http://host.docker.internal:<porta>`. O `docker-compose.yml` repassa as três variáveis e liga
-  `host.docker.internal` ao host (`extra_hosts` com `host-gateway`, inofensivo no macOS), e o `npm run docker:up`
-  termina dizendo se o World está ligado e para qual servidor. O build grava `dist/build.json` com o commit e se a
-  cópia estava modificada (vai na primeira mensagem da conexão do prédio).
-- **Conta:** **Configurações › Habblaud World** (depois de Acesso pelo celular). **Criar conta** (e-mail e senha de 12
+- **Cidade: “Responder” e “Mostrar no escritório” nos avisos voltam ao escritório e abrem o pedido do agente.** Com
+  a cidade aberta, o clique no aviso de um pedido ou pergunta (e na notificação do navegador, no chip de pedidos da
+  barra e nas Entregas) não fazia nada visível: o agente era escolhido atrás da cidade. Agora a cidade fecha, a
+  gaveta abre no agente e o cartão do pedido recebe o foco.
+
+## [1.0.2] - 2026-10-16
+
+### Corrigido
+
+- **Cidade: entrar e curtir voltaram a funcionar depois de deixar a aba em segundo plano.** Depois de meio minuto com
+  o Habblaud em outra aba ou janela, o personagem parava de mandar a posição ao Habblaud World: andava na tela, mas
+  "Entrar" e curtir diziam para chegar mais perto da porta.
+
+## [1.0.1] - 2026-10-16
+
+### Corrigido
+
+- **Cidade: as teclas voltaram a andar.** Na 1.0.0, com os popups de lançamento e a janela do Habblaud World na
+  página, WASD, as setas e os atalhos do escritório paravam de responder mesmo com tudo fechado: um `<dialog>`
+  fechado continua na página e era tomado por um modal aberto. Só os diálogos abertos contam agora.
+
+## [1.0.0] - 2026-10-16
+
+Por que 1.0: o escritório (salas, personagens, subagentes, uso por conta, terminal, timelapse, celular com login) está
+estável há várias versões, e o Habblaud World chega inteiro: conta, personagem, prédio, cidade, visitas e o social
+leve. Para atualizar: `git pull` e `npm run docker:up`.
+
+### Habblaud World
+
+A cidade online do Habblaud está no ar: cada Habblaud vira um prédio, aceso ao vivo enquanto os agentes trabalham, e
+cada pessoa passeia pela cidade com um personagem. **Vem ligado por padrão**, apontando para `server.habblaud.com`;
+**nada sai do computador até você criar a conta** e entrar, e `HABBLAUD_WORLD=0` desliga tudo (esconde até as
+rotas). O acesso é liberado por lista de espera. O que pode sair e o que nunca sai está em
+[`docs/world/privacidade.md`](docs/world/privacidade.md); o README tem a seção **Habblaud World** completa, nos quatro
+idiomas.
+
+- **Configurar e testar:** sem `HABBLAUD_WORLD_URL`, o servidor oficial (`https://server.habblaud.com`; o `npm run
+  docker:up` e o log do servidor dizem "(padrão)"); definida, vale a definida (só `https://` ou `wss://`; recusada, o
+  World fica desligado, com o motivo no log). `HABBLAUD_WORLD=0` desliga tudo, e `HABBLAUD_WORLD_DEV=1` aceita um
+  servidor do mundo local sem TLS em `http://127.0.0.1:<porta>` (o `npm run dev` já aceita) ou, de dentro do Docker, em
+  `http://host.docker.internal:<porta>`. O `docker-compose.yml` repassa as três variáveis e liga `host.docker.internal`
+  ao host (`extra_hosts` com `host-gateway`, inofensivo no macOS), e o `npm run docker:up` termina dizendo se o World
+  está ligado e para qual servidor. O build grava `dist/build.json` com o commit e se a cópia estava modificada (vai na
+  primeira mensagem da conexão do prédio).
+- **Janela própria:** o Habblaud World tem um botão só dele na barra do topo (o ícone de cidade, ao lado de
+  Configurações; só aparece com o servidor do mundo configurado) e abre num modal só dele, fora das Configurações: o
+  prédio em pixels, o estado da conta no cabeçalho e tudo o que segue num corpo rolável. O chip "no mundo" ao lado da
+  versão, os popups de lançamento e o aviso "Enquanto você estava fora" abrem a mesma janela, na tela certa.
+- **Conta:** na janela do Habblaud World. **Criar conta** (e-mail e senha de 12
   caracteres ou mais, o resumo do que sai e do que nunca sai do computador, a linha dos dados verdadeiros e o aceite
   obrigatório dos Termos de Uso e da Política de Privacidade; o desafio anti-robô é resolvido pelo próprio Habblaud) ou
   **Já tenho conta**; código de 6 dígitos com reenvio; **Esqueci a senha**; **Dispositivos** (até 3, com revogar) e
   sair. Na lista de espera, só o aviso, sem posição nem previsão, e o Habblaud aberto confere sozinho a cada 30 minutos
-  se o acesso foi liberado. O cartão **Conheça o Habblaud World** aparece uma vez, para quem ainda não tem conta. Tudo
-  só pelo próprio computador: nunca pela porta do celular, e o que age pela conta só com o acesso local (a trava do
-  terminal). O token do dispositivo fica em `~/.habblaud/world.json` (permissão 600; no Docker, no volume `/data`) e
-  nunca vai ao navegador, ao snapshot, aos logs nem à URL.
+  se o acesso foi liberado. Tudo só pelo próprio computador: nunca pela porta do celular, e o que age pela conta só com
+  o acesso local (a trava do terminal). O token do dispositivo fica em `~/.habblaud/world.json` (permissão 600; no
+  Docker, no volume `/data`) e nunca vai ao navegador, ao snapshot, aos logs nem à URL.
+- **Nome de jogador escolhido no cadastro (fica reservado na lista de espera):** o cadastro pede o nome de jogador
+  (3 a 20 caracteres, único no mundo) junto com o e-mail e a senha, conferido na hora e, se já estiver em uso, com o
+  aviso no próprio campo. Ele fica reservado para a conta enquanto espera na lista (a tela da espera mostra "Seu nome
+  de jogador: X (reservado)") e vira o nome do personagem, que nasce com ele sem pedir o nome de novo (dá para trocar
+  depois, uma vez a cada 30 dias); contas antigas, sem reserva, seguem escolhendo o nome ao criar o personagem.
+  `docs/world/privacidade.md` passa a dizer que o servidor do mundo guarda, além do país, o IP do cadastro e o do
+  último login com senha, para auditoria (só a administração vê; apagados com a conta; incluídos em "Baixar meus
+  dados"), e nenhum outro.
+- **Popups de lançamento:** três avisos em janela modal, por cima do escritório (e de Configurações). **Novidade:
+  Habblaud World**, para quem ainda não tem conta, com o botão **Criar conta**: "Agora não" o traz de volta em 3 dias
+  (no máximo 3 vezes), "Não mostrar de novo" encerra e, com a conta criada, ele não volta. **Você está na lista de
+  espera**, logo depois do cadastro (ou ao abrir a página já na espera), uma vez por navegador. **Acesso liberado!**,
+  quando chega a sua vez e o personagem ainda não existe, com **Criar personagem** levando direto à tela dele. Nenhum
+  deles aparece pela porta do celular, no timelapse ou no modo demonstração.
 - **Personagem:** nome de jogador, dica visual, o mesmo editor de aparência da gaveta do agente, 2 ou 3 traços de
   personalidade (os que não combinam ficam desabilitados) e uma frase de apresentação da lista; dá para criar ainda na
   lista de espera. Se a moderação trocar o nome, a seção pede um nome novo, que entra sem esperar os 30 dias.
 - **Visibilidade do prédio:** ao vivo ou discreto, fechado a visitas, esconder o país, tokens (só em faixas), placar,
   compactações e **Avisar quando baterem na porta** (desligado por padrão).
-- **Conta e dados** (nova tela em Configurações › Habblaud World): o interruptor **Avisar por e-mail antes de retirar
+- **Conta e dados** (nova tela da janela do Habblaud World): o interruptor **Avisar por e-mail antes de retirar
   meu prédio por inatividade**; **Baixar meus dados**, que salva `habblaud-world-dados.json` com o que o mundo guarda da
   conta (uma vez por dia); e **Excluir conta** em três etapas: o que some e quando (o prédio e o perfil na hora; a
   conta, os likes, os bloqueios, as denúncias feitas e os dispositivos do banco em 7 dias; dos backups, em até 30), a
@@ -364,7 +416,7 @@ sair e o que nunca sai está em [`docs/world/privacidade.md`](docs/world/privaci
   ficam numa chave à parte e somem ao sair. **Ver como os outros veem** (no cartão **Seu prédio** e na porta do seu
   prédio) entra no seu próprio prédio. **Para o dono:** o selo do topo ganha "👀 N" e o cartão **Seu prédio**, "N
   visitantes agora" (só a contagem, nunca quem); o primeiro visitante de cada conexão dá o aviso "Alguém entrou no seu
-  prédio", desligável em **Configurações › Habblaud World › Avisar quando alguém visitar**. Pelo servidor local, o
+  prédio", desligável em **Habblaud World › Avisar quando alguém visitar**. Pelo servidor local, o
   stream da cena repassa o interior (`building`, `building.patch` com a revisão conferida e `resync {building}` num
   salto) e os visitantes (`visitors`, também em `meta.world.building.visitors`).
 - **O social leve, sem nenhum texto livre:** na cidade, **L** (ou o botão ❤️ que aparece perto da porta, até 4 passos)
@@ -382,7 +434,7 @@ sair e o que nunca sai está em [`docs/world/privacidade.md`](docs/world/privaci
   ficam no canto, só com os ícones. **No escritório:** o chip da barra ganha "❤️ N hoje"; ao conectar, o cartão
   **Enquanto você estava fora** (visitas, likes e os carimbos deixados na portaria, sem quem) aparece no canto e também
   em **Seu prédio**, com o código do prédio para mandar a um amigo; **Avisar quando baterem na porta** (Visibilidade,
-  desligado por padrão) mostra "Alguém bateu na porta do seu prédio"; **Configurações › Habblaud World › Bloqueados**
+  desligado por padrão) mostra "Alguém bateu na porta do seu prédio"; **Habblaud World › Bloqueados**
   lista quem você bloqueou, com **Desbloquear**. **Pelo servidor local:** `POST /api/world/summary/seen` e
   `/api/world/unblock`, e os comandos `like`, `unlike`, `greet`, `block`, `unblock`, `report`, `stamp`, `teleport`,
   `knock` e `summary.seen` na cena, conferidos campo a campo.
@@ -770,7 +822,17 @@ Primeira versão publicada.
   Subagentes chegam, trabalham e entregam ao principal. Mostra as duas contas, com o uso de 5 horas e semanal de
   cada uma (tap de statusline), além de feed de atividade, avisos e modo demonstração. Roda no Node ou no Docker local.
 
-[Não lançado]: https://github.com/marmottajr/habblaud/compare/v0.5.0...HEAD
+[Não lançado]: https://github.com/marmottajr/habblaud/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/marmottajr/habblaud/compare/v1.0.2...v1.0.3
+[1.0.2]: https://github.com/marmottajr/habblaud/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/marmottajr/habblaud/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/marmottajr/habblaud/compare/v0.11.0...v1.0.0
+[0.11.0]: https://github.com/marmottajr/habblaud/releases/tag/v0.11.0
+[0.10.0]: https://github.com/marmottajr/habblaud/releases/tag/v0.10.0
+[0.9.0]: https://github.com/marmottajr/habblaud/releases/tag/v0.9.0
+[0.8.0]: https://github.com/marmottajr/habblaud/releases/tag/v0.8.0
+[0.7.0]: https://github.com/marmottajr/habblaud/releases/tag/v0.7.0
+[0.6.0]: https://github.com/marmottajr/habblaud/releases/tag/v0.6.0
 [0.5.0]: https://github.com/marmottajr/habblaud/releases/tag/v0.5.0
 [0.4.0]: https://github.com/marmottajr/habblaud/releases/tag/v0.4.0
 [0.3.2]: https://github.com/marmottajr/habblaud/releases/tag/v0.3.2

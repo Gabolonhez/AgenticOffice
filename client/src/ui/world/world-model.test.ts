@@ -35,7 +35,14 @@ import {
   normalizeCode,
   passwordProblem,
   screensFor,
-  shouldShowInvite,
+  hasCharacter,
+  nextWorldPopup,
+  parsePopupMemory,
+  serializePopupMemory,
+  EMPTY_POPUP_MEMORY,
+  LAUNCH_MAX_SHOWS,
+  LAUNCH_RETURN_MS,
+  type WorldPopupMemory,
   toggleTrait,
   traitBlock,
   traitsValid,
@@ -74,22 +81,93 @@ describe('quando a seção aparece', () => {
   });
 });
 
-describe('cartão de convite', () => {
+describe('popups de lançamento', () => {
   const gate = { ...LOCAL, replaying: false };
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = 1_760_600_000_000;
+  const none = EMPTY_POPUP_MEMORY;
+  const mem = (extra: Partial<WorldPopupMemory>): WorldPopupMemory => ({ ...none, ...extra });
 
-  it('só para quem não tem conta, com servidor configurado, uma vez por navegador', () => {
-    expect(shouldShowInvite(meta('logged_out'), gate, null)).toBe(true);
-    expect(shouldShowInvite(meta('logged_out'), gate, 'seen')).toBe(false);
-    for (const s of ['waiting', 'approved', 'off'] as const) expect(shouldShowInvite(meta(s), gate, null), s).toBe(false);
-    expect(shouldShowInvite(meta('logged_out', { configured: false }), gate, null)).toBe(false);
-    expect(shouldShowInvite(meta('logged_out', { enabled: false }), gate, null)).toBe(false);
-    expect(shouldShowInvite(undefined, gate, null)).toBe(false);
+  it('sem conta: "Novidade" na primeira vez, contado na memória', () => {
+    expect(nextWorldPopup(meta('logged_out'), gate, none, NOW)).toEqual({ show: 'launch', memory: mem({ launch: { shown: 1, last: NOW } }) });
   });
 
-  it('nunca no celular pela porta remota, fora do computador ou no timelapse', () => {
-    expect(shouldShowInvite(meta('logged_out'), { ...gate, remote: true }, null)).toBe(false);
-    expect(shouldShowInvite(meta('logged_out'), { ...gate, local: false }, null)).toBe(false);
-    expect(shouldShowInvite(meta('logged_out'), { ...gate, replaying: true }, null)).toBe(false);
+  it('"Agora não": volta só depois de 3 dias, e no máximo 3 vezes no total', () => {
+    const once = mem({ launch: { shown: 1, last: NOW } });
+    expect(nextWorldPopup(meta('logged_out'), gate, once, NOW + DAY).show).toBeNull();
+    expect(nextWorldPopup(meta('logged_out'), gate, once, NOW + LAUNCH_RETURN_MS - 1).show).toBeNull();
+    const again = nextWorldPopup(meta('logged_out'), gate, once, NOW + LAUNCH_RETURN_MS);
+    expect(again).toEqual({ show: 'launch', memory: mem({ launch: { shown: 2, last: NOW + LAUNCH_RETURN_MS } }) });
+    const third = nextWorldPopup(meta('logged_out'), gate, again.memory!, NOW + 2 * LAUNCH_RETURN_MS);
+    expect(third.show).toBe('launch');
+    expect((third.memory!.launch as { shown: number }).shown).toBe(LAUNCH_MAX_SHOWS);
+    expect(nextWorldPopup(meta('logged_out'), gate, third.memory!, NOW + 30 * DAY)).toEqual({ show: null, memory: null });
+  });
+
+  it('"Não mostrar de novo" (e a chave antiga em `never`) encerram; a chave antiga em `shown` não bloqueia', () => {
+    expect(nextWorldPopup(meta('logged_out'), gate, mem({ launch: 'never' }), NOW)).toEqual({ show: null, memory: null });
+    const legacyNever = parsePopupMemory({ launch: null, legacy: 'never', waitlist: null, approved: null });
+    expect(legacyNever.launch).toBe('never');
+    expect(nextWorldPopup(meta('logged_out'), gate, legacyNever, NOW).show).toBeNull();
+    const legacyShown = parsePopupMemory({ launch: null, legacy: 'shown', waitlist: null, approved: null });
+    expect(legacyShown).toEqual(none);
+    expect(nextWorldPopup(meta('logged_out'), gate, legacyShown, NOW).show).toBe('launch');
+  });
+
+  it('com conta (na espera ou liberada) o lançamento nunca mais aparece, mesmo saindo da conta depois', () => {
+    const d = nextWorldPopup(meta('waiting'), gate, mem({ waitlistSeen: true }), NOW);
+    expect(d).toEqual({ show: null, memory: mem({ launch: 'never', waitlistSeen: true }) });
+    expect(nextWorldPopup(meta('logged_out'), gate, d.memory!, NOW + 10 * DAY).show).toBeNull();
+    const a = nextWorldPopup(meta('approved', { scene: { available: true } }), gate, mem({ launch: { shown: 1, last: 0 } }), NOW);
+    expect(a).toEqual({ show: null, memory: mem({ launch: 'never' }) });
+    // já gravado: nada muda
+    expect(nextWorldPopup(meta('approved', { scene: { available: true } }), gate, mem({ launch: 'never' }), NOW)).toEqual({ show: null, memory: null });
+  });
+
+  it('"Você está na lista de espera": ao entrar na espera (ou abrir já nela), uma vez por navegador', () => {
+    expect(nextWorldPopup(meta('waiting'), gate, none, NOW)).toEqual({ show: 'waitlist', memory: mem({ launch: 'never', waitlistSeen: true }) });
+    expect(nextWorldPopup(meta('waiting'), gate, mem({ launch: 'never', waitlistSeen: true }), NOW)).toEqual({ show: null, memory: null });
+  });
+
+  it('"Acesso liberado!": liberada e sem personagem, uma vez por navegador; com personagem, nunca', () => {
+    expect(nextWorldPopup(meta('approved'), gate, none, NOW)).toEqual({ show: 'approved', memory: mem({ launch: 'never', approvedSeen: true }) });
+    expect(nextWorldPopup(meta('approved'), gate, mem({ launch: 'never', approvedSeen: true }), NOW)).toEqual({ show: null, memory: null });
+    expect(nextWorldPopup(meta('approved', { scene: { available: false } }), gate, none, NOW).show).toBeNull();
+    // saiu da espera com a página aberta: a mesma regra (a memória da espera não atrapalha)
+    expect(nextWorldPopup(meta('approved'), gate, mem({ launch: 'never', waitlistSeen: true }), NOW).show).toBe('approved');
+  });
+
+  it('o personagem existe quando o meta traz a cena ou o prédio', () => {
+    expect(hasCharacter(undefined)).toBe(false);
+    expect(hasCharacter(meta('approved'))).toBe(false);
+    expect(hasCharacter(meta('approved', { scene: { available: false } }))).toBe(true);
+    expect(hasCharacter(meta('approved', { building: { state: 'live', floors: 1, agents: 0, idle: 0, working: 0 } as unknown as WorldMeta['building'] }))).toBe(true);
+  });
+
+  it('nunca no timelapse, no modo demonstração, pela porta remota, fora do computador ou sem servidor', () => {
+    for (const state of ['logged_out', 'waiting', 'approved'] as const) {
+      expect(nextWorldPopup(meta(state), { ...gate, replaying: true }, none, NOW).show, `${state} replay`).toBeNull();
+      expect(nextWorldPopup(meta(state), { ...gate, fake: true }, none, NOW).show, `${state} fake`).toBeNull();
+      expect(nextWorldPopup(meta(state), { ...gate, remote: true }, none, NOW).show, `${state} remote`).toBeNull();
+      expect(nextWorldPopup(meta(state), { ...gate, local: false }, none, NOW).show, `${state} local`).toBeNull();
+      expect(nextWorldPopup(meta(state), { ...gate, terminal: false }, none, NOW).show, `${state} terminal`).toBeNull();
+      expect(nextWorldPopup(meta(state, { configured: false }), gate, none, NOW).show, `${state} configured`).toBeNull();
+      expect(nextWorldPopup(meta(state, { enabled: false }), gate, none, NOW).show, `${state} enabled`).toBeNull();
+    }
+    expect(nextWorldPopup(meta('off'), gate, none, NOW)).toEqual({ show: null, memory: null });
+    expect(nextWorldPopup(undefined, gate, none, NOW)).toEqual({ show: null, memory: null });
+  });
+
+  it('a memória vai e volta das chaves do localStorage; valor torto conta como nunca', () => {
+    const m = mem({ launch: { shown: 2, last: NOW }, waitlistSeen: true });
+    const raw = serializePopupMemory(m);
+    expect(raw).toEqual({ launch: JSON.stringify({ shown: 2, last: NOW }), waitlist: '1', approved: null });
+    expect(parsePopupMemory({ ...raw, legacy: null })).toEqual(m);
+    expect(serializePopupMemory(mem({ launch: 'never', approvedSeen: true }))).toEqual({ launch: 'never', waitlist: null, approved: '1' });
+    expect(parsePopupMemory({ launch: 'never', legacy: null, waitlist: null, approved: '1' })).toEqual(mem({ launch: 'never', approvedSeen: true }));
+    expect(parsePopupMemory({ launch: '{bad', legacy: null, waitlist: null, approved: null })).toEqual(none);
+    expect(parsePopupMemory({ launch: '{"shown":"x"}', legacy: null, waitlist: null, approved: null })).toEqual(none);
+    expect(parsePopupMemory({ launch: null, legacy: null, waitlist: null, approved: null })).toEqual(none);
   });
 });
 
@@ -100,6 +178,14 @@ describe('máquina de estados da seção', () => {
     expect(worldReduce(initialWorldUi(), { type: 'server', state: 'logged_out' }).screen).toBe('welcome');
     expect(worldReduce(initialWorldUi(), { type: 'server', state: 'waiting' }).screen).toBe('home');
     expect(worldReduce(initialWorldUi(), { type: 'server', state: 'approved' }).screen).toBe('home');
+  });
+
+  it('o cadastro guarda o e-mail e o nome de jogador para a tela do código (e para voltar)', () => {
+    const sent = worldReduce(at('logged_out', 'register'), { type: 'code_sent', email: 'ana@exemplo.com', name: 'Ana Pixel' });
+    expect(sent).toMatchObject({ screen: 'verify', email: 'ana@exemplo.com', name: 'Ana Pixel', flash: 'code_sent' });
+    expect(worldReduce(sent, { type: 'go', screen: 'register' })).toMatchObject({ screen: 'register', email: 'ana@exemplo.com', name: 'Ana Pixel' });
+    // O login com e-mail sem confirmar manda o código sem nome: o nome digitado antes fica.
+    expect(worldReduce(sent, { type: 'code_sent', email: 'outra@exemplo.com' })).toMatchObject({ email: 'outra@exemplo.com', name: 'Ana Pixel' });
     expect(screensFor('off')).toEqual([]);
   });
 

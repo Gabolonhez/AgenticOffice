@@ -111,15 +111,22 @@ function code(v: unknown): string {
   return s;
 }
 
-function character(body: Record<string, unknown>): PlayerInput {
-  const name = parsePlayerName(body.name);
+/** Nome de jogador (do cadastro e do personagem), arrumado e conferido pelas regras locais; o servidor do mundo confere de novo. */
+function playerName(v: unknown): string {
+  const name = parsePlayerName(v);
   if (!name.ok) throw new BodyError(422, name.code, tr('nome de jogador recusado ({0})', [name.problem]));
+  return name.name;
+}
+
+/** O personagem; `name` ausente = criar com o nome reservado no cadastro ou, ao atualizar, manter o nome (o serviço decide). */
+function character(body: Record<string, unknown>): PlayerInput {
+  const name = body.name === undefined ? undefined : playerName(body.name);
   const parts = parseAppearanceParts(body.parts ?? {});
   const traits = parsePlayerTraits(body.traits);
   if ((body.look !== 'f' && body.look !== 'm') || !parts || !traits || !isIntroId(body.intro)) {
-    throw new BodyError(422, 'invalid', tr('esperado {name, look: "f" ou "m", parts, traits: 2 ou 3 traços que combinam, intro}'));
+    throw new BodyError(422, 'invalid', tr('esperado {name?, look: "f" ou "m", parts, traits: 2 ou 3 traços que combinam, intro}'));
   }
-  return { name: name.name, look: body.look, parts, traits, intro: body.intro };
+  return { ...(name !== undefined ? { name } : {}), look: body.look, parts, traits, intro: body.intro };
 }
 
 /**
@@ -153,7 +160,8 @@ export function createWorldRoutes(service: WorldService, viewer?: WorldViewer, s
       account: true,
       run: async (req, res) => {
         const b = await readBody(req);
-        const input = { email: email(b.email), password: password(b.password) };
+        // Como no servidor do mundo, o nome é conferido antes da senha.
+        const input = { email: email(b.email), name: playerName(b.name), password: password(b.password) };
         if (b.locale !== undefined && !isWorldLocale(b.locale)) throw new BodyError(400, 'invalid', tr('idioma desconhecido'));
         if (b.invite !== undefined && (typeof b.invite !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(b.invite))) {
           throw new BodyError(400, 'invalid', tr('código de convite inválido'));
@@ -274,7 +282,7 @@ export function createWorldRoutes(service: WorldService, viewer?: WorldViewer, s
       method: 'GET',
       account: true,
       run: async (req, res) => {
-        if (!viewer) throw new BodyError(409, 'not_configured', tr('Habblaud World desligado: defina HABBLAUD_WORLD_URL'));
+        if (!viewer) throw new BodyError(409, 'not_configured', tr('Habblaud World desligado: HABBLAUD_WORLD_URL recusada (veja o log do servidor)'));
         if (!sameOriginRequest(req)) throw new BodyError(403, 'local_only', tr('a cena Mundo só abre pela própria página do Habblaud'));
         if (req.method === 'HEAD') {
           res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' });
@@ -290,7 +298,7 @@ export function createWorldRoutes(service: WorldService, viewer?: WorldViewer, s
       account: true,
       run: async (req, res) => {
         const body = await readBody(req);
-        if (!viewer) throw new BodyError(409, 'not_configured', tr('Habblaud World desligado: defina HABBLAUD_WORLD_URL'));
+        if (!viewer) throw new BodyError(409, 'not_configured', tr('Habblaud World desligado: HABBLAUD_WORLD_URL recusada (veja o log do servidor)'));
         const r = viewer.command(body);
         if (!r.ok) return sendError(res, r.status, r.code, undefined, r.retryAfter);
         sendJson(res, 202, r.data);
@@ -379,7 +387,7 @@ export function createWorldRoutes(service: WorldService, viewer?: WorldViewer, s
     }
     if (route.account && !service.configured) {
       req.resume();
-      return sendError(res, 409, 'not_configured', tr('Habblaud World desligado: defina HABBLAUD_WORLD_URL'));
+      return sendError(res, 409, 'not_configured', tr('Habblaud World desligado: HABBLAUD_WORLD_URL recusada (veja o log do servidor)'));
     }
     route.run(req, res, url).catch((err) => fail(res, err));
   };

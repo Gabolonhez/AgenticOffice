@@ -280,10 +280,13 @@ export class MoveSender {
     return true;
   }
 
-  /** Repete a posição parada (aba em segundo plano: o servidor não tira o jogador da rua). */
-  keepAlive(now: number, p: { x: number; y: number; dir: Dir }): void {
+  /**
+   * Repete a posição parada (aba em segundo plano: o servidor não tira o jogador da rua).
+   * Sem hora: quem chama usa outro relógio que o `tick`, e guardar a hora dele calava os envios até um `reset`.
+   */
+  keepAlive(p: { x: number; y: number; dir: Dir }): void {
     const cur = { x: wirePos(p.x), y: wirePos(p.y), dir: DIR_TO_PROTO[p.dir], moving: false };
-    this.lastAt = now;
+    this.lastAt = -Infinity;
     this.last = cur;
     this.send({ t: 'move', ...cur });
   }

@@ -7,7 +7,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AccountsService } from '../accounts/service';
-import { parseWorldConfig, worldSocketUrl, type WorldConfig } from '../config';
+import { DEFAULT_WORLD_URL, parseWorldConfig, worldSocketUrl, type WorldConfig } from '../config';
 import { createApiHandler } from '../http/app';
 import { createRequestGuard } from '../http/guard';
 import { Hub } from '../http/sse';
@@ -27,6 +27,9 @@ setQuiet(true);
 
 const EMAIL = 'ana@exemplo.com';
 const PASSWORD = 'uma senha bem comprida';
+const NAME = 'Ana Pixel';
+/** O cadastro: o nome de jogador é obrigatório (fica reservado na lista de espera). */
+const REGISTER = { email: EMAIL, password: PASSWORD, name: NAME };
 const CHARACTER = {
   name: 'Ana Pixel',
   look: 'f',
@@ -195,10 +198,10 @@ describe('HABBLAUD_WORLD e HABBLAUD_WORLD_URL', () => {
     expect((await call(s.base, 'GET', '/api/access')).body.world).toBe(false);
   });
 
-  it('sem URL: recurso desligado (meta.world sem enabled), status off e o resto 409 not_configured', async () => {
+  it('sem URL (HABBLAUD_WORLD_URL recusada): recurso desligado (meta.world sem enabled), status off e o resto 409 not_configured', async () => {
     const s = await start({ world: 'no-url' });
     expect((await call(s.base, 'GET', '/api/world/status')).body).toEqual({ available: true, configured: false, state: 'off' });
-    const r = await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    const r = await call(s.base, 'POST', '/api/world/register', REGISTER);
     expect(r.status).toBe(409);
     expect(r.body.error.code).toBe('not_configured');
     expect((await call(s.base, 'PUT', '/api/world/character', CHARACTER)).body.error.code).toBe('not_configured');
@@ -209,8 +212,12 @@ describe('HABBLAUD_WORLD e HABBLAUD_WORLD_URL', () => {
   it('parseWorldConfig: só https/wss; http://127.0.0.1 no modo de desenvolvimento; só a origem', () => {
     const p = (url: string | undefined, extra: NodeJS.ProcessEnv = {}, argv: string[] = []) =>
       parseWorldConfig({ HABBLAUD_WORLD_URL: url, ...extra }, argv);
-    expect(p(undefined)).toEqual({ enabled: true, dev: false });
+    // Sem HABBLAUD_WORLD_URL (ou vazia), o servidor do mundo padrão; definida, vale a definida (e recusada não cai no padrão).
+    expect(p(undefined)).toEqual({ enabled: true, dev: false, url: DEFAULT_WORLD_URL, defaultUrl: true });
+    expect(p('  ')).toEqual({ enabled: true, dev: false, url: DEFAULT_WORLD_URL, defaultUrl: true });
+    expect(DEFAULT_WORLD_URL).toBe('https://server.habblaud.com');
     expect(p('https://server.habblaud.com')).toEqual({ enabled: true, dev: false, url: 'https://server.habblaud.com' });
+    expect(p('https://outro.exemplo.com')).toEqual({ enabled: true, dev: false, url: 'https://outro.exemplo.com' });
     expect(p('wss://server.habblaud.com/').url).toBe('https://server.habblaud.com');
     expect(p('https://server.habblaud.com:8443').url).toBe('https://server.habblaud.com:8443');
     expect(p('http://server.habblaud.com').warning).toMatch(/https/);
@@ -235,7 +242,7 @@ describe('HABBLAUD_WORLD e HABBLAUD_WORLD_URL', () => {
       expect(p(bad).warning).not.toContain('pw@');
     }
     expect(p('https://server.habblaud.com', { HABBLAUD_WORLD: '0' })).toEqual({ enabled: false, dev: false });
-    expect(p(undefined, { HABBLAUD_WORLD: 'off' }).enabled).toBe(false);
+    expect(p(undefined, { HABBLAUD_WORLD: 'off' })).toEqual({ enabled: false, dev: false });
     expect(worldSocketUrl('https://server.habblaud.com')).toBe('wss://server.habblaud.com/v1/socket');
     expect(worldSocketUrl('http://127.0.0.1:4848')).toBe('ws://127.0.0.1:4848/v1/socket');
     expect(worldSocketUrl('http://host.docker.internal:4848')).toBe('ws://host.docker.internal:4848/v1/socket');
@@ -305,10 +312,14 @@ describe('validação antes de ir ao servidor do mundo', () => {
       const r = await call(s.base, m, p, b);
       return `${r.status} ${r.body?.error?.code}`;
     };
-    expect(await code('POST', '/api/world/register', { email: 'sem-arroba', password: PASSWORD })).toBe('400 invalid_email');
-    expect(await code('POST', '/api/world/register', { email: EMAIL, password: 'curta' })).toBe('400 password_invalid');
-    expect(await code('POST', '/api/world/register', { email: EMAIL, password: PASSWORD, locale: 'de' })).toBe('400 invalid');
-    expect(await code('POST', '/api/world/register', { email: EMAIL, password: PASSWORD, invite: '../x' })).toBe('400 invalid');
+    expect(await code('POST', '/api/world/register', { email: 'sem-arroba', password: PASSWORD, name: NAME })).toBe('400 invalid_email');
+    expect(await code('POST', '/api/world/register', { email: EMAIL, password: 'curta', name: NAME })).toBe('400 password_invalid');
+    // O nome de jogador é obrigatório e é conferido antes da senha, como no servidor do mundo.
+    expect(await code('POST', '/api/world/register', { email: EMAIL, password: 'curta' })).toBe('422 name_invalid');
+    expect(await code('POST', '/api/world/register', { email: EMAIL, password: PASSWORD, name: 'Admin' })).toBe('422 name_blocked');
+    expect(await code('POST', '/api/world/register', { email: EMAIL, password: PASSWORD, name: 'a!' })).toBe('422 name_invalid');
+    expect(await code('POST', '/api/world/register', { ...REGISTER, locale: 'de' })).toBe('400 invalid');
+    expect(await code('POST', '/api/world/register', { ...REGISTER, invite: '../x' })).toBe('400 invalid');
     expect(await code('POST', '/api/world/verify', { email: EMAIL, code: 'abc' })).toBe('400 invalid_code');
     expect(await code('POST', '/api/world/login', { email: EMAIL })).toBe('400 password_invalid');
     expect(await code('POST', '/api/world/register', [1, 2])).toBe('400 invalid');
@@ -344,12 +355,16 @@ describe('de ponta a ponta com o servidor do mundo de mentira', () => {
     expect((await call(s.base, 'GET', '/api/world/status')).body).toEqual({ available: true, configured: true, state: 'logged_out' });
 
     // Cadastro: o servidor local busca e resolve o ALTCHA sozinho, e manda tos e o idioma.
-    const reg = await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD, locale: 'es', invite: 'convite_1' });
+    const reg = await call(s.base, 'POST', '/api/world/register', { ...REGISTER, name: '  Ana   Pixel ', locale: 'es', invite: 'convite_1' });
     expect(reg.status).toBe(202);
     expect(reg.body).toEqual({});
     const sent = w.requests.find((r) => r.path === '/v1/auth/register')!;
-    expect(sent.body).toMatchObject({ email: EMAIL, password: PASSWORD, locale: 'es', tos: 'v1', invite: 'convite_1' });
+    expect(sent.body).toMatchObject({ email: EMAIL, password: PASSWORD, name: NAME, locale: 'es', tos: 'v1', invite: 'convite_1' });
     expect(w.accounts.get(EMAIL)?.verified).toBe(false);
+    // O nome já reservado por outra conta: 409 name_taken, com o mesmo status e código do servidor do mundo.
+    const taken = await call(s.base, 'POST', '/api/world/register', { ...REGISTER, email: 'bia@exemplo.com', name: 'ana pixel' });
+    expect(taken.status).toBe(409);
+    expect(taken.body).toEqual({ error: { code: 'name_taken' } });
 
     // Código errado: o erro do servidor do mundo volta com o mesmo status e o código.
     const wrong = await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: '000000' });
@@ -368,6 +383,8 @@ describe('de ponta a ponta com o servidor do mundo de mentira', () => {
     const waiting = await call(s.base, 'GET', '/api/world/status');
     expect(waiting.body.state).toBe('waiting');
     expect(waiting.body.player).toBeUndefined();
+    // O nome do cadastro, reservado enquanto não há personagem.
+    expect(waiting.body.account).toEqual({ emailMasked: 'a***@exemplo.com', access: 'waiting', reservedName: NAME });
     expect(waiting.body.devices).toEqual([{ id: 'dev_1', label: 'Dispositivo 1', createdAt: expect.any(String), lastSeenAt: expect.any(String), current: true }]);
 
     // Entrar de novo troca o dispositivo e revoga o anterior no servidor do mundo.
@@ -380,17 +397,25 @@ describe('de ponta a ponta com o servidor do mundo de mentira', () => {
     expect(w.devices.has(first.token)).toBe(false);
     expect(w.devices.has(second.token)).toBe(true);
 
-    // Personagem (já na lista de espera): o nome vai arrumado; o que o servidor manda a mais não passa.
-    const ch = await call(s.base, 'PUT', '/api/world/character', { ...CHARACTER, name: '  Ana   Pixel ' });
+    // Personagem (já na lista de espera): o nome é a reserva do cadastro, e o pedido vai sem `name` (um nome no corpo
+    // nem sai daqui); o que o servidor manda a mais não passa.
+    const { name: _unused, ...noName } = CHARACTER;
+    const ch = await call(s.base, 'PUT', '/api/world/character', { ...noName, name: 'Outro Nome' });
     expect(ch.status).toBe(200);
     expect(ch.body).toEqual({ ...CHARACTER, visibility: expect.any(Object), updatedAt: '2026-10-15T12:00:00Z', country: 'BR' });
-    expect(w.requests.filter((r) => r.path === '/v1/me/player').map((r) => r.body?.name)).toEqual(['Ana Pixel']);
+    expect(w.requests.filter((r) => r.path === '/v1/me/player').map((r) => 'name' in (r.body ?? {}))).toEqual([false]);
     expect(JSON.parse(readFileSync(s.file, 'utf8')).player.name).toBe('Ana Pixel');
 
     const vis = { mode: 'discreet', closed: true, hideCountry: true, tokensVisible: false, leaderboard: false, compactions: false };
     expect((await call(s.base, 'PUT', '/api/world/visibility', vis)).body).toEqual(vis);
     const st = await call(s.base, 'GET', '/api/world/status');
     expect(st.body.player).toMatchObject({ name: 'Ana Pixel', visibility: vis });
+    expect(st.body.account).not.toHaveProperty('reservedName');
+    // Editando: o nome vai arrumado quando vem, e ausente mantém.
+    const ed = await call(s.base, 'PUT', '/api/world/character', { ...CHARACTER, name: '  Ana   Nova ' });
+    expect(ed.body.name).toBe('Ana Nova');
+    expect((await call(s.base, 'PUT', '/api/world/character', noName)).body.name).toBe('Ana Nova');
+    await call(s.base, 'PUT', '/api/world/character', CHARACTER);
     expect((await call(s.base, 'GET', '/api/world/devices')).body.devices.map((d: { id: string }) => d.id)).toEqual(['dev_2']);
 
     // Liberado pelo lote: a próxima leitura (refresh) muda o estado e o snapshot.
@@ -418,9 +443,24 @@ describe('de ponta a ponta com o servidor do mundo de mentira', () => {
     }
   });
 
+  it('conta antiga, sem reserva: criar o personagem exige o name (e ele vai no pedido)', async () => {
+    const s = await start();
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
+    await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
+    delete s.world!.accounts.get(EMAIL)!.reservedName;
+    expect((await call(s.base, 'GET', '/api/world/status?refresh=1')).body.account).not.toHaveProperty('reservedName');
+    const { name: _unused, ...noName } = CHARACTER;
+    const missing = await call(s.base, 'PUT', '/api/world/character', noName);
+    expect(`${missing.status} ${missing.body.error.code}`).toBe('422 name_invalid');
+    expect(s.world!.requests.some((r) => r.path === '/v1/me/player')).toBe(false);
+    const ch = await call(s.base, 'PUT', '/api/world/character', CHARACTER);
+    expect(ch.status).toBe(200);
+    expect(s.world!.requests.find((r) => r.path === '/v1/me/player')!.body).toMatchObject({ name: NAME });
+  });
+
   it('401 do servidor do mundo (token revogado em outro lugar): apaga a sessão daqui', async () => {
     const s = await start();
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     s.world!.devices.clear();
     const r = await call(s.base, 'PUT', '/api/world/character', CHARACTER);
@@ -433,7 +473,7 @@ describe('de ponta a ponta com o servidor do mundo de mentira', () => {
 
   it('servidor do mundo fora do ar: status com o que se sabe e lastError; sair apaga daqui mesmo assim', async () => {
     const s = await start({ meTtlMs: 0 });
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     await call(s.base, 'PUT', '/api/world/character', CHARACTER);
     await s.world!.close();
@@ -446,7 +486,7 @@ describe('de ponta a ponta com o servidor do mundo de mentira', () => {
 
   it('login que pede ALTCHA: resolve e tenta de novo; e-mail não verificado volta como 403', async () => {
     const s = await start();
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     const unverified = await call(s.base, 'POST', '/api/world/login', { email: EMAIL, password: PASSWORD });
     expect(unverified.status).toBe(403);
     expect(unverified.body.error.code).toBe('email_not_verified');
@@ -460,7 +500,7 @@ describe('de ponta a ponta com o servidor do mundo de mentira', () => {
 
   it('reenviar código e esqueci a senha resolvem o ALTCHA; trocar a senha desta conta sai daqui', async () => {
     const s = await start();
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     expect((await call(s.base, 'POST', '/api/world/resend', { email: EMAIL })).status).toBe(202);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     expect((await call(s.base, 'POST', '/api/world/password/forgot', { email: EMAIL })).status).toBe(202);
@@ -473,7 +513,7 @@ describe('de ponta a ponta com o servidor do mundo de mentira', () => {
 
   it('revogar o próprio dispositivo sai daqui; revogar outro só atualiza a lista', async () => {
     const s = await start();
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     // Outro computador da mesma conta.
     await new WorldClient({ baseUrl: s.world!.base, version: '1' }).login({ email: EMAIL, password: PASSWORD });
@@ -489,7 +529,7 @@ describe('de ponta a ponta com o servidor do mundo de mentira', () => {
 
   it('duas abas entrando ao mesmo tempo: uma operação por vez (o segundo login revoga o primeiro)', async () => {
     const s = await start();
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     s.world!.options.delayMs = 20;
     const [a, b] = await Promise.all([
@@ -504,7 +544,7 @@ describe('de ponta a ponta com o servidor do mundo de mentira', () => {
 
   it('reinício do Habblaud: a sessão volta do world.json', async () => {
     const s = await start();
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     const again = new WorldSettingsStore(s.file);
     expect(again.load()).toMatchObject({ deviceId: 'dev_1', email: EMAIL, access: 'waiting' });
@@ -525,7 +565,7 @@ describe('o prédio no mundo (uplink) pelas rotas', () => {
     const s = await start({ uplink: true });
     const w = s.world!;
     s.office.addMain({ id: '.claude:4242', account: '.claude', sessionId: 'sess-x', cwd: '/Users/ana/projeto-secreto', role: 'Agente principal', startedAt: Date.now(), status: 'working' });
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     // Na lista de espera, com ou sem personagem: nada de prédio.
     await call(s.base, 'PUT', '/api/world/character', CHARACTER);
@@ -590,7 +630,7 @@ describe('o prédio no mundo (uplink) pelas rotas', () => {
     const s = await start({ uplink: true });
     const w = s.world!;
     s.office.addMain({ id: '.claude:7', account: '.claude', sessionId: 'sess-7', cwd: '/p/a', role: 'Agente principal', startedAt: Date.now(), status: 'working' });
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     await call(s.base, 'PUT', '/api/world/character', CHARACTER);
     w.accounts.get(EMAIL)!.access = 'approved';
@@ -612,7 +652,7 @@ describe('o prédio no mundo (uplink) pelas rotas', () => {
     const s = await start({ uplink: true });
     const w = s.world!;
     s.office.addMain({ id: '.claude:8', account: '.claude', sessionId: 'sess-8', cwd: '/p/b', role: 'Agente principal', startedAt: Date.now(), status: 'working' });
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     await call(s.base, 'PUT', '/api/world/character', CHARACTER);
     w.accounts.get(EMAIL)!.access = 'approved';
@@ -650,7 +690,7 @@ describe('o prédio no mundo (uplink) pelas rotas', () => {
   it('voltar ao mundo sem resposta boa: o erro volta e nada muda (continua fora do mundo, sem conexão)', async () => {
     const s = await start({ uplink: true });
     const w = s.world!;
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     await call(s.base, 'PUT', '/api/world/character', CHARACTER);
     w.accounts.get(EMAIL)!.access = 'approved';
@@ -675,7 +715,7 @@ describe('o prédio no mundo (uplink) pelas rotas', () => {
   it('voltar ao mundo sem ter saído (só pausado) é retomar: avisa o /resume, não o /join, e reconecta', async () => {
     const s = await start({ uplink: true });
     const w = s.world!;
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     await call(s.base, 'PUT', '/api/world/character', CHARACTER);
     w.accounts.get(EMAIL)!.access = 'approved';
@@ -696,7 +736,7 @@ describe('o prédio no mundo (uplink) pelas rotas', () => {
     const s = await start({ uplink: true });
     const w = s.world!;
     s.office.addMain({ id: '.claude:9', account: '.claude', sessionId: 'sess-9', cwd: '/p/c', role: 'Agente principal', startedAt: Date.now(), status: 'working' });
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     await call(s.base, 'PUT', '/api/world/character', CHARACTER);
     w.accounts.get(EMAIL)!.access = 'approved';
@@ -718,7 +758,7 @@ describe('o prédio no mundo (uplink) pelas rotas', () => {
   it('o /v1/me com left: true (saiu em outro computador) também deixa este fora do mundo', async () => {
     const s = await start({ uplink: true });
     const w = s.world!;
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     await call(s.base, 'PUT', '/api/world/character', CHARACTER);
     w.accounts.get(EMAIL)!.access = 'approved';
@@ -732,7 +772,7 @@ describe('o prédio no mundo (uplink) pelas rotas', () => {
   it('sair do mundo sem resposta boa do servidor: o erro volta, o prédio fica só pausado e a pausa é avisada', async () => {
     const s = await start({ uplink: true });
     const w = s.world!;
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     await call(s.base, 'PUT', '/api/world/character', CHARACTER);
     w.accounts.get(EMAIL)!.access = 'approved';
@@ -765,7 +805,7 @@ describe('o prédio no mundo (uplink) pelas rotas', () => {
 
   it('aprovada sem personagem: sem building no status nem no snapshot', async () => {
     const s = await start({ uplink: true });
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     s.world!.accounts.get(EMAIL)!.access = 'approved';
     const st = (await call(s.base, 'GET', '/api/world/status?refresh=1')).body;
@@ -829,7 +869,7 @@ describe('a cena Mundo pelas rotas (stream e comandos)', () => {
   async function approved() {
     const s = await start({ uplink: true });
     const w = s.world!;
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     await call(s.base, 'PUT', '/api/world/character', CHARACTER);
     w.accounts.get(EMAIL)!.access = 'approved';
@@ -1019,7 +1059,7 @@ describe('a conta e os dados (Fase 6)', () => {
     const w = s.world!;
     if (opts.building) w.ws.options.building = opts.building;
     s.office.addMain({ id: '.claude:6', account: '.claude', sessionId: 'sess-6', cwd: '/p/f6', role: 'Agente principal', startedAt: Date.now(), status: 'working' });
-    await call(s.base, 'POST', '/api/world/register', { email: EMAIL, password: PASSWORD });
+    await call(s.base, 'POST', '/api/world/register', REGISTER);
     await call(s.base, 'POST', '/api/world/verify', { email: EMAIL, code: FAKE_CODE });
     await call(s.base, 'PUT', '/api/world/character', CHARACTER);
     w.accounts.get(EMAIL)!.access = 'approved';

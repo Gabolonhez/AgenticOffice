@@ -119,8 +119,9 @@ const updates = new UpdateChecker({
   onChange: () => late.office?.markDirty(),
 });
 updates.load();
-// Habblaud World (server/world/): a conta e o personagem neste computador. Sem HABBLAUD_WORLD_URL fica desligado (nada
-// sai do computador); HABBLAUD_WORLD=0 esconde tudo (rotas 404 e nada na interface).
+// Habblaud World (server/world/): a conta e o personagem neste computador. Ligado por padrão (server.habblaud.com, ou
+// HABBLAUD_WORLD_URL); nada sai do computador antes de a pessoa criar a conta e entrar. HABBLAUD_WORLD=0 esconde tudo
+// (rotas 404 e nada na interface); uma HABBLAUD_WORLD_URL recusada deixa o recurso desligado.
 const worldStore = new WorldSettingsStore(join(config.dataDir, 'world.json'));
 if (config.world.enabled && config.world.url) worldStore.load();
 // O social leve do dono (world/social.ts): likes do dia, "enquanto você estava fora", batidas na porta e bloqueados.
@@ -185,7 +186,7 @@ const hub = new Hub(office, {
 // "Meu dia": amostra o escritório a cada segundo e persiste em <dataDir>/stats/ (ver history/daystats.ts).
 const stats = new DayStatsService({ dir: join(config.dataDir, 'stats'), snapshot: () => hub.current() });
 stats.load();
-// O prédio no Habblaud World (world/uplink.ts): só com HABBLAUD_WORLD_URL. Conecta sozinho com a conta aprovada, o
+// O prédio no Habblaud World (world/uplink.ts): só com o servidor do mundo aceito. Conecta sozinho com a conta aprovada, o
 // personagem criado, a trava do terminal e sem pausa; o pacote sai só da projeção (shared/world/projection.ts).
 const worldTokens = new BuildingTokens({ stats });
 const worldUplink =
@@ -974,9 +975,9 @@ server.listen(config.port, config.host, () => {
     !world
       ? tr('   Habblaud World: escondido (HABBLAUD_WORLD=0).')
       : !config.world.url
-        ? tr('   Habblaud World: desligado (sem HABBLAUD_WORLD_URL).')
+        ? tr('   Habblaud World: desligado (HABBLAUD_WORLD_URL recusada).')
         : tr('   Habblaud World: {0}, conta neste computador: {1}{2}.', [
-            config.world.url,
+            config.world.defaultUrl ? tr('{0} (padrão)', [config.world.url]) : config.world.url,
             world.state(),
             config.terminal ? '' : tr(' (só leitura: a trava do terminal está desligada)'),
           ]),

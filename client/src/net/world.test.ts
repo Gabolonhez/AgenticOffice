@@ -45,7 +45,7 @@ const CHARACTER: WorldCharacterInput = {
 describe('HttpWorldApi', () => {
   it('cada ação vai para a rota do contrato, com JSON (mesmo vazio) nos POST/PUT', async () => {
     const { calls, api } = recorder(202, {});
-    await api.register({ email: 'a@b.co', password: 'x'.repeat(12), locale: 'pt-BR' });
+    await api.register({ email: 'a@b.co', password: 'x'.repeat(12), name: 'Ana Pixel', locale: 'pt-BR' });
     await api.verify({ email: 'a@b.co', code: '123456' });
     await api.login({ email: 'a@b.co', password: 'x'.repeat(12) });
     await api.logout();
@@ -72,7 +72,7 @@ describe('HttpWorldApi', () => {
       expect(typeof c.init?.body).toBe('string');
     }
     expect(calls[3].init?.body).toBe('{}');
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ email: 'a@b.co', password: 'x'.repeat(12), locale: 'pt-BR' });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ email: 'a@b.co', password: 'x'.repeat(12), name: 'Ana Pixel', locale: 'pt-BR' });
     expect(JSON.parse(String(calls[7].init?.body))).toEqual(CHARACTER);
   });
 
@@ -156,14 +156,33 @@ describe('FakeWorldApi', () => {
   it('cadastro → código → lista de espera → aprovado', async () => {
     const api = fake();
     expect(api.meta()).toEqual({ enabled: true, configured: true, state: 'logged_out' });
-    expect((await api.register({ email: 'nova@exemplo.com', password: 'cavalo correto bateria', locale: 'pt-BR' })).ok).toBe(true);
+    expect((await api.register({ email: 'nova@exemplo.com', password: 'cavalo correto bateria', name: 'Nova Pixel', locale: 'pt-BR' })).ok).toBe(true);
     expect(await api.verify({ email: 'nova@exemplo.com', code: '000000' })).toMatchObject({ ok: false, code: 'invalid_code' });
     expect((await api.verify({ email: 'nova@exemplo.com', code: FAKE_CODE })).ok).toBe(true);
     expect(api.meta().state).toBe('waiting');
+    // O nome do cadastro fica reservado até o personagem existir.
     const st = await api.status();
-    expect(st.ok && st.data.account).toEqual({ emailMasked: 'no***@exemplo.com', access: 'waiting' });
+    expect(st.ok && st.data.account).toEqual({ emailMasked: 'no***@exemplo.com', access: 'waiting', reservedName: 'Nova Pixel' });
     api.approve();
     expect(api.meta().state).toBe('approved');
+  });
+
+  it('cadastro: o nome é conferido antes da senha e não pode estar em uso; criar o personagem usa a reserva', async () => {
+    const api = fake({ state: 'waiting' });
+    await api.logout();
+    expect(await api.register({ email: 'x@exemplo.com', password: 'curta', name: 'a!', locale: 'pt-BR' })).toMatchObject({ code: 'name_invalid', status: 422 });
+    expect(await api.register({ email: 'x@exemplo.com', password: 'cavalo correto bateria', name: 'Admin', locale: 'pt-BR' })).toMatchObject({ code: 'name_blocked' });
+    // "Pixel Dev" é a reserva da conta da demonstração; "Marina" é de um personagem fixo.
+    expect(await api.register({ email: 'x@exemplo.com', password: 'cavalo correto bateria', name: 'pixel dev', locale: 'pt-BR' })).toMatchObject({ code: 'name_taken', status: 409 });
+    expect(await api.register({ email: 'x@exemplo.com', password: 'cavalo correto bateria', name: 'MARINA', locale: 'pt-BR' })).toMatchObject({ code: 'name_taken' });
+    expect((await api.register({ email: 'x@exemplo.com', password: 'cavalo correto bateria', name: 'Xis Pixel', locale: 'pt-BR' })).ok).toBe(true);
+    await api.verify({ email: 'x@exemplo.com', code: FAKE_CODE });
+    // Sem `name` no corpo: o personagem nasce com a reserva; com `name`, ele é ignorado.
+    const { name: _name, ...rest } = CHARACTER;
+    expect((await api.saveCharacter(rest)).ok).toBe(true);
+    const st = await api.status();
+    expect(st.ok && st.data.player?.name).toBe('Xis Pixel');
+    expect(st.ok && st.data.account).not.toHaveProperty('reservedName');
   });
 
   it('nome trocado à força: o status pede um nome novo e salvar o personagem resolve', async () => {
@@ -180,7 +199,7 @@ describe('FakeWorldApi', () => {
 
   it('login: credenciais erradas, e-mail sem confirmar, banido', async () => {
     const api = fake();
-    await api.register({ email: 'nova@exemplo.com', password: 'cavalo correto bateria', locale: 'pt-BR' });
+    await api.register({ email: 'nova@exemplo.com', password: 'cavalo correto bateria', name: 'Nova Pixel', locale: 'pt-BR' });
     expect(await api.login({ email: 'nova@exemplo.com', password: 'outra senha qualquer' })).toMatchObject({ code: 'invalid_credentials' });
     expect(await api.login({ email: 'nova@exemplo.com', password: 'cavalo correto bateria' })).toMatchObject({ code: 'email_not_verified' });
     expect(await api.login({ email: 'banido@exemplo.com', password: 'cavalo correto bateria' })).toMatchObject({ code: 'banned' });
@@ -190,13 +209,13 @@ describe('FakeWorldApi', () => {
   it('cadastro com e-mail que já existe responde igual (não revela quem tem conta)', async () => {
     const api = fake({ state: 'waiting' });
     await api.logout();
-    expect((await api.register({ email: FAKE_EMAIL, password: 'cavalo correto bateria', locale: 'pt-BR' })).ok).toBe(true);
+    expect((await api.register({ email: FAKE_EMAIL, password: 'cavalo correto bateria', name: 'Outra Pessoa', locale: 'pt-BR' })).ok).toBe(true);
     // A senha antiga continua valendo.
     expect((await api.login({ email: FAKE_EMAIL, password: FAKE_PASSWORD })).ok).toBe(true);
   });
 
-  it('personagem: nome em uso, reservado, inválido e traços que não combinam', async () => {
-    const api = fake({ state: 'waiting' });
+  it('personagem: nome em uso, reservado, inválido e traços que não combinam (editando: o nome vem do corpo)', async () => {
+    const api = fake({ state: 'approved' });
     expect(await api.saveCharacter({ ...CHARACTER, name: 'Marina' })).toMatchObject({ code: 'name_taken' });
     expect(await api.saveCharacter({ ...CHARACTER, name: 'Admin' })).toMatchObject({ code: 'name_blocked' });
     expect(await api.saveCharacter({ ...CHARACTER, name: 'a!' })).toMatchObject({ code: 'name_invalid' });
@@ -266,7 +285,7 @@ describe('FakeWorldApi', () => {
     const api = fake();
     let n = 0;
     const off = api.onChange(() => n++);
-    await api.register({ email: 'nova@exemplo.com', password: 'cavalo correto bateria', locale: 'pt-BR' });
+    await api.register({ email: 'nova@exemplo.com', password: 'cavalo correto bateria', name: 'Nova Pixel', locale: 'pt-BR' });
     await api.verify({ email: 'nova@exemplo.com', code: FAKE_CODE });
     expect(n).toBe(2);
     // Ler não avisa (senão a interface releria o status sem parar).

@@ -1,6 +1,6 @@
 // O social leve do Habblaud World no escritório (Fase 5):
 // - "Enquanto você estava fora": quem passou pelo prédio enquanto o dono não estava (visitas, likes e os carimbos que
-//   deixaram na portaria, sem quem). Aparece no cartão "Seu prédio" (Configurações › Habblaud World) e, ao conectar,
+//   deixaram na portaria, sem quem). Aparece no cartão "Seu prédio" (a janela do Habblaud World) e, ao conectar,
 //   num cartão flutuante no canto do escritório; fechar ou "Ok, vi" manda o `summary.seen` (POST /api/world/summary/seen).
 // - O código do prédio ("HB-4F2K"), para mandar a um amigo, com "Copiar".
 // - Batidas na porta: com "Avisar quando baterem na porta" ligado, um aviso "Alguém bateu na porta do seu prédio" (sem
@@ -212,7 +212,7 @@ export interface WorldSocialHooks {
   active(): boolean;
   /** Um aviso rápido (os toasts do escritório). */
   toast(n: Notice): void;
-  /** Abre Configurações › Habblaud World (onde está o cartão "Seu prédio"). */
+  /** Abre a janela do Habblaud World (onde está o cartão "Seu prédio"). */
   openWorld(): void;
 }
 

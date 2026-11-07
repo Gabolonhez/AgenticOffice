@@ -86,8 +86,11 @@ export interface WorldStatus {
   available: boolean;
   configured: boolean;
   state: WorldServerState;
-  /** `id`: o id da conta no mundo, quando o servidor local já sabe (vai no assunto do recurso por e-mail). */
-  account?: { emailMasked: string; access: WorldAccess; id?: string };
+  /**
+   * `id`: o id da conta no mundo, quando o servidor local já sabe (vai no assunto do recurso por e-mail).
+   * `reservedName`: o nome de jogador escolhido no cadastro, reservado enquanto o personagem não existe.
+   */
+  account?: { emailMasked: string; access: WorldAccess; id?: string; reservedName?: string };
   player?: WorldPlayer;
   devices?: WorldDevice[];
   /** Último erro da conexão com o mundo (código), se houver. */
@@ -101,7 +104,8 @@ export interface WorldStatus {
 }
 
 export interface WorldCharacterInput {
-  name: string;
+  /** Ausente ao criar com o nome reservado no cadastro (o servidor usa a reserva) e, ao editar, mantém o nome. */
+  name?: string;
   look: 'f' | 'm';
   parts: AppearanceParts;
   traits: TraitId[];
@@ -120,7 +124,8 @@ export type WorldResult<T = null> = { ok: true; data: T } | { ok: false; code: W
 export interface WorldClient {
   /** `refresh`: o servidor local relê /v1/me antes de responder (a lista de bloqueados, por exemplo). */
   status(refresh?: boolean): Promise<WorldResult<WorldStatus>>;
-  register(body: { email: string; password: string; locale: Locale }): Promise<WorldResult>;
+  /** `name`: o nome de jogador, reservado na lista de espera (422 name_invalid | name_blocked, 409 name_taken). */
+  register(body: { email: string; password: string; name: string; locale: Locale }): Promise<WorldResult>;
   verify(body: { email: string; code: string }): Promise<WorldResult>;
   login(body: { email: string; password: string }): Promise<WorldResult>;
   logout(): Promise<WorldResult>;
@@ -281,6 +286,7 @@ export function parseWorldStatus(v: unknown): WorldStatus | null {
   if (isObject(acc) && typeof acc.emailMasked === 'string') {
     out.account = { emailMasked: acc.emailMasked, access: acc.access === 'approved' ? 'approved' : 'waiting' };
     if (typeof acc.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(acc.id)) out.account.id = acc.id;
+    if (typeof acc.reservedName === 'string' && acc.reservedName && acc.reservedName.length <= 64) out.account.reservedName = acc.reservedName;
   }
   const p = v.player;
   if (isObject(p) && typeof p.name === 'string' && isObject(p.parts) && Array.isArray(p.traits)) {
@@ -358,7 +364,7 @@ export class HttpWorldApi implements WorldClient {
     return s ? { ok: true, data: s } : { ok: false, code: 'unknown', status: 200 };
   }
 
-  register(body: { email: string; password: string; locale: Locale }) {
+  register(body: { email: string; password: string; name: string; locale: Locale }) {
     return this.done(this.call('POST', '/register', body));
   }
   verify(body: { email: string; code: string }) {
@@ -503,6 +509,8 @@ interface FakeAccount {
   verified: boolean;
   access: WorldAccess;
   player?: WorldPlayer;
+  /** O nome de jogador do cadastro, reservado até o personagem existir. */
+  reservedName?: string;
   devices: WorldDevice[];
   /** O prédio: nasce com a conta aprovada e com personagem. */
   building?: FakeBuilding;
@@ -603,8 +611,9 @@ export class FakeWorldApi implements WorldClient {
     this.configured = state !== 'off';
     if (state === 'waiting' || state === 'approved') {
       const now = this.now();
-      const acc: FakeAccount = { email: FAKE_EMAIL, password: FAKE_PASSWORD, verified: true, access: state, devices: [] };
+      const acc: FakeAccount = { email: FAKE_EMAIL, password: FAKE_PASSWORD, verified: true, access: state, devices: [], reservedName: 'Pixel Dev' };
       if (state === 'approved') {
+        delete acc.reservedName;
         acc.player = {
           name: 'Pixel Dev',
           look: 'f',
@@ -825,6 +834,7 @@ export class FakeWorldApi implements WorldClient {
       const status: WorldStatus = { available: true, configured: this.configured, state };
       if (acc) {
         status.account = { emailMasked: maskEmail(acc.email), access: acc.access };
+        if (!acc.player && acc.reservedName) status.account.reservedName = acc.reservedName;
         if (acc.player) status.player = structuredClone(acc.player);
         status.devices = structuredClone(acc.devices);
         const building = this.buildingOf(acc);
@@ -837,14 +847,29 @@ export class FakeWorldApi implements WorldClient {
     }, false);
   }
 
-  register(body: { email: string; password: string; locale: Locale }): Promise<WorldResult> {
+  register(body: { email: string; password: string; name: string; locale: Locale }): Promise<WorldResult> {
     return this.reply(() => {
+      // Como o servidor de verdade: o nome é conferido antes da senha e fica reservado para a conta.
+      const name = parsePlayerName(body.name);
+      if (!name.ok) return FakeWorldApi.fail(name.code, 422);
+      if (this.nameTaken(name.key, undefined)) return FakeWorldApi.fail('name_taken', 409);
       if (!emailLooksValid(body.email) || passwordProblem(body.password, body.email)) return FakeWorldApi.fail('invalid', 422);
       const email = body.email.trim().toLowerCase();
-      // Como o servidor de verdade: e-mail já cadastrado responde igual (nunca revela quem tem conta).
-      if (!this.accounts.has(email)) this.accounts.set(email, { email, password: body.password, verified: false, access: 'waiting', devices: [] });
+      // E-mail já cadastrado responde igual (nunca revela quem tem conta).
+      if (!this.accounts.has(email)) this.accounts.set(email, { email, password: body.password, verified: false, access: 'waiting', devices: [], reservedName: name.name });
       return FakeWorldApi.ok();
     });
+  }
+
+  /** O nome (pela chave) já é de outra conta: os fixos de FAKE_TAKEN, uma reserva do cadastro ou um personagem. */
+  private nameTaken(key: string, self: FakeAccount | undefined): boolean {
+    if (FAKE_TAKEN.includes(key)) return true;
+    for (const o of this.accounts.values()) {
+      if (o === self) continue;
+      const other = o.player?.name ?? o.reservedName;
+      if (other && playerNameKey(other) === key) return true;
+    }
+    return false;
   }
 
   verify(body: { email: string; code: string }): Promise<WorldResult> {
@@ -915,11 +940,13 @@ export class FakeWorldApi implements WorldClient {
     return this.reply(() => {
       const acc = this.current();
       if (!acc) return FakeWorldApi.fail('unknown', 401);
-      const name = parsePlayerName(body.name);
+      // Criando com a reserva do cadastro, o nome É a reserva; editando sem `name`, mantém.
+      const raw = !acc.player && acc.reservedName ? acc.reservedName : body.name === undefined && acc.player ? acc.player.name : body.name;
+      const name = parsePlayerName(raw);
       if (!name.ok) return FakeWorldApi.fail(name.code, 422);
-      const key = name.key;
-      if (FAKE_TAKEN.includes(key) && playerNameKey(acc.player?.name ?? '') !== key) return FakeWorldApi.fail('name_taken', 409);
+      if (this.nameTaken(name.key, acc) && playerNameKey(acc.player?.name ?? '') !== name.key) return FakeWorldApi.fail('name_taken', 409);
       if (!traitsValid(body.traits)) return FakeWorldApi.fail('invalid', 422);
+      delete acc.reservedName;
       acc.player = {
         name: name.name,
         look: body.look,

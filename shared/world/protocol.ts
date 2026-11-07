@@ -200,10 +200,16 @@ export interface AltchaChallenge {
   signature: string;
 }
 
-/** `POST /v1/auth/register` → sempre `202 {}` (nunca revela se o e-mail existe). */
+/**
+ * `POST /v1/auth/register` → sempre `202 {}` (nunca revela se o e-mail existe). O `name` é conferido antes do ALTCHA e
+ * da senha: `422 name_invalid | name_blocked` (as regras de names-rules.ts, as mesmas do personagem) e `409 name_taken`
+ * (já usado por qualquer conta, pela chave: sem diferença de maiúsculas nem acentos).
+ */
 export interface RegisterRequest {
   email: string;
   password: string;
+  /** Nome de jogador (nickname): fica reservado para a conta enquanto espera na lista e vira o nome do personagem. */
+  name: string;
   locale: WorldLocale;
   tos: typeof TOS_VERSION;
   /** Solução do ALTCHA em base64 (JSON `{algorithm, challenge, number, salt, signature, took}`). */
@@ -266,9 +272,14 @@ export const VISIBILITY_DEFAULTS: Readonly<Visibility> = {
   knocks: false,
 };
 
-/** `PUT /v1/me/player` → `200 Player`; `409 name_taken`; `422 name_invalid | name_blocked | name_cooldown | invalid`. */
+/**
+ * `PUT /v1/me/player` → `200 Player`; `409 name_taken`; `422 name_invalid | name_blocked | name_cooldown | invalid`.
+ * Ao criar o personagem, `name` é opcional: com a reserva do cadastro (`MeResponse.account.reservedName`), o nome do
+ * personagem É a reserva (um `name` no corpo é ignorado); conta antiga, sem reserva, manda o `name`. Ao atualizar,
+ * `name` ausente mantém o nome.
+ */
 export interface PlayerInput {
-  name: string;
+  name?: string;
   look: 'f' | 'm';
   parts: AppearanceParts;
   /** 2 ou 3, sem repetir e sem par que não combina (TRAIT_CLASHES). */
@@ -276,7 +287,8 @@ export interface PlayerInput {
   intro: IntroId;
 }
 
-export interface Player extends PlayerInput {
+export interface Player extends Omit<PlayerInput, 'name'> {
+  name: string;
   /** ISO-2, do IP da conexão; ausente se escondido ou desconhecido. */
   country?: string;
   visibility: Visibility;
@@ -340,7 +352,14 @@ export interface BuildingCodeResponse { id: string; lot: WorldLot }
 
 /** `GET /v1/me`. */
 export interface MeResponse {
-  account: { emailMasked: string; access: WorldAccess; locale: WorldLocale; createdAt: string };
+  account: {
+    emailMasked: string;
+    access: WorldAccess;
+    locale: WorldLocale;
+    createdAt: string;
+    /** O nome de jogador escolhido no cadastro, reservado enquanto não há personagem; com personagem (ou ausente), null. */
+    reservedName?: string | null;
+  };
   player?: Player;
   devices: DeviceInfo[];
   /** O prédio da conta, se ela já tem um no mundo. */
@@ -401,8 +420,16 @@ export interface WorldExport {
     notifyInactivity: boolean;
     /** "Sair do mundo" (e ainda não voltou). */
     leftWorldAt: string | null;
+    /** O nome de jogador reservado no cadastro (null depois de criar o personagem). */
+    reservedName?: string | null;
+    /** País (ISO-2) do último login, do IP. */
+    country?: string | null;
+    /** IPs do cadastro e do último login com senha, guardados em claro para auditoria (docs/world/privacidade.md). */
+    signupIp?: string | null;
+    lastLoginIp?: string | null;
+    lastLoginAt?: string | null;
   };
-  player: (PlayerInput & { country: string | null; nameChangedAt: string | null; updatedAt: string }) | null;
+  player: (Omit<PlayerInput, 'name'> & { name: string; country: string | null; nameChangedAt: string | null; updatedAt: string }) | null;
   visibility: Visibility | null;
   /** Rótulos ("Dispositivo N") e datas; nunca o token. */
   devices: Array<{ label: string; createdAt: string; lastSeenAt: string; revokedAt: string | null }>;

@@ -26,7 +26,8 @@ const PAN_KEY_STEP = 90;
 export function modalOpen(target: HTMLElement | null): boolean {
   if (target?.closest?.('dialog, [popover], [role="dialog"], [aria-modal="true"]')) return true;
   if (typeof document === 'undefined') return false;
-  if (document.querySelector('dialog[open], [aria-modal="true"]')) return true;
+  // Um <dialog> fechado continua no DOM (com os atributos que tiver): só o aberto conta.
+  if (document.querySelector('dialog[open], :not(dialog)[aria-modal="true"]')) return true;
   try {
     return !!document.querySelector(':popover-open');
   } catch {

@@ -4,6 +4,7 @@
 // estado "na cidade" da interface (classe `is-city` no #ui) e a ida e volta.
 import { tr } from '../../../../shared/i18n';
 import type { WorldSource } from '../../net/world';
+import type { Selection } from '../../world/api';
 import type { UiComponent, UiContext } from '../context';
 import { h, setAttr, setHidden, setText, setTitle } from '../dom';
 import { ICONS } from '../icons';
@@ -95,6 +96,14 @@ export class SceneSwitch implements UiComponent {
     this.host.hide();
     this.ctx.announce(tr('De volta ao escritório.'));
     this.onChange();
+  }
+
+  /**
+   * Escolher um agente ou sala com a cidade aberta (aviso, Responder, notificação, entrega) volta ao escritório: na
+   * cidade a gaveta e o terminal ficam escondidos. Chamado por `ctx.select` antes de medir a área livre e focar.
+   */
+  leaveFor(sel: Selection): void {
+    if (sel) this.close();
   }
 
   render(): void {

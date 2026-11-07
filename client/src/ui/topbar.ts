@@ -49,6 +49,8 @@ export class TopBar implements UiComponent {
   private feedBtn: HTMLButtonElement;
   private timelapseBtn: HTMLButtonElement;
   readonly settingsBtn: HTMLButtonElement;
+  /** Abre a janela do Habblaud World (ao lado de Configurações); a janela decide quando ele aparece. */
+  readonly worldBtn: HTMLButtonElement;
   private readonly spawnBtn: HTMLButtonElement;
   private readonly spawnPanel: SpawnPanel;
   private readonly runsBtn: HTMLButtonElement;
@@ -57,7 +59,7 @@ export class TopBar implements UiComponent {
   private readonly triggersPanel: TriggersPanel;
   /** Jarvis (server/jarvis): abre a conversa com o orquestrador (cria o agente na primeira vez). */
   private readonly jarvisBtn: HTMLButtonElement;
-  /** Grupo dos botões de painéis (feed, configurações, ajuda); o histórico entra aqui (ui/index.ts). */
+  /** Grupo dos botões de painéis (feed, Habblaud World, configurações, ajuda); o histórico entra aqui (ui/index.ts). */
   readonly panelGroup: HTMLElement;
 
   constructor(private ctx: UiContext) {
@@ -111,6 +113,10 @@ export class TopBar implements UiComponent {
     this.sidebarBtn = iconButton(ICONS.sidebar, tr('Painel lateral ( [ )'), () => ctx.togglePanel('sidebar'), 'ui-btn-sidebar');
     this.feedBtn = iconButton(ICONS.feed, tr('Feed de atividade ( ] )'), () => ctx.togglePanel('feed'), 'ui-btn-feed');
     this.timelapseBtn = iconButton(TIMELAPSE_ICONS.timelapse, tr('Timelapse: reproduzir o dia (L)'), () => ctx.toggleTimelapse(), 'ui-btn-timelapse');
+    // Habblaud World: escondido até a janela dele (ui/world/world-dialog.ts) dizer que há servidor do mundo configurado.
+    this.worldBtn = iconButton(ICONS.city, tr('Habblaud World'), () => ctx.toggleWorld(), 'ui-btn-world');
+    this.worldBtn.setAttribute('aria-haspopup', 'dialog');
+    this.worldBtn.hidden = true;
     this.settingsBtn = iconButton(ICONS.settings, tr('Configurações'), () => ctx.toggleSettings());
     this.settingsBtn.setAttribute('aria-haspopup', 'dialog');
     this.spawnPanel = new SpawnPanel(ctx);
@@ -154,6 +160,7 @@ export class TopBar implements UiComponent {
       this.triggersBtn,
       this.timelapseBtn,
       this.feedBtn,
+      this.worldBtn,
       this.settingsBtn,
       iconButton(ICONS.help, tr('Ajuda (?)'), () => ctx.openHelp()),
     );

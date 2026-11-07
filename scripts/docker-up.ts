@@ -22,7 +22,8 @@
 //    no ambiente e no .env, que não valem mais.
 // 4. Roda `docker compose up -d --build`, espera o /api/health e mostra a URL.
 // 5. Diz no fim se o Habblaud World está ligado (HABBLAUD_WORLD_URL do ambiente ou do .env, conferida como o servidor
-//    confere) e para qual servidor; ele vem desligado.
+//    confere) e para qual servidor; sem a variável, vem ligado apontando para server.habblaud.com ("(padrão)"), e
+//    HABBLAUD_WORLD=0 desliga tudo.
 // 6. Atualiza o mod do Habblaud nas contas onde ele JÁ está instalado com outra versão (depois de
 //    atualizar o Habblaud): relê o marketplace desta pasta e roda `claude plugin update` com o
 //    CLAUDE_CONFIG_DIR de cada conta. Nunca instala sozinho; se o `claude` faltar ou falhar, é só um aviso. Numa
@@ -461,9 +462,8 @@ export function worldLine(env: NodeJS.ProcessEnv, envFile = ''): string {
   }
   const world = parseWorldConfig(vars, []);
   if (!world.enabled) return tr('Habblaud World: desligado (HABBLAUD_WORLD={0}).', [vars.HABBLAUD_WORLD?.trim() ?? '0']);
-  if (world.url) return tr('Habblaud World: ligado: {0}', [world.url]);
-  if (world.warning) return tr('Habblaud World: desligado ({0}).', [world.warning]);
-  return tr('Habblaud World: desligado (defina HABBLAUD_WORLD_URL).');
+  if (world.url) return world.defaultUrl ? tr('Habblaud World: ligado: {0} (padrão)', [world.url]) : tr('Habblaud World: ligado: {0}', [world.url]);
+  return tr('Habblaud World: desligado ({0}).', [world.warning ?? tr('HABBLAUD_WORLD_URL recusada')]);
 }
 
 // ---------------------------------------------------------------------------------------------

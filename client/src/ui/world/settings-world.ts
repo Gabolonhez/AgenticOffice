@@ -1,14 +1,15 @@
-// Seção "Habblaud World" das Configurações (depois de "Acesso pelo celular"): conta (cadastro com aceite dos termos e o
-// resumo de privacidade, código do e-mail, login, esqueci a senha), lista de espera, personagem (o editor de aparência
-// da gaveta do agente, mais nome, traços e frase de apresentação), o cartão "Seu prédio" com Pausar/Retomar e "Ver o
-// que foi enviado" (building.ts), visibilidade do prédio, dispositivos e sair. Também a dica do tema em Aparência,
-// quando a escolha vai para o prédio. Fase 6: "Conta e dados" (o aviso de inatividade, "Baixar meus dados" e "Excluir
-// conta" em três etapas: o que some e quando, a confirmação e o código do e-mail), o aviso da manutenção do mundo e o
-// da conta excluída. Fala com as rotas locais /api/world/* (net/world.ts); as regras puras estão em world-model.ts.
+// O conteúdo da janela "Habblaud World" (world-dialog.ts, o botão próprio da barra do topo): conta (cadastro com
+// aceite dos termos e o resumo de privacidade, código do e-mail, login, esqueci a senha), lista de espera, personagem
+// (o editor de aparência da gaveta do agente, mais nome, traços e frase de apresentação), o cartão "Seu prédio" com
+// Pausar/Retomar e "Ver o que foi enviado" (building.ts), visibilidade do prédio, dispositivos e sair. Também a dica
+// do tema em Configurações › Aparência, quando a escolha vai para o prédio. Fase 6: "Conta e dados" (o aviso de
+// inatividade, "Baixar meus dados" e "Excluir conta" em três etapas: o que some e quando, a confirmação e o código do
+// e-mail), o aviso da manutenção do mundo e o da conta excluída. Fala com as rotas locais /api/world/* (net/world.ts);
+// as regras puras estão em world-model.ts.
 //
-// O popover de Configurações chama render() a cada quadro sujo: o miolo só é refeito quando a tela muda (senão o que
-// foi digitado e o foco se perderiam); o status é buscado ao abrir o popover, depois de cada ação e quando o
-// meta.world do snapshot muda, nunca dentro do render.
+// A janela chama render() a cada quadro sujo: o miolo só é refeito quando a tela muda (senão o que foi digitado e o
+// foco se perderiam); o status é buscado ao abrir a janela, depois de cada ação e quando o meta.world do snapshot
+// muda, nunca dentro do render.
 import { getLocale, intlLocale, tr } from '../../../../shared/i18n';
 import type { Appearance } from '../../art/api';
 import { access } from '../../net/access';
@@ -259,7 +260,8 @@ interface View {
 
 export class WorldSettingsGroup {
   readonly el: HTMLElement;
-  private readonly chip: HTMLElement;
+  /** O estado da conta ("Sem conta", "Na lista de espera", "Liberado"), no cabeçalho da janela. */
+  readonly chip: HTMLElement;
   private readonly flashEl: HTMLElement;
   private readonly body: HTMLElement;
   private ui: WorldUi = initialWorldUi();
@@ -292,8 +294,6 @@ export class WorldSettingsGroup {
   private themeInflight = 0;
   /** Quando a última escolha de tema foi feita aqui (um status pedido antes dela não a desfaz). */
   private themePickedAt = 0;
-  /** Rolar até a seção de novo quando ela terminar de carregar (aberta pelo chip ou pelo convite, ainda carregando). */
-  private scrollPending = false;
   /** Relógio lógico das escolhas de tema e dos pedidos de status (qual veio antes). */
   private themeClock = 0;
 
@@ -305,14 +305,7 @@ export class WorldSettingsGroup {
     this.flashEl = h('p', { class: 'ui-world__flash', role: 'status', hidden: true });
     this.body = h('div', { class: 'ui-world__body' });
     this.sent = new SentDialog(() => this.client, () => this.ctx.now());
-    this.el = h(
-      'div',
-      { class: 'ui-set-group ui-world', hidden: true, attrs: { id: 'ui-world' } },
-      h('div', { class: 'ui-world__top' }, h('h3', { text: tr('Habblaud World'), tabIndex: -1 }), this.chip),
-      this.flashEl,
-      this.body,
-      this.sent.el,
-    );
+    this.el = h('div', { class: 'ui-world', hidden: true, attrs: { id: 'ui-world' } }, this.flashEl, this.body, this.sent.el);
     this.themeError = h('span', { class: 'ui-world__error', role: 'alert', hidden: true });
     this.themeNote = h('span', { class: 'ui-set__hint ui-world-theme', hidden: true }, h('span', { text: tr('O tema também vale para o seu prédio no Habblaud World.') }), this.themeError);
     src.onChange?.(() => {
@@ -325,7 +318,7 @@ export class WorldSettingsGroup {
     return this.src.client;
   }
 
-  /** A cada render do popover (barato: só refaz o miolo quando a tela muda). */
+  /** A cada render da janela, aberta ou não (barato: só refaz o miolo quando a tela muda). */
   render(open: boolean): void {
     const meta = this.src.meta();
     const gate = worldGate(this.ctx, this.src);
@@ -352,7 +345,7 @@ export class WorldSettingsGroup {
     this.paint();
   }
 
-  /** Abre numa tela (o cartão de convite pede o cadastro). */
+  /** Vai para uma tela (os popups de lançamento pedem o cadastro ou o personagem; o chip do topo, o prédio). */
   show(screen?: WorldScreen): void {
     if (screen) this.ui = worldReduce(this.ui, { type: 'go', screen });
     this.ctx.invalidate();
@@ -387,14 +380,10 @@ export class WorldSettingsGroup {
     else if (!st.theme && pref !== 'auto') void this.onThemePicked(pref);
   }
 
-  /** Rola até a seção e a destaca por um instante. */
-  highlight(): void {
-    // Carregando, a seção ainda é curta e a rolagem para antes dela: rola de novo quando o conteúdo chegar.
-    this.scrollPending = this.builtKey === 'loading' || this.loading;
-    this.el.scrollIntoView({ block: 'start' });
-    this.el.classList.remove('is-highlight');
-    void this.el.offsetWidth;
-    this.el.classList.add('is-highlight');
+  /** Volta ao topo do corpo rolável da janela (a cada tela nova, o começo dela é o que importa). */
+  private scrollToTop(): void {
+    const host = this.el.parentElement;
+    if (host) host.scrollTop = 0;
   }
 
   private dispatch(e: WorldUiEvent): void {
@@ -467,12 +456,9 @@ export class WorldSettingsGroup {
       this.epoch++;
       this.view = this.build();
       this.body.replaceChildren(this.view.el);
+      this.scrollToTop();
     } else {
       this.view?.sync?.();
-    }
-    if (this.scrollPending && !this.loading && this.builtKey !== 'loading') {
-      this.scrollPending = false;
-      requestAnimationFrame(() => this.el.scrollIntoView({ block: 'start' }));
     }
     setText(this.chip, this.chipText());
     setVariant(this.chip, 'is-', this.mode === 'active' ? (this.ui.server ?? 'loading') : this.mode);
@@ -593,20 +579,36 @@ export class WorldSettingsGroup {
   private buildRegister(): View {
     const email = emailField();
     email.input.value = this.ui.email;
+    // O nome de jogador (nickname) é escolhido no cadastro: fica reservado para a conta na lista de espera e vira o
+    // nome do personagem. Conferido aqui pelas mesmas regras do personagem; o servidor do mundo decide (e diz se já
+    // está em uso).
+    const name = field(
+      tr('Nome de jogador'),
+      textInput('text', 'nickname', { maxlength: PLAYER_NAME_LIMITS.max * 2 }),
+      tr('3 a 20 caracteres; é o nome do seu personagem e fica reservado para você, mesmo na lista de espera. Único no mundo.'),
+    );
+    name.input.value = this.ui.name;
     const password = passwordField(tr('Senha'), 'new-password', tr('Pelo menos 12 caracteres. Uma frase longa vale mais do que símbolos; senhas que já vazaram são recusadas.'));
     const accept = h('input', { class: 'ui-world__checkbox', type: 'checkbox' });
     const form = new Form(tr('Criar conta'), () => void submit(), tr('Criando a conta…'));
     const submit = async () => {
       const mail = normalizeEmail(email.input.value);
       if (!emailLooksValid(mail)) return form.setError(tr('Digite um e-mail válido.'), email.input);
+      const parsed = parsePlayerName(name.input.value);
+      if (!parsed.ok) return form.setError(nameProblemText(parsed.problem), name.input);
       const problem = passwordProblem(password.input.value, mail);
       if (problem) return form.setError(passwordProblemText(problem), password.input);
       if (!accept.checked) return form.setError(tr('Para criar a conta, aceite os Termos de Uso e a Política de Privacidade.'), accept);
-      const r = await this.run(form, 'register', (c) => c.register({ email: mail, password: password.input.value.normalize('NFC'), locale: getLocale() }), email.input);
-      if (r?.ok) this.dispatch({ type: 'code_sent', email: mail });
+      const r = await this.run(form, 'register', (c) => c.register({ email: mail, password: password.input.value.normalize('NFC'), name: parsed.name, locale: getLocale() }), email.input);
+      if (!r) return;
+      if (r.ok) return this.dispatch({ type: 'code_sent', email: mail, name: parsed.name });
+      // Os erros do nome vão para o campo do nome (o `run` já mostrou o texto genérico do código).
+      if (r.code === 'name_taken') form.setError(tr('Esse nome já está em uso. Escolha outro.'), name.input);
+      else if (r.code === 'name_invalid' || r.code === 'name_blocked') form.setError(worldErrorText(r.code, 'register'), name.input);
     };
     form.el.append(
       email.label,
+      name.label,
       password.label,
       this.privacySummary(),
       para('ui-world__truth', tr('O World só funciona se os prédios forem verdadeiros. Mandar dados inventados quebra os termos e bane a conta.')),
@@ -863,6 +865,9 @@ export class WorldSettingsGroup {
         ),
       );
     } else {
+      // O nome de jogador escolhido no cadastro, reservado enquanto o personagem não existe.
+      const reserved = s?.account?.reservedName;
+      if (reserved) out.push(para('ui-world__reserved', ...rich(tr('Seu nome de jogador: {0} (reservado)'), [h('strong', { class: 'ui-world__player-name', text: reserved })])));
       out.push(
         para('ui-set__hint', approved ? tr('Crie o seu personagem para entrar no mundo.') : tr('Enquanto espera, já dá para criar o seu personagem.')),
         h('div', { class: 'ui-world__actions' }, h('button', { class: 'ui-btn ui-btn--primary', type: 'button', text: tr('Criar meu personagem'), attrs: { 'data-world': 'create-character' }, on: { click: () => this.go('character') } })),
@@ -943,7 +948,14 @@ export class WorldSettingsGroup {
     const name = h('input', { class: 'ui-char__name', type: 'text', attrs: { maxlength: PLAYER_NAME_LIMITS.max * 2, autocomplete: 'nickname', spellcheck: 'false', 'aria-describedby': 'ui-world-name-hint' } });
     // Nome trocado à força pela moderação ("???"): o campo começa vazio e recebe o foco.
     const rename = player?.mustRename === true;
-    name.value = rename ? '' : (player?.name ?? '');
+    // Criando com o nome reservado no cadastro: o campo mostra a reserva e não se edita (o pedido vai sem `name`; o
+    // servidor do mundo usa a reserva). Conta antiga, sem reserva, escolhe o nome aqui, como antes.
+    const reserved = !player ? this.status?.account?.reservedName : undefined;
+    name.value = rename ? '' : (player?.name ?? reserved ?? '');
+    if (reserved) {
+      name.readOnly = true;
+      name.classList.add('is-fixed');
+    }
     if (rename) requestAnimationFrame(() => name.isConnected && name.focus());
     const roll = h('button', {
       class: 'ui-btn ui-btn--sm',
@@ -1005,12 +1017,12 @@ export class WorldSettingsGroup {
       const a = fields.value;
       if (!a) return;
       const chosen = isIntroId(intro.value) ? (intro.value as IntroId) : null;
-      const problem = characterProblem({ name: name.value, traits, intro: chosen });
+      const problem = characterProblem({ name: reserved ?? name.value, traits, intro: chosen });
       if (problem?.field === 'name') return form.setError(nameProblemText(problem.problem), name);
       if (problem?.field === 'traits') return form.setError(tr('Escolha 2 ou 3 traços de personalidade.'), chips.get(TRAIT_IDS[0]));
       if (problem || !chosen) return form.setError(tr('Escolha uma frase de apresentação.'), intro);
       const parsed = parsePlayerName(name.value);
-      const body = { name: parsed.ok ? parsed.name : name.value, look, parts: fullParts(a), traits: [...traits], intro: chosen };
+      const body = { ...(reserved ? {} : { name: parsed.ok ? parsed.name : name.value }), look, parts: fullParts(a), traits: [...traits], intro: chosen };
       const r = await this.run(form, 'character', (c) => c.saveCharacter(body), name);
       if (!r?.ok) return;
       this.dispatch({ type: 'go', screen: 'home' });
@@ -1025,11 +1037,13 @@ export class WorldSettingsGroup {
         fields.preview,
         h('div', { class: 'ui-char__head' }, h('label', { class: 'ui-char__label' }, h('span', { text: tr('Nome de jogador') }), name), roll),
       ),
-      para(
-        'ui-set__hint',
-        h('span', { attrs: { id: 'ui-world-name-hint' } }, tr('De 3 a 20 caracteres: letras de um só alfabeto, números, espaço, _ - e . É o seu nome no mundo e não pode repetir o de ninguém.')),
-        rename ? ` ${tr('Desta vez o nome novo entra na hora, sem esperar os 30 dias.')}` : player ? ` ${tr('Dá para trocar uma vez a cada 30 dias.')}` : '',
-      ),
+      reserved
+        ? para('ui-set__hint', h('span', { attrs: { id: 'ui-world-name-hint' } }, tr('Escolhido no cadastro. Dá para trocar depois, uma vez a cada 30 dias.')))
+        : para(
+            'ui-set__hint',
+            h('span', { attrs: { id: 'ui-world-name-hint' } }, tr('De 3 a 20 caracteres: letras de um só alfabeto, números, espaço, _ - e . É o seu nome no mundo e não pode repetir o de ninguém.')),
+            rename ? ` ${tr('Desta vez o nome novo entra na hora, sem esperar os 30 dias.')}` : player ? ` ${tr('Dá para trocar uma vez a cada 30 dias.')}` : '',
+          ),
       lookSeg.row,
       fields.groups,
       h(

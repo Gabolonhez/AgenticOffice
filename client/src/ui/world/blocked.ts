@@ -1,4 +1,4 @@
-// Configurações › Habblaud World › Bloqueados (Fase 5): quem esta conta bloqueou (pelo cartão da pessoa, na cidade) e
+// Habblaud World › Bloqueados (Fase 5): quem esta conta bloqueou (pelo cartão da pessoa, na cidade) e
 // "Desbloquear" (POST /api/world/unblock, pela conexão com o mundo). Bloquear vale nos dois sentidos: um não vê o outro
 // na rua, nos prédios, nos cumprimentos e nos carimbos. A lista vem do /v1/me (o status relido ao abrir a tela).
 import { tr } from '../../../../shared/i18n';
