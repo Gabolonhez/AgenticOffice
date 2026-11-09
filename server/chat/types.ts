@@ -36,6 +36,8 @@ export interface TurnSpec {
   denyPush?: boolean;
   /** Ferramentas internas da CLI ('' = nenhuma: o Jarvis só tem as do MCP do escritório, onde fica o portão). */
   tools?: string;
+  /** Imagens da mensagem (tipo conferido pelos bytes). Só o driver do Claude usa: vão como blocos de imagem no stdin. */
+  images?: ReadonlyArray<{ type: string; data: Buffer }>;
 }
 
 export interface CliInvocation { args: string[]; stdin?: string; env: Record<string, string | undefined> }

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { claudeArgs, claudeDriver, MCP_SERVER_TIMEOUT_MS, PERMISSION_TOOL } from './claude';
+import { claudeArgs, claudeDriver, claudeStdin, MCP_SERVER_TIMEOUT_MS, PERMISSION_TOOL } from './claude';
 import type { ChatEvent, TurnSpec } from '../types';
 
 const fx = (n: string) => readFileSync(join(__dirname, '..', 'fixtures', n), 'utf8').split(/\r?\n/).filter(Boolean);
@@ -79,5 +79,16 @@ describe('chat: Claude sem ferramentas internas (Jarvis)', () => {
     expect(args[args.indexOf('--tools') + 1]).toBe('');
     expect(args).toContain('--strict-mcp-config');
     expect(claudeArgs({ folder: 'C:\j', prompt: 'oi', first: true, sessionId: 's', permission: 'ask' })).not.toContain('--tools');
+  });
+});
+
+describe('chat: driver do Claude com imagens', () => {
+  it('sem imagem o stdin é o texto; com imagem vira uma mensagem stream-json com os blocos', () => {
+    expect(claudeStdin(base)).toBe('-oi');
+    expect(claudeArgs(base)).not.toContain('--input-format');
+    const spec: TurnSpec = { ...base, images: [{ type: 'image/png', data: Buffer.from('png') }] };
+    expect(claudeArgs(spec)).toEqual(expect.arrayContaining(['--input-format', 'stream-json']));
+    const msg = JSON.parse(claudeStdin(spec));
+    expect(msg).toEqual({ type: 'user', message: { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: Buffer.from('png').toString('base64') } }, { type: 'text', text: '-oi' }] } });
   });
 });

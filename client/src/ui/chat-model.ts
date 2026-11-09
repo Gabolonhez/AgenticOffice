@@ -38,8 +38,8 @@ export function toolLine(i: Extract<ChatItem, { kind: 'tool' }>): { title: strin
   return { title: i.input ? `${i.name}: ${i.input}` : i.name, detail: i.output ?? '', failed: !!i.error };
 }
 
-export function canSendChat(raw: string, s: ChatState): { ok: true } | { ok: false; why: string } {
-  if (!raw.trim()) return { ok: false, why: tr('Escreva uma mensagem.') };
+export function canSendChat(raw: string, s: ChatState, hasImages = false): { ok: true } | { ok: false; why: string } {
+  if (!raw.trim() && !hasImages) return { ok: false, why: tr('Escreva uma mensagem.') };
   if (s.blocked) return { ok: false, why: chatStatusText(s) };
   if (s.phase !== 'idle') return { ok: false, why: tr('Espere a rodada terminar ou toque em Parar.') };
   return { ok: true };

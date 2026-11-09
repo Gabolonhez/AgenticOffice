@@ -10,6 +10,15 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Imagens nas mensagens aos agentes e ao Jarvis
+
+- **Anexar ou colar:** a caixa de mensagem dos agentes, o chat dos agentes abertos pelo escritório e o Jarvis (gaveta e
+  tela cheia) ganham o botão 📎 e aceitam imagem colada (Ctrl+V). Até 4 imagens PNG, JPEG, GIF ou WebP por mensagem; o
+  navegador reduz as grandes (maior lado 1568 px) antes de mandar. Dá para mandar só a imagem, sem texto.
+- **Como chega:** no Jarvis e nos agentes Claude do chat, a imagem vai direto para o modelo (o Jarvis continua sem
+  ferramentas). Nas sessões do Claude Code e do Codex e nos agentes Codex/Antigravity do chat, ela é gravada em
+  `~/.habblaud/attachments/` e o caminho vai no fim da mensagem. Com o servidor no Docker, as sessões não recebem imagem.
+
 ### Chaves sensíveis da pasta fora do git config (reconfigure)
 
 - **Onde ficam:** `vboards.autoMerge`, `ship`, `base`, `remote`, `deploy`, `ciMinutes`, `riskPaths`, `riskLines`,

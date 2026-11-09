@@ -72,6 +72,8 @@ describe('caixa de mensagem (peças puras)', () => {
     expect(messageText('  oi\n  tudo bem?  \n\n')).toBe('  oi\n  tudo bem?');
     expect(canSend('oi')).toBe(true);
     expect(canSend(' \n\t ')).toBe(false);
+    expect(canSend('', true)).toBe(true);
+    expect(canSend('x'.repeat(30_000), true)).toBe(false);
     expect(canSend('x'.repeat(20_000))).toBe(true);
     expect(canSend('x'.repeat(20_001))).toBe(false);
     // Espaços no fim não contam para o limite (são cortados antes).

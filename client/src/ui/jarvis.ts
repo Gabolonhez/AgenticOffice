@@ -7,6 +7,7 @@ import type { ChatItem, ChatView } from '../../../shared/chat';
 import { tr } from '../../../shared/i18n';
 import { mergeItems } from './chat-model';
 import type { UiComponent, UiContext } from './context';
+import { ImageAttach } from './images';
 import { h, iconButton, setHidden, setText } from './dom';
 import { ICONS } from './icons';
 import { historyTail, phaseLabel, stepVoice, VOICE_OFF, type VoiceEvent, type VoicePhase, type VoiceUi } from './jarvis-model';
@@ -67,6 +68,7 @@ export class JarvisOverlay implements UiComponent {
   private readonly card: PermissionCard;
   private readonly stopBtn: HTMLButtonElement;
   private readonly input: HTMLInputElement;
+  private readonly attach = new ImageAttach();
   private readonly closeBtn: HTMLButtonElement;
 
   constructor(private readonly ctx: UiContext) {
@@ -86,7 +88,8 @@ export class JarvisOverlay implements UiComponent {
     stopIcon.innerHTML = ICONS.stopRec;
     this.stopBtn = h('button', { class: 'ui-btn ui-jarvis__stop', type: 'button', attrs: { 'aria-keyshortcuts': 'Space' }, on: { click: () => this.interrupt() } }, stopIcon, h('span', { text: tr('Interromper') }), h('kbd', { class: 'ui-kbd', text: tr('Espaço') }));
     this.input = h('input', { class: 'ui-jarvis__input', type: 'text', attrs: { maxlength: 8000, placeholder: tr('Ou escreva para o Jarvis…'), 'aria-label': tr('Mensagem para o Jarvis') } }) as HTMLInputElement;
-    const form = h('form', { class: 'ui-jarvis__form', on: { submit: (e: Event) => (e.preventDefault(), void this.sendTyped()) } }, this.input, h('button', { class: 'ui-btn', type: 'submit', text: tr('Enviar') }));
+    const form = h('form', { class: 'ui-jarvis__form', on: { submit: (e: Event) => (e.preventDefault(), void this.sendTyped()) } }, this.input, this.attach.button, h('button', { class: 'ui-btn', type: 'submit', text: tr('Enviar') }));
+    this.input.addEventListener('paste', this.attach.onPaste);
     const drawerBtn = h('button', { class: 'ui-btn ui-jarvis__link', type: 'button', text: tr('Abrir a conversa completa'), on: { click: () => this.toDrawer() } });
     this.closeBtn = iconButton(ICONS.close, tr('Fechar (Esc)'), () => this.close(), 'ui-jarvis__close');
     const mark = h('span', { class: 'ui-jarvis__mark', attrs: { 'aria-hidden': 'true' } });
@@ -103,7 +106,7 @@ export class JarvisOverlay implements UiComponent {
         h('section', { class: 'ui-jarvis__stage' }, this.orbBtn, this.stateEl, this.heardEl, this.saidEl, this.warnEl),
         h('aside', { class: 'ui-jarvis__side' }, this.card.el, h('h3', { class: 'ui-jarvis__sub', text: tr('Últimas falas') }), this.history),
       ),
-      h('footer', { class: 'ui-jarvis__foot' }, this.stopBtn, form, drawerBtn),
+      h('footer', { class: 'ui-jarvis__foot' }, this.stopBtn, form, this.attach.el, drawerBtn),
     );
     this.paintVoice();
   }
@@ -244,12 +247,14 @@ export class JarvisOverlay implements UiComponent {
 
   private async sendTyped(): Promise<void> {
     const text = this.input.value.trim();
-    if (!text || this.ctx.store.mock) return;
+    const images = this.attach.images();
+    if ((!text && !images.length) || this.attach.busy || this.ctx.store.mock) return;
     try {
-      const res = await fetch('/api/chat/jarvis', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+      const res = await fetch('/api/chat/jarvis', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, ...(images.length ? { images } : {}) }) });
       const body = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(body.error ?? tr('erro {0}', [res.status]));
       this.input.value = '';
+      this.attach.clear();
       setText(this.warnEl, '');
     } catch (err) {
       setText(this.warnEl, (err as Error).message);

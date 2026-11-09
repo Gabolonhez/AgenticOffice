@@ -2,6 +2,7 @@
 // mantém o modelo do escritório e transmite via SSE. Sem dependências de runtime.
 //   npm run dev    -> tsx server/index.ts --dev (Vite em middleware mode, HMR no mesmo servidor)
 //   npm start      -> node dist/server/index.js (serve dist/client)
+import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import { join } from 'node:path';
 import { codexDirsRefused, isDefaultDir } from './accounts/detect';
@@ -48,7 +49,7 @@ import { getLocale, tr } from '../shared/i18n';
 import type { WorldLocale } from '../shared/world/protocol';
 import { createCliRunner, createOpener, SpawnService } from './spawn/spawn';
 import { runnableClaudeBin } from './claude-bin';
-import { AttachmentStore } from './spawn/attachments';
+import { AttachmentStore, attachmentsRoot, writeAttachments } from './spawn/attachments';
 import { recentFolders } from './spawn/folders';
 import { isDemoId } from '../shared/timeline';
 import { DictationService } from './dictation/dictation';
@@ -314,6 +315,8 @@ const messages = config.messages
         run: codexBin ? createCodexQueueRunner(codexBin) : undefined,
         homeOf: (account) => accounts.entriesOf('codex').find((e) => e.id === account)?.detected.configDir,
       },
+      // No Docker o caminho gravado no contêiner não existe para a sessão no host.
+      ...(config.inDocker ? {} : { saveImages: (files) => writeAttachments(attachmentsRoot(), randomUUID(), files) }),
     })
   : undefined;
 late.messages = messages;

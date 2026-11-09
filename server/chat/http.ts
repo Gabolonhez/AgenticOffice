@@ -8,6 +8,7 @@ import { tr } from '../../shared/i18n';
 import type { DaySummary, SummaryMode } from '../../shared/summary';
 import type { Provider } from '../../shared/types';
 import { HttpError, readJson, sendJson } from '../http/app';
+import { IMAGES_BODY_MAX } from '../spawn/attachments';
 import { ptyRequestProblem } from '../http/pty';
 import { pinError, type ApprovalPin } from '../permissions/pin';
 import type { ShipApproval } from '../../shared/runs';
@@ -200,7 +201,7 @@ export function createChatRoutes(d: ChatRouteDeps): ChatRoutes {
       }
       if (method !== 'POST') return notAllowed(res, 'POST');
       if (action === 'messages') {
-        const r = d.chat.send(id, await readJson(req));
+        const r = d.chat.send(id, await readJson(req, IMAGES_BODY_MAX));
         const status = { ok: 202, busy: 409, blocked: 409, invalid: 400, 'not-found': 404 }[r];
         return sendJson(res, status, r === 'ok' ? {} : { error: r });
       }

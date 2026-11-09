@@ -25,6 +25,9 @@ export function claudeArgs(spec: TurnSpec): string[] {
   if (spec.denyPush) args.push('--disallowedTools', 'Bash(git push:*)');
   // `--tools ''` desliga todas as internas (Bash, Edit, Read...); as do MCP continuam.
   if (spec.tools !== undefined) args.push('--tools', spec.tools);
+  // Com imagem, o pedido vai como mensagem stream-json (blocos de imagem): o modelo vê sem precisar da ferramenta Read
+  // (o Jarvis roda com `--tools ''`).
+  if (spec.images?.length) args.push('--input-format', 'stream-json');
   // MCP do escritório sempre (ferramentas office_*); no automático sem strict, para os MCPs do usuário continuarem.
   if (spec.mcp) {
     if (spec.permission === 'ask') args.push('--strict-mcp-config');
@@ -33,6 +36,14 @@ export function claudeArgs(spec: TurnSpec): string[] {
     if (spec.permission === 'ask') args.push('--permission-prompt-tool', PERMISSION_TOOL);
   }
   return args;
+}
+
+/** O stdin da rodada: o texto puro, ou (com imagens) uma linha stream-json com as imagens e o texto. */
+export function claudeStdin(spec: TurnSpec): string {
+  if (!spec.images?.length) return spec.prompt;
+  const content: unknown[] = spec.images.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.type, data: i.data.toString('base64') } }));
+  if (spec.prompt.trim()) content.push({ type: 'text', text: spec.prompt });
+  return `${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`;
 }
 
 /** O campo que diz o que a ferramenta fez (comando, arquivo, padrão, URL), ou o input inteiro. */
@@ -113,7 +124,7 @@ export const claudeDriver: ChatDriver = {
   provider: 'claude',
   invocation(spec) {
     // office_ask_agent espera até 2 h a resposta de outro agente (mais o cartão de aprovação).
-    return { args: claudeArgs(spec), stdin: spec.prompt, env: { CLAUDE_CONFIG_DIR: spec.accountDir, MCP_TOOL_TIMEOUT: String(MCP_TOOL_TIMEOUT_MS) } };
+    return { args: claudeArgs(spec), stdin: claudeStdin(spec), env: { CLAUDE_CONFIG_DIR: spec.accountDir, MCP_TOOL_TIMEOUT: String(MCP_TOOL_TIMEOUT_MS) } };
   },
   parser: claudeParser,
 };

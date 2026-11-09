@@ -25,6 +25,7 @@ import {
 } from './composer-model';
 import type { UiContext } from './context';
 import { DictationButton, dictationAvailable, insertDictation } from './dictation';
+import { ImageAttach } from './images';
 import { h, setAttr, setHidden, setText, setTitle } from './dom';
 import { access } from '../net/access';
 import { tr } from '../../../shared/i18n';
@@ -59,6 +60,7 @@ export class MessageComposer {
   private tip: HTMLElement | null;
   private status: HTMLElement;
   private dictate: DictationButton;
+  private attach: ImageAttach;
   /** Linha do ditado (gravando, transcrevendo, idioma, erro). */
   private dictStatus: HTMLElement;
   private dictTimer: ReturnType<typeof setTimeout> | null = null;
@@ -81,6 +83,8 @@ export class MessageComposer {
       this.resize();
       this.syncButton();
     });
+    this.attach = new ImageAttach(() => this.syncButton());
+    this.box.addEventListener('paste', this.attach.onPaste);
     this.box.addEventListener('focus', () => this.resize());
     this.box.addEventListener('keydown', (e) => this.onKey(e));
     this.sendBtn = h(
@@ -104,7 +108,7 @@ export class MessageComposer {
     setHidden(this.dictate.el, true);
     this.row = h('div', { class: `ui-msg__row${term ? ' ui-term__prompt ui-term__prompt--mic' : ''}` });
     if (term) this.row.append(h('span', { class: 'ui-term__caret', text: '>', attrs: { 'aria-hidden': 'true' } }));
-    this.row.append(this.box, this.dictate.el, this.sendBtn);
+    this.row.append(this.box, this.attach.button, this.dictate.el, this.sendBtn);
     // Clique na "linha do prompt" (fora do botão) põe o cursor na caixa, como num terminal.
     this.row.addEventListener('mousedown', (e) => {
       if (e.target === this.row && !this.box.disabled) {
@@ -115,7 +119,7 @@ export class MessageComposer {
     this.hint = h('p', { class: 'ui-msg__hint', hidden: true });
     this.status = h('p', { class: 'ui-msg__status', role: 'status', hidden: true, attrs: { 'aria-live': 'polite' } });
     this.tip = term ? null : h('p', { class: 'ui-msg__tip', text: composerTip() });
-    this.el = h('div', { class: `ui-msg ui-msg--${variant}` }, this.hint, this.row, this.dictStatus, this.status, this.tip);
+    this.el = h('div', { class: `ui-msg ui-msg--${variant}` }, this.hint, this.row, this.attach.el, this.dictStatus, this.status, this.tip);
   }
 
   /**
@@ -228,7 +232,7 @@ export class MessageComposer {
   }
 
   private syncButton(): void {
-    this.sendBtn.disabled = this.mode.kind !== 'ready' || !canSend(this.box.value) || this.states.get(this.agentId)?.phase === 'sending';
+    this.sendBtn.disabled = this.mode.kind !== 'ready' || !canSend(this.box.value, this.attach.images().length > 0) || this.attach.busy || this.states.get(this.agentId)?.phase === 'sending';
   }
 
   /** Cresce com o texto até o limite do CSS (~6 linhas; depois rola). Escondida, mede quando aparecer. */
@@ -248,12 +252,13 @@ export class MessageComposer {
   private async send(): Promise<void> {
     const agentId = this.agentId;
     const raw = this.box.value;
-    if (this.mode.kind !== 'ready' || !canSend(raw) || this.states.get(agentId)?.phase === 'sending') return;
+    const images = this.attach.images();
+    if (this.mode.kind !== 'ready' || !canSend(raw, images.length > 0) || this.attach.busy || this.states.get(agentId)?.phase === 'sending') return;
     this.providers.set(agentId, this.provider);
     this.setState(agentId, { phase: 'sending', at: Date.now() });
     let r: { message: OutboxMessage } | { error: string };
     try {
-      r = await this.ctx.store.sendMessage(agentId, messageText(raw));
+      r = await this.ctx.store.sendMessage(agentId, messageText(raw), images);
     } catch {
       r = { error: OFFLINE_ERROR };
     }
@@ -262,6 +267,7 @@ export class MessageComposer {
       this.setState(agentId, { phase: 'rejected', error: r.error, at: Date.now() });
       return;
     }
+    this.attach.clear();
     // Na fila: a caixa esvazia (a não ser que você tenha continuado a escrever enquanto o envio ia).
     if ((this.drafts.get(agentId) ?? '') === raw) {
       this.drafts.delete(agentId);

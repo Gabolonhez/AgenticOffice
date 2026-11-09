@@ -4572,4 +4572,19 @@ export const FR: Readonly<Record<string, string>> = {
   "Sem a pasta de dados do Habblaud: as chaves de subir, merge e loja não podem ser gravadas.": "Pas de dossier de données Habblaud : les clés d'envoi, de merge et de boutique ne peuvent pas être enregistrées.",
   "Triagem automática: use verdadeiro ou falso.": "Tri automatique : utilisez vrai ou faux.",
   "Triagem automática das ideias novas do VBoards (a cada 2 min; vem desligada)": "Tri automatique des nouvelles idées VBoards (toutes les 2 min ; désactivé par défaut)",
+
+  // client/src/ui/images.ts
+  "{0}: só PNG, JPEG, GIF e WebP": "{0} : seulement PNG, JPEG, GIF et WebP",
+  "{0}: imagem grande demais": "{0} : image trop grande",
+  "{0}: não deu para ler a imagem": "{0} : impossible de lire l'image",
+  "Anexar imagem": "Joindre une image",
+  "Remover imagem": "Retirer l'image",
+  "No máximo {0} imagens por mensagem": "Au plus {0} images par message",
+  // imagens nas mensagens (server/spawn/attachments.ts, chat, mensagens)
+  "Não consegui gravar a imagem: {0}": "Impossible d'enregistrer l'image : {0}",
+  "imagens não chegam aos agentes com o servidor no Docker": "les images n'arrivent pas aux agents quand le serveur tourne dans Docker",
+  "imagens inválidas": "images invalides",
+  "no máximo {0} imagens por mensagem": "au maximum {0} images par message",
+  "só imagens PNG, JPEG, GIF ou WebP": "uniquement des images PNG, JPEG, GIF ou WebP",
+  "a imagem passa de {0} MB": "l'image dépasse {0} Mo",
 };

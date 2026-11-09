@@ -10,6 +10,7 @@
 //   POST /api/codex/bridge/ack  (auxiliar) {results: [{id, ok, error?}]}: 200 {ok: true}
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { HttpError, readJson, sendJson } from '../http/app';
+import { IMAGES_BODY_MAX } from '../spawn/attachments';
 import { InvalidRequest, MAX_OPEN, type MessageRegistry } from './registry';
 import { tr } from '../../shared/i18n';
 
@@ -29,7 +30,7 @@ function fail(res: ServerResponse, err: unknown): void {
 
 export function createMessageRoutes(registry: MessageRegistry): (req: IncomingMessage, res: ServerResponse, path: string) => void {
   const send = async (req: IncomingMessage, res: ServerResponse) => {
-    const r = registry.send(await readJson(req));
+    const r = registry.send(await readJson(req, IMAGES_BODY_MAX));
     if ('message' in r) return sendJson(res, 201, r.message);
     switch (r.error) {
       case 'not-found':

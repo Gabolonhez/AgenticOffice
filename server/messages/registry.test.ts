@@ -29,7 +29,7 @@ const SESSION = 'sess-1';
 const OTHER = 'acc:2';
 const SUB = `${SESSION}:a1b2c3`;
 
-function setup() {
+function setup(extra: Partial<ConstructorParameters<typeof MessageRegistry>[0]> = {}) {
   let now = 1_000_000;
   const clock = { now: () => now, advance: (ms: number) => (now += ms) };
   let registry: MessageRegistry | undefined;
@@ -50,6 +50,7 @@ function setup() {
     demoAgent: (id) => office.demoAgent(id),
     demoDeliver: (id, text) => office.deliverDemoMessage(id, text),
     now: clock.now,
+    ...extra,
   });
   return { office, registry, clock };
 }
@@ -326,5 +327,21 @@ describe('MessageRegistry: demo', () => {
     office.setDemo(false);
     registry.tick();
     expect(registry.get(id)).toMatchObject({ status: 'failed', error: ERR_GONE });
+  });
+});
+
+describe('MessageRegistry: imagens', () => {
+  const PNG = Buffer.from('89504e470d0a1a0a0000', 'hex').toString('base64');
+  it('grava as imagens e manda o caminho no fim do texto; sem quem grave (Docker), recusa', () => {
+    const saved: string[] = [];
+    const { registry } = setup({ saveImages: (files) => files.map((f) => (saved.push(f.name), `/anexos/${f.name}`)) });
+    registry.inbox({ session: SESSION, account: 'acc' });
+    sent(registry.send({ agentId: MAIN, text: '', images: [{ name: 'print.png', data: PNG }] }));
+    expect(saved).toEqual(['print.png']);
+    expect(registry.inbox({ session: SESSION, account: 'acc' })[0].text).toContain('- /anexos/print.png');
+
+    const docker = setup().registry;
+    docker.inbox({ session: SESSION, account: 'acc' });
+    expect(docker.send({ agentId: MAIN, text: 'oi', images: [{ name: 'print.png', data: PNG }] })).toMatchObject({ error: 'unavailable' });
   });
 });

@@ -13271,3 +13271,11 @@ html.has-jarvis {
   overflow-wrap: anywhere;
   font-size: 12px;
 }
+
+/* Imagens anexadas (ui/images.ts) */
+.ui-imgs__strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+.ui-imgs__thumb { position: relative; display: inline-block; }
+.ui-imgs__thumb img { display: block; width: 48px; height: 48px; object-fit: cover; border-radius: 4px; }
+.ui-imgs__rm { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 0; cursor: pointer; line-height: 18px; background: #000c; color: #fff; }
+.ui-imgs__err { margin: 2px 0; font-size: 12px; color: #e5736b; }
+.ui-imgs__btn { padding-inline: 8px; }

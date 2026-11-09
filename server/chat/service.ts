@@ -19,6 +19,7 @@ import { agyDriver } from './drivers/agy';
 import { claudeDriver, claudeMcpConfig } from './drivers/claude';
 import { codexDriver, defaultCodexHome, prepareCodexHome } from './drivers/codex';
 import { wrapUntrusted } from '../jarvis/prompt';
+import { attachmentsRoot, parseImages, promptWithAttachments, writeAttachments, type Attachment } from '../spawn/attachments';
 import { RoleStore } from './roles';
 import { ChatStore, type ChatRecord } from './store';
 import { noPushEnv } from './worktree';
@@ -104,7 +105,7 @@ interface Runtime {
   turnStart: number;
   token: string;
   /** Mensagens de outros agentes esperando a rodada atual terminar (deliver). */
-  queue: Array<{ text: string; from: ChatFrom; raw?: boolean; done: (r: DeliverResult) => void }>;
+  queue: Array<{ text: string; from: ChatFrom; raw?: boolean; images?: Attachment[]; done: (r: DeliverResult) => void }>;
   /** Quem espera o fim da rodada atual (a mensagem entregue que ela está rodando). */
   waiter?: (r: DeliverResult) => void;
 }
@@ -312,10 +313,11 @@ export class ChatService {
     const rt = this.agents.get(agentId);
     if (!rt) return 'not-found';
     const text = typeof (raw as { text?: unknown })?.text === 'string' ? (raw as { text: string }).text.trim() : '';
-    if (!text || text.length > CHAT_TEXT_MAX) return 'invalid';
+    const images = parseImages((raw as { images?: unknown })?.images);
+    if ('error' in images || (!text && !images.length) || text.length > CHAT_TEXT_MAX) return 'invalid';
     if (rt.proc || rt.rec.running) return 'busy';
     if (overLimit(rt.rec.spend, rt.rec.limits)) return 'blocked';
-    this.runTurn(rt, text);
+    this.runTurn(rt, text, undefined, undefined, images);
     return 'ok';
   }
 
@@ -323,12 +325,12 @@ export class ChatService {
    * Mensagem de outro agente (já aprovada pelo usuário): roda agora se o agente estiver livre, senão espera na fila.
    * `result` resolve no fim da rodada dela; `cancel` tira da fila (se já roda, só deixa de esperar).
    */
-  deliver(agentId: string, text: string, from: ChatFrom, o: { raw?: boolean } = {}): { result: Promise<DeliverResult>; cancel: () => void } | undefined {
+  deliver(agentId: string, text: string, from: ChatFrom, o: { raw?: boolean; images?: Attachment[] } = {}): { result: Promise<DeliverResult>; cancel: () => void } | undefined {
     const rt = this.agents.get(agentId);
     if (!rt) return undefined;
     let entry!: Runtime['queue'][number];
     // raw: o texto já vem pronto (o Jarvis embrulha o que não é da página), sem o aviso de "outro agente".
-    const result = new Promise<DeliverResult>((done) => (entry = { text, from, ...(o.raw ? { raw: true } : {}), done }));
+    const result = new Promise<DeliverResult>((done) => (entry = { text, from, ...(o.raw ? { raw: true } : {}), ...(o.images?.length ? { images: o.images } : {}), done }));
     rt.queue.push(entry);
     this.runQueued(rt);
     return {
@@ -597,7 +599,7 @@ export class ChatService {
         continue;
       }
       rt.waiter = q.done;
-      this.runTurn(rt, q.text, q.from, q.raw);
+      this.runTurn(rt, q.text, q.from, q.raw, q.images);
       if (rt.proc || rt.rec.running) return;
       delete rt.waiter;
       q.done(this.turnResult(rt));
@@ -614,10 +616,12 @@ export class ChatService {
     return { ok: false, error: notice && notice.kind === 'notice' ? notice.text : tr('O agente terminou sem responder.') };
   }
 
-  private runTurn(rt: Runtime, prompt: string, from?: ChatFrom, raw?: boolean): void {
+  private runTurn(rt: Runtime, prompt: string, from?: ChatFrom, raw?: boolean, images: Attachment[] = []): void {
     const { rec } = rt;
     const bin = this.bin(rec.provider);
-    this.pushItem(rt, { kind: 'user', text: prompt, ...(from ? { from } : {}) });
+    // shortcut: no chat a imagem aparece só pelo nome (o item guarda texto); miniatura pede um campo novo no ChatItem.
+    const shown = images.length ? `${prompt}${prompt ? '\n' : ''}📎 ${images.map((i) => i.name).join(', ')}` : prompt;
+    this.pushItem(rt, { kind: 'user', text: shown, ...(from ? { from } : {}) });
     if (!bin) {
       this.pushItem(rt, { kind: 'notice', level: 'error', text: tr('{0} não encontrado no PATH', [CLI_NAMES[rec.provider]]) });
       this.finishOffice(rt);
@@ -641,6 +645,17 @@ export class ChatService {
     const mcpConfigFile = mcp && rec.provider === 'claude' ? this.writeMcpConfig(rec.agentId, mcp) : undefined;
     // Agente do sistema: prompt de sistema montado agora, sem ferramentas internas, "pedir aprovação" e o MCP em qualquer provedor.
     const systemRole = rec.system ? this.deps.systemPrompt?.(rec) : undefined;
+    // Codex e Antigravity: a imagem vira arquivo e o caminho vai no texto (eles leem com as próprias ferramentas).
+    if (images.length && rec.provider !== 'claude') {
+      try {
+        prompt = promptWithAttachments(prompt, writeAttachments(attachmentsRoot(), randomUUID(), images));
+        images = [];
+      } catch (err) {
+        this.pushItem(rt, { kind: 'notice', level: 'error', text: tr('Não consegui gravar a imagem: {0}', [String((err as Error)?.message ?? err)]) });
+        this.finishOffice(rt);
+        return;
+      }
+    }
     const spec: TurnSpec = {
       folder: rec.cwd,
       // A CLI de quem recebe precisa saber que o pedido veio de outro agente (no chat, o remetente vai no item). Para o
@@ -663,6 +678,7 @@ export class ChatService {
       ...(mcpConfigFile ? { mcpConfigFile } : {}),
       ...(accountDir ? { accountDir } : {}),
       ...(rec.denyPush ? { denyPush: true } : {}),
+      ...(images.length ? { images } : {}),
     };
     const driver = DRIVERS[rec.provider];
     const inv = driver.invocation(spec);

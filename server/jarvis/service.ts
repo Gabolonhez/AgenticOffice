@@ -15,6 +15,7 @@ import type { ChatService, DeliverResult } from '../chat/service';
 import { AUDIO_MAX_BYTES } from '../dictation/dictation';
 import { createWhisperTranscriber, transcribeTimeoutMs, type Transcript, type WhisperSetup } from '../dictation/whisper';
 import { errMsg, log } from '../log';
+import type { Attachment } from '../spawn/attachments';
 import type { InboxMessage, VBoardsApi } from '../vboards/api';
 import { normJid, sendWhatsApp, WA_TEXT_MAX, type WaSettings } from '../vboards/whatsapp';
 import { jarvisPrompt, wrapUntrusted } from './prompt';
@@ -144,11 +145,12 @@ export class JarvisService {
    * Uma mensagem para o Jarvis (fila do ChatService). Da página vai como está; de fora, embrulhada como dado não
    * confiável. `ref` = o id na origem (mensagem do WhatsApp, regra do gatilho).
    */
-  say(text: string, origin: JarvisOrigin, ref = ''): { result: Promise<DeliverResult>; cancel: () => void } {
+  say(text: string, origin: JarvisOrigin, ref = '', images: Attachment[] = []): { result: Promise<DeliverResult>; cancel: () => void } {
     const id = this.ensure();
     const body = origin === 'ui' ? text : wrapUntrusted(origin, ref, text);
     const from: ChatFrom = { agentId: origin, name: originLabel(origin) };
-    const d = this.deps.chat.deliver(id, body.slice(0, CHAT_TEXT_MAX), from, { raw: true });
+    // Imagens só da página (o dono): de fora, não entram.
+    const d = this.deps.chat.deliver(id, body.slice(0, CHAT_TEXT_MAX), from, { raw: true, ...(origin === 'ui' && images.length ? { images } : {}) });
     return d ?? { result: Promise.resolve({ ok: false, error: tr('Agente não encontrado.') }), cancel: () => {} };
   }
 

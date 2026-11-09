@@ -10,6 +10,7 @@ import { enterSends } from './composer-model';
 import { pickVoice, speakable, speechLang } from './jarvis-model';
 import type { UiContext } from './context';
 import { DictationButton, dictationAvailable, insertDictation } from './dictation';
+import { ImageAttach } from './images';
 import { h, KeyedList, setHidden, setText } from './dom';
 
 /** Lê em voz alta pelo navegador, na língua da página; sem speechSynthesis, nada. */
@@ -100,12 +101,15 @@ export class ChatPanel {
   private system?: 'jarvis';
   /** Até onde as respostas já foram lidas em voz alta (-1 = ainda não carregou: o histórico não é lido). */
   private spokenSeq = -1;
+  private attach: ImageAttach;
 
   constructor(private readonly ctx: UiContext) {
     const listEl = h('div', { class: 'ui-chat__list', role: 'log', attrs: { 'aria-live': 'polite' } });
     this.list = new KeyedList<ChatItem>(listEl, { key: (i) => String(i.seq), create: itemEl, update: fillItem, animate: false });
     this.status = h('p', { class: 'ui-chat__status', role: 'status' });
     this.box = h('textarea', { class: 'ui-chat__input', attrs: { rows: '2', placeholder: tr('Mensagem para o agente (Enter envia, Shift+Enter quebra a linha)') } }) as HTMLTextAreaElement;
+    this.attach = new ImageAttach();
+    this.box.addEventListener('paste', this.attach.onPaste);
     this.box.addEventListener('keydown', (e) => {
       if (!e.ctrlKey && !e.metaKey) e.stopPropagation();
       if (enterSends(e)) {
@@ -152,7 +156,8 @@ export class ChatPanel {
       this.jarvisRow,
       this.limitRow,
       // No celular a caixa fica presa no rodapé da gaveta, como a das mensagens (styles.css, .ui-chat__compose).
-      h('div', { class: 'ui-chat__row ui-chat__compose' }, this.box, this.dictate.el, this.sendBtn),
+      h('div', { class: 'ui-chat__row ui-chat__compose' }, this.box, this.attach.button, this.dictate.el, this.sendBtn),
+      this.attach.el,
       this.error,
     );
     this.paint();
@@ -232,13 +237,15 @@ export class ChatPanel {
   private async send(): Promise<void> {
     const text = this.box.value;
     // O Jarvis tem fila: manda mesmo com a rodada em andamento.
-    const ok = canSendChat(text, this.system === 'jarvis' ? { ...this.state, phase: 'idle' } : this.state);
+    const images = this.attach.images();
+    const ok = canSendChat(text, this.system === 'jarvis' ? { ...this.state, phase: 'idle' } : this.state, images.length > 0);
     if (!ok.ok) return setText(this.error, ok.why);
     setText(this.error, '');
     // O Jarvis recebe pela rota dele (fila, origem "página"): ocupado não recusa a mensagem.
-    const { status, data } = this.system === 'jarvis' ? await call('/api/chat/jarvis', 'POST', { text: text.trim() }) : await call(this.url('/messages'), 'POST', { text: text.trim() });
+    const { status, data } = this.system === 'jarvis' ? await call('/api/chat/jarvis', 'POST', { text: text.trim(), images }) : await call(this.url('/messages'), 'POST', { text: text.trim(), images });
     if (status === 202) {
       this.box.value = '';
+      this.attach.clear();
       this.state = { ...this.state, phase: 'thinking' };
       this.paint();
       this.restartPoll();

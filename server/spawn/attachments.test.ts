@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { tempDir } from '../test/fixtures';
-import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_SPAWN, AttachmentStore, parseAttachment, promptWithAttachments, safeFileName, writeAttachments } from './attachments';
+import { ATTACHMENT_MAX_BYTES, ATTACHMENTS_PER_SPAWN, AttachmentStore, IMAGES_PER_MESSAGE, parseAttachment, parseImages, promptWithAttachments, safeFileName, writeAttachments } from './attachments';
 
 const b64 = (s: string) => Buffer.from(s).toString('base64');
 
@@ -80,5 +80,19 @@ describe('anexos do Novo agente', () => {
     expect(store.put(file(6))).toHaveProperty('error');
     store.release(6);
     expect(store.put(file(6))).toEqual({ id: 'a2' });
+  });
+});
+
+describe('imagens de uma mensagem', () => {
+  const PNG = Buffer.from('89504e470d0a1a0a0000', 'hex').toString('base64');
+  it('aceita imagens e confere o tipo pelos bytes, não pelo declarado', () => {
+    expect(parseImages(undefined)).toEqual([]);
+    const r = parseImages([{ name: 'print.jpg', type: 'image/jpeg', data: PNG }]);
+    expect(r).toMatchObject([{ name: 'print.jpg', type: 'image/png' }]);
+  });
+  it('recusa o que não é imagem, lista inválida e imagens demais', () => {
+    expect(parseImages([{ name: 'a.txt', type: 'image/png', data: Buffer.from('oi').toString('base64') }])).toHaveProperty('error');
+    expect(parseImages('x')).toHaveProperty('error');
+    expect(parseImages(Array.from({ length: IMAGES_PER_MESSAGE + 1 }, () => ({ name: 'a.png', data: PNG })))).toHaveProperty('error');
   });
 });

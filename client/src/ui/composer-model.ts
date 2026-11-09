@@ -51,9 +51,9 @@ export function messageText(raw: string): string {
   return raw.replace(/\s+$/, '');
 }
 
-export function canSend(raw: string): boolean {
+export function canSend(raw: string, hasImages = false): boolean {
   const text = messageText(raw);
-  return text.trim().length > 0 && text.length <= MESSAGE_MAX;
+  return (text.trim().length > 0 || hasImages) && text.length <= MESSAGE_MAX;
 }
 
 /** Enter manda; Shift+Enter (e Alt+Enter) quebram a linha; Enter compondo um acento (IME) não conta. */

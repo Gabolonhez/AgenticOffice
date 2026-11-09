@@ -23,6 +23,7 @@ import { describeMessage, MESSAGE_MAX } from '../../shared/messages';
 import type { Activity, AgentInfo, InboxMessage, OutboxMessage } from '../../shared/types';
 import { errMsg, log } from '../log';
 import type { CodexQueueResult, CodexQueueRunner } from './codex';
+import { parseImages, promptWithAttachments, type Attachment } from '../spawn/attachments';
 import { tr } from '../../shared/i18n';
 
 /** Sessão que perguntou pela caixa de entrada há até este tempo: recebe mensagens (canMessage). */
@@ -82,6 +83,8 @@ export interface MessageRegistryOptions {
   demoDeliver?: (agentId: string, text: string) => boolean;
   /** Mensagens aos agentes do Codex; ausente = eles não recebem. */
   codex?: CodexDeliveryOptions;
+  /** Grava as imagens de uma mensagem e devolve os caminhos (vão no fim do texto); ausente = não aceita imagens (Docker). */
+  saveImages?: (files: Attachment[]) => string[];
   now?: () => number;
   /** Intervalo do relógio interno (start). */
   tickMs?: number;
@@ -156,14 +159,16 @@ function unavailableReason(a: AgentInfo, reachable: boolean): string | undefined
   return undefined;
 }
 
-/** Corpo de POST /api/messages: `{agentId, text}`. O texto não é alterado (nem aparado). */
-export function parseSend(raw: unknown): { agentId: string; text: string } {
+/** Corpo de POST /api/messages: `{agentId, text, images?}`. O texto não é alterado (nem aparado); com imagem, pode ser vazio. */
+export function parseSend(raw: unknown): { agentId: string; text: string; images: Attachment[] } {
   const r = rec(raw);
   const agentId = shortStr(r?.agentId, ID_MAX);
   if (!r || !agentId || typeof r.text !== 'string') throw new InvalidRequest('esperado {agentId, text}');
-  if (!r.text.trim()) throw new InvalidRequest(tr('a mensagem está vazia'));
+  const images = parseImages(r.images);
+  if ('error' in images) throw new InvalidRequest(images.error);
+  if (!r.text.trim() && !images.length) throw new InvalidRequest(tr('a mensagem está vazia'));
   if (r.text.length > MAX_TEXT) throw new InvalidRequest(tr('a mensagem passa de 20.000 caracteres'));
-  return { agentId, text: r.text };
+  return { agentId, text: r.text, images };
 }
 
 /** Resultados de uma confirmação ({results: [{id, ok, error?}]}): os válidos, até ACK_MAX. */
@@ -257,7 +262,7 @@ export class MessageRegistry {
    * (too-many). Corpo inválido: lança InvalidRequest.
    */
   send(raw: unknown): SendResult {
-    const { agentId, text } = parseSend(raw);
+    const { agentId, text: typed, images } = parseSend(raw);
     const real = this.opts.office.get(agentId);
     const demo = real ? undefined : this.opts.demoAgent?.(agentId);
     const agent = real ?? demo;
@@ -267,6 +272,9 @@ export class MessageRegistry {
     let open = 0;
     for (const e of this.messages.values()) if (e.msg.agentId === agentId && !isFinal(e)) open++;
     if (open >= MAX_OPEN) return { error: 'too-many' };
+    if (images.length && !this.opts.saveImages) return { error: 'unavailable', reason: tr('imagens não chegam aos agentes com o servidor no Docker') };
+    // A sessão (Claude Code ou Codex) lê a imagem pelo caminho, como os anexos do "Novo agente".
+    const text = images.length ? promptWithAttachments(typed, this.opts.saveImages!(images)) : typed;
 
     const now = this.now();
     const id = `m-${now.toString(36)}-${++this.seq}-${randomBytes(9).toString('base64url')}`;

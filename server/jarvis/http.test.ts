@@ -33,7 +33,7 @@ describe('Jarvis: rotas', () => {
     const t = await start();
     expect((await t.call('/api/chat/jarvis')).body).toMatchObject({ agentId: 'chat:jarvis', provider: 'claude', model: 'sonnet' });
     expect((await t.call('/api/chat/jarvis', 'POST', { text: '  bom dia ' })).status).toBe(202);
-    expect(t.jarvis.say).toHaveBeenCalledWith('bom dia', 'ui');
+    expect(t.jarvis.say).toHaveBeenCalledWith('bom dia', 'ui', '', []);
     expect((await t.call('/api/chat/jarvis', 'POST', { text: '' })).status).toBe(400);
   });
 

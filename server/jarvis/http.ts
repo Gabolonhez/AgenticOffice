@@ -16,6 +16,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { CHAT_TEXT_MAX } from '../../shared/chat';
 import { tr } from '../../shared/i18n';
 import { readJson, sendJson } from '../http/app';
+import { IMAGES_BODY_MAX, parseImages } from '../spawn/attachments';
 import { validateJarvisSettings, type JarvisService, type JarvisSettings } from './service';
 import type { VoiceService } from './voice';
 
@@ -48,10 +49,12 @@ export function createJarvisRoutes(d: JarvisRouteDeps): (req: IncomingMessage, r
     if (path === '/api/chat/jarvis') {
       if (method === 'GET') return json(res, 200, view());
       if (method !== 'POST') return notAllowed(res, 'GET, POST');
-      const body = (await readJson(req)) as { text?: unknown } | null;
+      const body = (await readJson(req, IMAGES_BODY_MAX)) as { text?: unknown; images?: unknown } | null;
       const text = typeof body?.text === 'string' ? body.text.trim() : '';
-      if (!text || text.length > CHAT_TEXT_MAX) return json(res, 400, { error: tr('Escreva a mensagem (até {0} caracteres).', [CHAT_TEXT_MAX]) });
-      d.jarvis.say(text, 'ui');
+      const images = parseImages(body?.images);
+      if ('error' in images) return json(res, 400, { error: images.error });
+      if ((!text && !images.length) || text.length > CHAT_TEXT_MAX) return json(res, 400, { error: tr('Escreva a mensagem (até {0} caracteres).', [CHAT_TEXT_MAX]) });
+      d.jarvis.say(text, 'ui', '', images);
       return json(res, 202, { agentId: d.jarvis.ensure() });
     }
     // A tela de configurações: a escolha atual e quem pode ser o Jarvis, sem criar o agente.

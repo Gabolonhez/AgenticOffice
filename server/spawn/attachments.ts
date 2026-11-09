@@ -56,6 +56,38 @@ export function parseAttachment(raw: unknown): Attachment | { error: string } {
   return { name, type, data };
 }
 
+/** Imagens que vão junto de uma mensagem (composer, chat, Jarvis): os formatos que o Claude lê como imagem. */
+export const IMAGES_PER_MESSAGE = 4;
+/** Abaixo do teto de 5 MB por imagem da API (contado em base64); o navegador reduz antes de mandar. */
+export const IMAGE_MAX_BYTES = 3_750_000;
+export const IMAGES_BODY_MAX = Math.ceil((IMAGES_PER_MESSAGE * IMAGE_MAX_BYTES * 4) / 3) + 64 * 1024;
+
+/** O tipo pelos primeiros bytes (o declarado pelo navegador não vale: a API recusa media_type trocado). */
+export function imageType(data: Buffer): string | undefined {
+  if (data.subarray(0, 4).toString('hex') === '89504e47') return 'image/png';
+  if (data.subarray(0, 3).toString('hex') === 'ffd8ff') return 'image/jpeg';
+  if (data.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif';
+  if (data.subarray(0, 4).toString('latin1') === 'RIFF' && data.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  return undefined;
+}
+
+/** Campo `images` de uma mensagem: [{name, type, data (base64)}], até IMAGES_PER_MESSAGE. Ausente = nenhuma. */
+export function parseImages(raw: unknown): Attachment[] | { error: string } {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) return { error: tr('imagens inválidas') };
+  if (raw.length > IMAGES_PER_MESSAGE) return { error: tr('no máximo {0} imagens por mensagem', [IMAGES_PER_MESSAGE]) };
+  const out: Attachment[] = [];
+  for (const item of raw) {
+    const a = parseAttachment(item);
+    if ('error' in a) return a;
+    const type = imageType(a.data);
+    if (!type) return { error: tr('só imagens PNG, JPEG, GIF ou WebP') };
+    if (a.data.length > IMAGE_MAX_BYTES) return { error: tr('a imagem passa de {0} MB', ['3,75']) };
+    out.push({ ...a, type });
+  }
+  return out;
+}
+
 /** Anexos enviados, esperando o pedido do agente novo (em memória; o id volta para o navegador). */
 export class AttachmentStore {
   private readonly items = new Map<string, Attachment & { at: number }>();

@@ -4555,4 +4555,19 @@ export const EN: Readonly<Record<string, string>> = {
   "Sem a pasta de dados do Habblaud: as chaves de subir, merge e loja não podem ser gravadas.": "No Habblaud data folder: the ship, merge and store keys cannot be saved.",
   "Triagem automática: use verdadeiro ou falso.": "Automatic triage: use true or false.",
   "Triagem automática das ideias novas do VBoards (a cada 2 min; vem desligada)": "Automatic triage of new VBoards ideas (every 2 min; off by default)",
+
+  // client/src/ui/images.ts
+  "{0}: só PNG, JPEG, GIF e WebP": "{0}: only PNG, JPEG, GIF and WebP",
+  "{0}: imagem grande demais": "{0}: image too large",
+  "{0}: não deu para ler a imagem": "{0}: couldn't read the image",
+  "Anexar imagem": "Attach image",
+  "Remover imagem": "Remove image",
+  "No máximo {0} imagens por mensagem": "At most {0} images per message",
+  // imagens nas mensagens (server/spawn/attachments.ts, chat, mensagens)
+  "Não consegui gravar a imagem: {0}": "Couldn't save the image: {0}",
+  "imagens não chegam aos agentes com o servidor no Docker": "images don't reach agents when the server runs in Docker",
+  "imagens inválidas": "invalid images",
+  "no máximo {0} imagens por mensagem": "at most {0} images per message",
+  "só imagens PNG, JPEG, GIF ou WebP": "only PNG, JPEG, GIF or WebP images",
+  "a imagem passa de {0} MB": "the image exceeds {0} MB",
 };
