@@ -1,33 +1,28 @@
 // Abrir no computador do dono (ferramenta pc_open do Jarvis, sempre com cartão e PIN): um link http(s) no navegador
-// padrão ou um app pelo atalho do Menu Iniciar. Nunca comando livre nem argumentos: o alvo é um URL validado ou um .lnk
-// que já existe no Menu Iniciar, aberto sem shell.
+// padrão ou um app do Menu Iniciar (pelo nome que o Windows mostra). Nunca comando livre nem argumentos: o alvo é um URL
+// validado ou um app que já está no Menu Iniciar (fora terminais e ferramentas de sistema), aberto sem shell.
 import { execFile } from 'node:child_process';
-import { readdirSync } from 'node:fs';
-import { join } from 'node:path';
 import { tr } from '../../shared/i18n';
 
 export type OpenTarget = { kind: 'url'; url: string; label: string } | { kind: 'app'; path: string; label: string };
 export interface StartMenuApp { name: string; path: string }
+/** Terminais e ferramentas de sistema ficam fora, mesmo com PIN: abrir app não pode virar porta para comando. */
+export const BLOCKED_APP = /command prompt|powershell|terminal|registry|regedit|^run$|git (bash|cmd)|\bwsl\b|bash|\bcmd\b|native tools|cross tools|task scheduler|services|system configuration|computer management|security configuration|firewall|event viewer|recoverydrive|control panel/i;
 
-/** Atalhos (.lnk) do Menu Iniciar do usuário e de todos (Windows), pelo nome sem a extensão. */
-export function startMenuApps(env: NodeJS.ProcessEnv = process.env): StartMenuApp[] {
-  const roots = [env.APPDATA, env.ProgramData].filter((r): r is string => !!r).map((r) => join(r, 'Microsoft', 'Windows', 'Start Menu', 'Programs'));
-  const out: StartMenuApp[] = [];
-  const walk = (dir: string, depth: number) => {
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      const p = join(dir, e.name);
-      if (e.isDirectory() && depth < 3) walk(p, depth + 1);
-      else if (e.isFile() && /\.lnk$/i.test(e.name)) out.push({ name: e.name.slice(0, -4), path: p });
-    }
-  };
-  for (const r of roots) walk(r, 0);
-  return out;
+/** Apps do Menu Iniciar (Windows, `Get-StartApps`: atalhos e apps da Store), com o nome no idioma do Windows. */
+export function startMenuApps(): Promise<StartMenuApp[]> {
+  if (process.platform !== 'win32') return Promise.resolve([]);
+  return new Promise((done) =>
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-StartApps | ConvertTo-Json -Compress'], { windowsHide: true, timeout: 15_000, maxBuffer: 4 * 1024 * 1024 }, (err, out) => {
+      try {
+        const raw = JSON.parse(String(out)) as unknown;
+        const list = (Array.isArray(raw) ? raw : [raw]) as Array<{ Name?: unknown; AppID?: unknown }>;
+        done(list.flatMap((a) => (typeof a?.Name === 'string' && typeof a.AppID === 'string' && !BLOCKED_APP.test(a.Name) ? [{ name: a.Name, path: `shell:AppsFolder\\${a.AppID}` }] : [])));
+      } catch {
+        done([]); // sem PowerShell ou saída inesperada: nenhum app (o link continua funcionando)
+      }
+    }),
+  );
 }
 
 /** O que o Jarvis pediu, já resolvido: URL http(s) (domínio sem esquema ganha https://) ou um app do Menu Iniciar. */

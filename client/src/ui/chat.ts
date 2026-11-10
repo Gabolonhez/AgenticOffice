@@ -270,7 +270,8 @@ export class ChatPanel {
   }
 
   private async action(kind: 'stop' | 'merge' | 'discard'): Promise<void> {
-    const { status, data } = await call(this.url(`/${kind}`), 'POST');
+    // Corpo {} mesmo vazio: o guard recusa POST sem Content-Type JSON (415).
+    const { status, data } = await call(this.url(`/${kind}`), 'POST', {});
     if (status >= 400) setText(this.error, String(data.error ?? tr('erro {0}', [status])));
     else setText(this.error, '');
     this.restartPoll();

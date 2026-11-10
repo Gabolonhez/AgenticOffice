@@ -625,7 +625,7 @@ describe('Jarvis: release_cut e release_submit', () => {
 });
 
 describe('Jarvis: web e computador', () => {
-  const desktop = () => ({ resolve: vi.fn((t: string) => (t === 'x' ? { error: 'nenhum' } : { kind: 'url' as const, url: `https://${t}/`, label: `https://${t}/` })), open: vi.fn(async () => {}) });
+  const desktop = () => ({ resolve: vi.fn(async (t: string) => (t === 'x' ? { error: 'nenhum' } : { kind: 'url' as const, url: `https://${t}/`, label: `https://${t}/` })), open: vi.fn(async () => {}) });
 
   it('pc_open sempre pede o cartão crítico, mesmo num turno limpo; recusado = nada abre', async () => {
     for (const answer of ['deny', 'allow'] as const) {

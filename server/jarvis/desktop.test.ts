@@ -24,3 +24,11 @@ describe('pc_open: o que pode ser aberto', () => {
     expect(resolveTarget('notion', apps)).toHaveProperty('error');
   });
 });
+
+describe('pc_open: apps bloqueados', () => {
+  it('terminais e ferramentas de sistema ficam fora; apps comuns passam', async () => {
+    const { BLOCKED_APP } = await import('./desktop');
+    for (const n of ['Command Prompt', 'Windows PowerShell', 'Terminal', 'Registry Editor', 'Run', 'Git Bash', 'WSL', 'Task Scheduler', 'x64 Native Tools Command Prompt for VS']) expect(BLOCKED_APP.test(n), n).toBe(true);
+    for (const n of ['Notepad', 'Calculator', 'Google Chrome', 'Spotify', 'WhatsApp Beta', 'Visual Studio Code', 'Settings']) expect(BLOCKED_APP.test(n), n).toBe(false);
+  });
+});

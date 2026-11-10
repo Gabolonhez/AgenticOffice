@@ -686,7 +686,7 @@ const jarvisTools =
         // Pesquisa na web: só o Claude tem WebSearch; sem repositório (pasta neutra), orçamento de US$ 1 por rodada.
         research: (prompt) => refinerFor('claude', summaryCwd(config.dataDir), 1, undefined, undefined, true).run(prompt).then((r) => r.text),
         // No Docker não há tela do dono para abrir nada.
-        ...(config.inDocker ? {} : { desktop: { resolve: (target: string) => resolveTarget(target, startMenuApps()), open: (t: OpenTarget) => openTarget(t) } }),
+        ...(config.inDocker ? {} : { desktop: { resolve: async (target: string) => resolveTarget(target, await startMenuApps()), open: (t: OpenTarget) => openTarget(t) } }),
         memory: { read: () => jarvis.memoryRead(), write: (mode, text) => jarvis.memoryWrite(mode, text) },
       })
     : undefined;

@@ -144,7 +144,7 @@ export interface JarvisToolsDeps {
   triage?: Pick<TriageService, 'triage' | 'answer' | 'waiting'>;
   research?: (prompt: string) => Promise<string>;
   /** pc_open: resolve o alvo (link ou app do Menu Iniciar) e abre. Ausente = desligado (Docker). */
-  desktop?: { resolve(target: string): OpenTarget | { error: string }; open(t: OpenTarget): Promise<void> };
+  desktop?: { resolve(target: string): Promise<OpenTarget | { error: string }>; open(t: OpenTarget): Promise<void> };
   memory: { read(): string; write(mode: 'append' | 'replace', text: string): string | undefined };
   now?: () => number;
   /** Prazo dos cartões (testes). */
@@ -319,7 +319,7 @@ export class JarvisTools {
       ),
       t(
         'pc_open',
-        'GATED, always (critical card with PIN). Opens on the owner computer an http(s) link in the default browser, or an app by its Start Menu name (e.g. "Spotify"). Nothing else: no commands, no arguments, no files.',
+        'GATED, always (critical card with PIN). Opens on the owner computer an http(s) link in the default browser, or an app by its Start Menu name, in the Windows display language (e.g. "Notepad" on an English Windows; terminals and system tools are blocked). Nothing else: no commands, no arguments, no files.',
         obj({ target: S('URL or Start Menu app name'), ...REASON }, ['target']),
         async (a) => this.pcOpen(a),
       ),
@@ -349,7 +349,7 @@ export class JarvisTools {
   private async pcOpen(a: Record<string, unknown>): Promise<Result> {
     const d = this.deps.desktop;
     if (!d) return fail(tr('Abrir no computador está desligado neste servidor.'));
-    const target = d.resolve(str(a.target));
+    const target = await d.resolve(str(a.target));
     if ('error' in target) return fail(target.error);
     const fact = target.kind === 'url' ? tr('Abrir no navegador: {0}', [target.label]) : tr('Abrir o app: {0}', [target.label]);
     // Sempre com cartão crítico (PIN), mesmo num turno limpo: abre algo na tela do dono.
