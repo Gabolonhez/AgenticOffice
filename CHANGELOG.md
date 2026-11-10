@@ -10,6 +10,14 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Jarvis pesquisa na web e abre links e apps
+
+- **Web (`web_research`):** o Jarvis pesquisa e lê páginas públicas numa rodada só de leitura (a mesma da pesquisa do
+  VBoards, até US$ 1, no máximo 10 por hora). Endereços locais e da rede interna são recusados, e o resultado entra
+  como dado não confiável: depois dele, as ações sensíveis da rodada pedem o PIN.
+- **Abrir no computador (`pc_open`):** abre um link http(s) no navegador padrão ou um app pelo nome do atalho do Menu
+  Iniciar, sempre com o cartão de aprovação e o PIN. Nada de comando, argumento ou arquivo. Desligado no Docker.
+
 ### Imagens nas mensagens aos agentes e ao Jarvis
 
 - **Anexar ou colar:** a caixa de mensagem dos agentes, o chat dos agentes abertos pelo escritório e o Jarvis (gaveta e

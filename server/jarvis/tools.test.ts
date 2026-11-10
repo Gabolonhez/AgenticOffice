@@ -8,7 +8,7 @@ import type { TriggerRule } from '../../shared/triggers';
 import type { FolderConfig } from '../vboards/vboards';
 import { VBoardsApi } from '../vboards/api';
 import type { JarvisTurn } from './service';
-import { CARD_TEXT_MAX, JarvisTools, NOTIFY_PER_HOUR, RUNS_PER_HOUR, SPAWN_PER_HOUR, type JarvisToolsDeps } from './tools';
+import { CARD_TEXT_MAX, JarvisTools, NOTIFY_PER_HOUR, RUNS_PER_HOUR, SPAWN_PER_HOUR, WEB_PER_HOUR, type JarvisToolsDeps } from './tools';
 
 const JID = 'chat:jarvis';
 type Answer = 'allow' | 'deny' | 'timeout';
@@ -621,5 +621,42 @@ describe('Jarvis: release_cut e release_submit', () => {
     expect(s.cards).toHaveLength(0);
     expect((await s.call('release_submit', { app: 'proj', version: '1.1.0' })).isError).toBeFalsy();
     expect(l.request).toHaveBeenCalledWith('C:\\proj', { kind: 'submit', version: '1.1.0' }, true);
+  });
+});
+
+describe('Jarvis: web e computador', () => {
+  const desktop = () => ({ resolve: vi.fn((t: string) => (t === 'x' ? { error: 'nenhum' } : { kind: 'url' as const, url: `https://${t}/`, label: `https://${t}/` })), open: vi.fn(async () => {}) });
+
+  it('pc_open sempre pede o cartão crítico, mesmo num turno limpo; recusado = nada abre', async () => {
+    for (const answer of ['deny', 'allow'] as const) {
+      const d = desktop();
+      const s = setup(answer, { desktop: d });
+      const r = await s.call('pc_open', { target: 'youtube.com' });
+      expect(s.cards).toHaveLength(1);
+      expect(s.cards[0]).toMatchObject({ critical: true });
+      expect(s.cards[0].body).toContain('https://youtube.com/');
+      expect(d.open).toHaveBeenCalledTimes(answer === 'allow' ? 1 : 0);
+      expect(r.isError ?? false).toBe(answer === 'deny');
+    }
+  });
+
+  it('pc_open: alvo inválido nem chega ao cartão; sem desktop (Docker) fica desligado', async () => {
+    const s = setup('allow', { desktop: desktop() });
+    expect((await s.call('pc_open', { target: 'x' })).isError).toBe(true);
+    expect(s.cards).toHaveLength(0);
+    expect((await setup('allow').call('pc_open', { target: 'youtube.com' })).isError).toBe(true);
+  });
+
+  it('web_research: só páginas públicas, resultado embrulhado (contamina o turno) e limite por hora', async () => {
+    const research = vi.fn(async () => 'resposta da web');
+    const s = setup('deny', { research });
+    expect((await s.call('web_research', { question: 'q', url: 'http://127.0.0.1:4747/api/messages' })).isError).toBe(true);
+    expect((await s.call('web_research', { question: 'q', url: 'http://192.168.0.1/' })).isError).toBe(true);
+    expect(research).not.toHaveBeenCalled();
+    const r = await s.call('web_research', { question: 'preço do dólar', url: 'https://example.com/' });
+    expect(r.text).toContain('<dados_nao_confiaveis');
+    expect(s.tools.tainted()).toBe(true);
+    for (let i = 1; i < WEB_PER_HOUR; i++) await s.call('web_research', { question: 'q' });
+    expect((await s.call('web_research', { question: 'q' })).isError).toBe(true);
   });
 });

@@ -4570,4 +4570,18 @@ export const EN: Readonly<Record<string, string>> = {
   "no máximo {0} imagens por mensagem": "at most {0} images per message",
   "só imagens PNG, JPEG, GIF ou WebP": "only PNG, JPEG, GIF or WebP images",
   "a imagem passa de {0} MB": "the image exceeds {0} MB",
+  // server/jarvis/desktop.ts e web_research/pc_open (server/jarvis/tools.ts)
+  "Diga o link ou o nome do app.": "Give the link or the app name.",
+  "Link inválido.": "Invalid link.",
+  "Só abro links http(s) ou apps do Menu Iniciar.": "I only open http(s) links or Start Menu apps.",
+  "Nenhum app do Menu Iniciar chamado \"{0}\".": "No Start Menu app named \"{0}\".",
+  "Mais de um app parecido: {0}. Diga qual.": "More than one similar app: {0}. Say which.",
+  "Abrir apps pelo nome só funciona no Windows.": "Opening apps by name only works on Windows.",
+  "Pesquisa desligada ou pergunta vazia.": "Research off or empty question.",
+  "Só leio páginas públicas http(s).": "I only read public http(s) pages.",
+  "Limite de {0} pesquisas na web por hora.": "Limit of {0} web searches per hour.",
+  "Abrir no computador está desligado neste servidor.": "Opening on the computer is off on this server.",
+  "Abrir no navegador: {0}": "Open in the browser: {0}",
+  "Abrir o app: {0}": "Open the app: {0}",
+  "Aberto: {0}": "Opened: {0}",
 };
