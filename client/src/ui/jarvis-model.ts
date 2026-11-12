@@ -144,6 +144,73 @@ export function historyTail(items: readonly ChatItem[], n = 8): HistoryLine[] {
   return out.slice(-n);
 }
 
+// ---------------------------------------------------------------- o que o Jarvis está fazendo (painel de atividade)
+
+export type ActivityIcon = 'web' | 'open' | 'agent' | 'list' | 'project' | 'board' | 'memory' | 'notify' | 'clock' | 'gauge' | 'lock' | 'spark';
+export type ActivityState = 'running' | 'done' | 'error' | 'waiting';
+export interface ActivityRow { seq: number; icon: ActivityIcon; label: string; detail: string; state: ActivityState; agentId?: string }
+
+/** Ferramenta do MCP do escritório → rótulo e ícone (prefixo `mcp__<servidor>__` fora). */
+function toolLook(raw: string): { icon: ActivityIcon; label: string } {
+  const n = raw.replace(/^mcp__.+?__/, '');
+  if (n === 'web_research') return { icon: 'web', label: tr('Pesquisando na web') };
+  if (n === 'pc_open') return { icon: 'open', label: tr('Abrindo no computador') };
+  if (n === 'agents_send') return { icon: 'agent', label: tr('Mandando mensagem a um agente') };
+  if (n === 'agents_spawn') return { icon: 'agent', label: tr('Abrindo um agente') };
+  if (n === 'agents_stop' || n === 'agents_close') return { icon: 'agent', label: tr('Parando um agente') };
+  if (n.startsWith('agents_')) return { icon: 'agent', label: tr('Olhando os agentes') };
+  if (n.startsWith('runs_')) return { icon: 'list', label: tr('Cuidando das listas') };
+  if (n.startsWith('projects_') || n.startsWith('release_')) return { icon: 'project', label: tr('Consultando os projetos') };
+  if (n.startsWith('vboards_')) return { icon: 'board', label: tr('Consultando o VBoards') };
+  if (n === 'memory_write') return { icon: 'memory', label: tr('Guardando na memória') };
+  if (n.startsWith('memory_')) return { icon: 'memory', label: tr('Lendo a memória') };
+  if (n.startsWith('notify_')) return { icon: 'notify', label: tr('Mandando um aviso') };
+  if (n.startsWith('schedule_')) return { icon: 'clock', label: tr('Mexendo nos agendamentos') };
+  if (n.startsWith('usage_')) return { icon: 'gauge', label: tr('Vendo o consumo') };
+  return { icon: 'spark', label: n };
+}
+
+/** O campo mais útil da entrada da ferramenta (pergunta, link, alvo, texto…), ou o texto cru cortado. */
+function toolDetail(input: string): { detail: string; agentId?: string } {
+  try {
+    const o = JSON.parse(input) as Record<string, unknown>;
+    const agentId = typeof o.agentId === 'string' ? o.agentId : undefined;
+    for (const k of ['question', 'url', 'target', 'text', 'prompt', 'folder', 'product', 'name', 'id']) {
+      if (typeof o[k] === 'string' && o[k]) return { detail: (o[k] as string).replace(/\s+/g, ' ').slice(0, 140), ...(agentId ? { agentId } : {}) };
+    }
+    return { detail: '', ...(agentId ? { agentId } : {}) };
+  } catch {
+    return { detail: input.replace(/\s+/g, ' ').slice(0, 140) };
+  }
+}
+
+/** As ações da rodada atual (desde o último pedido): ferramentas e cartões de aprovação, na ordem. */
+export function activityOf(items: readonly ChatItem[]): ActivityRow[] {
+  let start = -1;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].kind === 'user') {
+      start = i;
+      break;
+    }
+  }
+  const out: ActivityRow[] = [];
+  for (const i of items.slice(start + 1)) {
+    if (i.kind === 'tool') {
+      const look = toolLook(i.name);
+      out.push({ seq: i.seq, ...look, ...toolDetail(i.input), state: i.error || i.blocked ? 'error' : i.output === undefined ? 'running' : 'done' });
+    } else if (i.kind === 'approval') {
+      out.push({
+        seq: i.seq,
+        icon: 'lock',
+        label: i.outcome === 'allow' ? tr('Aprovado por você') : i.outcome === 'deny' ? tr('Recusado por você') : tr('Esperando sua aprovação (PIN)'),
+        detail: i.text.replace(/\s+/g, ' ').slice(0, 140),
+        state: i.outcome === 'allow' ? 'done' : i.outcome === 'deny' ? 'error' : 'waiting',
+      });
+    }
+  }
+  return out;
+}
+
 /** O pedido de fora chega embrulhado em <dados_nao_confiaveis …>: na tela, só o texto. */
 function stripUntrusted(text: string): string {
   const m = /^<dados_nao_confiaveis[^>]*>\n?([\s\S]*?)\n?<\/dados_nao_confiaveis>$/.exec(text.trim());

@@ -126,3 +126,21 @@ describe('Jarvis em tela cheia: Gemini Live', () => {
     expect(parseGemini('não é json')).toBeNull();
   });
 });
+
+describe('Jarvis em tela cheia: o que ele está fazendo', () => {
+  it('só a rodada atual: ferramentas com rótulo, detalhe e estado; cartão pendente espera o PIN', async () => {
+    const { activityOf } = await import('./jarvis-model');
+    const rows = activityOf([
+      { seq: 1, at: 0, kind: 'user', text: 'antes' },
+      { seq: 2, at: 0, kind: 'tool', toolId: 'a', name: 'mcp__habblaud__memory_read', input: '{}', output: 'x' },
+      { seq: 3, at: 0, kind: 'user', text: 'pesquisa o dólar e abre o youtube' },
+      { seq: 4, at: 0, kind: 'tool', toolId: 'b', name: 'mcp__habblaud__web_research', input: '{"question":"cotação do dólar"}', output: 'ok' },
+      { seq: 5, at: 0, kind: 'tool', toolId: 'c', name: 'mcp__habblaud__pc_open', input: '{"target":"youtube.com"}' },
+      { seq: 6, at: 0, kind: 'approval', permissionId: 'p', tool: 'pc_open', text: 'Abrir no navegador' },
+      { seq: 7, at: 0, kind: 'tool', toolId: 'd', name: 'mcp__habblaud__agents_send', input: '{"agentId":"chat:x","text":"oi"}', error: true },
+    ]);
+    expect(rows.map((r) => [r.icon, r.state])).toEqual([['web', 'done'], ['open', 'running'], ['lock', 'waiting'], ['agent', 'error']]);
+    expect(rows[0].detail).toBe('cotação do dólar');
+    expect(rows[3]).toMatchObject({ agentId: 'chat:x', detail: 'oi' });
+  });
+});

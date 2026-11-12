@@ -7,6 +7,9 @@ import '@fontsource/pixelify-sans/400.css';
 import '@fontsource/pixelify-sans/500.css';
 import '@fontsource/pixelify-sans/600.css';
 import '@fontsource/pixelify-sans/700.css';
+// Chakra Petch: a letra do HUD do Jarvis em tela cheia (ui/jarvis.ts).
+import '@fontsource/chakra-petch/500.css';
+import '@fontsource/chakra-petch/600.css';
 import './styles.css';
 
 import type { OfficeStore } from '../net/store';

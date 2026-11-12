@@ -10,6 +10,17 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Jarvis em tela cheia com cara de HUD
+
+- **Orb vivo:** núcleo de luz com anéis finos girando e um movimento por estado (respira parado, ondas e raios com a sua
+  voz, cometas ao pensar, anel em forma de onda ao falar); a cor desliza de um estado ao outro.
+- **Agora:** um painel mostra ao vivo o que o Jarvis está fazendo na rodada (pesquisa na web, abrir no computador,
+  mensagem a agentes, VBoards, memória) e quando ele espera o seu PIN.
+- **Respostas no ritmo da voz:** a resposta nova aparece aos poucos na conversa; as imagens que você manda dali viram
+  miniaturas.
+- **Ambiente:** grade em perspectiva deslizando, brilho na cor do estado, vinheta e a letra Chakra Petch. Com movimento
+  reduzido nada gira nem desliza. O botão Interromper do Jarvis deixou de dar erro 415.
+
 ### Jarvis pesquisa na web e abre links e apps
 
 - **Web (`web_research`):** o Jarvis pesquisa e lê páginas públicas numa rodada só de leitura (a mesma da pesquisa do
