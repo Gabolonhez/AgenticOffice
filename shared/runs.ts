@@ -27,6 +27,8 @@ export interface RunItem {
   resume?: boolean;
   /** Lista automática: o resultado do portão na última passada (checagens + revisão). */
   gate?: 'pass' | 'fail';
+  /** Lista automática: check configurado e passou + revisão OK (gate.ts gateVerified); sem isso não sobe sem PIN. */
+  verified?: boolean;
   /** Lista automática: nomes dos PNGs do QA visual (GET /api/chat/runs/:id/items/:n/shots/:nome). */
   shots?: string[];
   /** Lista automática: o risco que a IA do Refinar deu à subtarefa (VBoards); ausente conta como 'medium'. */

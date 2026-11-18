@@ -428,7 +428,7 @@ export class ShipService {
 /**
  * Pura: por que esta lista NÃO sobe sozinha (sem PIN), ou undefined. Exige TODAS: vboards.autoMerge=low e ship=merge;
  * lista automática do VBoards; cada item com o plano aprovado no VBoards (approvedAt), em 'review', aprovado no portão
- * e sem volta de correção; risco final baixo. O CI verde é cobrado depois, na etapa 'ci' (no-ci nunca passa sem PIN).
+ * com check configurado que passou e revisão OK (verified) e sem volta de correção; risco final baixo. O CI verde é cobrado depois, na etapa 'ci' (no-ci nunca passa sem PIN).
  */
 export function autoShipBlock(run: Pick<ChatRun, 'auto' | 'items'>, cfg: Pick<FolderConfig, 'ship' | 'autoMerge'>, risk: RiskLevel): string | undefined {
   if (cfg.autoMerge !== 'low') return tr('vboards.autoMerge desligado: sobe só com PIN.');
@@ -436,6 +436,7 @@ export function autoShipBlock(run: Pick<ChatRun, 'auto' | 'items'>, cfg: Pick<Fo
   if (!run.auto) return tr('Só a lista automática do VBoards (com portão) sobe sozinha.');
   if (run.items.some((i) => !i.vboardsTaskId || !i.approvedAt)) return tr('Plano sem aprovação registrada no VBoards (approvedAt): sobe só com PIN.');
   if (run.items.some((i) => i.state !== 'review' || i.gate !== 'pass')) return tr('Nem todo item passou no portão: sobe só com PIN.');
+  if (run.items.some((i) => !i.verified)) return tr('Portão sem vboards.check que passou ou sem revisão OK (revisor com erro ou ausente): sobe só com PIN.');
   if (run.items.some((i) => i.retried)) return tr('Um item precisou de volta de correção no portão: sobe só com PIN.');
   if (risk !== 'low') return tr('Risco {0}: sobe só com PIN.', [riskLabel(risk)]);
   return undefined;

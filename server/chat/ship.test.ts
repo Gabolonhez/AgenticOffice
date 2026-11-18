@@ -357,7 +357,7 @@ describe('ship: merge automático (vboards.autoMerge=low, sem PIN)', () => {
   function autoRun(item: Partial<ChatRun['items'][number]> = {}): ChatRun {
     const r = makeRun('r1', '/p/api');
     r.auto = { reviewer: 'claude' };
-    r.items = [{ ...r.items[0], risk: 'low', riskWhy: 'só estilo', approvedAt: '2026-11-06T10:00:00.000Z', ...item }];
+    r.items = [{ ...r.items[0], risk: 'low', riskWhy: 'só estilo', approvedAt: '2026-11-06T10:00:00.000Z', verified: true, ...item }];
     return r;
   }
   function autoSetup(o: { config?: Partial<FolderConfig>; item?: Partial<ChatRun['items'][number]>; files?: string[] } = {}) {
@@ -446,6 +446,7 @@ describe('ship: merge automático (vboards.autoMerge=low, sem PIN)', () => {
     ['risco da IA ausente (conta medium)', { item: { risk: undefined } }, /Risco médio/],
     ['volta de correção no portão', { item: { retried: true } }, /volta de correção/],
     ['portão reprovado', { item: { gate: 'fail' as const } }, /portão/],
+    ['portão sem check ou revisor com erro (verified ausente)', { item: { verified: undefined } }, /vboards\.check/],
     ['ship=pr', { config: { ship: 'pr' as const } }, /ship não é merge/],
     ['diff de risco alto (o calculado não é rebaixado)', { files: ['src/ui/button.tsx', '.github/workflows/deploy.yml'] }, /Risco alto/],
     ['diff de risco alto por vboards.riskPaths', { config: { riskPaths: ['src/ui/**'] } }, /Risco alto/],
@@ -505,5 +506,6 @@ describe('ship: merge automático (vboards.autoMerge=low, sem PIN)', () => {
     expect(autoShipBlock(r, LOW, 'medium')).toMatch(/médio/);
     expect(autoShipBlock(r, { ...LOW, autoMerge: 'off' }, 'low')).toMatch(/autoMerge/);
     expect(autoShipBlock({ ...r, items: [...r.items, { text: 'manual', state: 'review', gate: 'pass' }] }, LOW, 'low')).toMatch(/approvedAt/);
+    expect(autoShipBlock(autoRun({ verified: false }), LOW, 'low')).toMatch(/revisão OK/);
   });
 });

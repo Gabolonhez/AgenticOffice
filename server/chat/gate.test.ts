@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { gatePassed, gateReport, listShots, parseReview, refineArgs, refinerFor, REPORT_MAX, reviewerFor, runChecks, runQa } from './gate';
+import { gatePassed, gateReport, gateVerified, listShots, parseReview, refineArgs, refinerFor, REPORT_MAX, reviewerFor, runChecks, runQa } from './gate';
 
 const cwd = process.cwd();
 
@@ -56,6 +56,17 @@ describe('portão: revisão e relatório', () => {
     expect(gatePassed({ ok: true, tail: '' }, { error: 'sem rede', by: 'claude' })).toBe(true);
     expect(gatePassed({ ok: false, tail: '' }, undefined)).toBe(false);
     expect(gatePassed(undefined, { ok: false, findings: 'PROBLEMAS', by: 'codex' })).toBe(false);
+  });
+
+  it('gateVerified (o que a subida sem PIN exige): check configurado e ok E revisão OK; sem check ou revisor com erro, não', () => {
+    const ok = { ok: true, tail: '' };
+    const review = { ok: true, findings: 'OK', by: 'claude' };
+    expect(gateVerified(ok, review)).toBe(true);
+    expect(gateVerified(undefined, review)).toBe(false); // sem vboards.check
+    expect(gateVerified(ok, { error: 'sem rede', by: 'claude' })).toBe(false); // revisor com erro
+    expect(gateVerified(ok, undefined)).toBe(false); // sem revisão
+    expect(gateVerified({ ok: false, tail: '' }, review)).toBe(false);
+    expect(gateVerified(ok, { ok: false, findings: 'PROBLEMAS', by: 'codex' })).toBe(false);
   });
 
   it('relatório: branch, checagens, revisão e resumo, cortado em REPORT_MAX', () => {

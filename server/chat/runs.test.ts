@@ -337,7 +337,7 @@ describe('chat: lista que roda um agente por item', () => {
     expect(gate.checks).not.toHaveBeenCalled(); // sem vboards.check
     expect(gate.review).not.toHaveBeenCalled(); // diff vazio
     expect(chat.send).not.toHaveBeenCalled();
-    expect(svc.get('r1')?.items[0].state).toBe('review');
+    expect(svc.get('r1')?.items[0]).toMatchObject({ state: 'review', gate: 'pass', verified: false }); // sem check: só sobe com PIN
     expect(worktrees.merge).not.toHaveBeenCalled();
   });
 });

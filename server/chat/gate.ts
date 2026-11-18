@@ -233,6 +233,13 @@ export async function reviewDiff(auto: Pick<RunAuto, 'reviewer' | 'reviewerModel
 /** Passou no portão: checagens (se há) ok e revisão (se respondeu) ok. */
 export const gatePassed = (checks: CheckResult | undefined, review: ReviewResult | undefined): boolean => (!checks || checks.ok) && (!review || 'error' in review || review.ok);
 
+/**
+ * Verificado de fato (o que a subida sem PIN exige, ship.ts autoShipBlock): vboards.check configurado E passou E a
+ * revisão respondeu OK. Sem check, revisor com erro ou sem revisão = o gatePassed pode deixar ir para 'review', mas
+ * só sobe com PIN.
+ */
+export const gateVerified = (checks: CheckResult | undefined, review: ReviewResult | undefined): boolean => !!checks?.ok && !!review && !('error' in review) && review.ok;
+
 /** O que volta para o agente (uma vez) quando o portão falha. */
 export function fixRequest(checks: CheckResult | undefined, review: ReviewResult | undefined): string {
   const parts = [tr('O portão de qualidade encontrou problemas no seu trabalho. Corrija o que for preciso (sem git push) e termine com um resumo do que mudou.')];

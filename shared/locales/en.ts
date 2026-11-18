@@ -4603,4 +4603,5 @@ export const EN: Readonly<Record<string, string>> = {
   "Pensando no que fazer…": "Thinking about what to do…",
   "Recusado por você": "Denied by you",
   "Vendo o consumo": "Checking usage",
+  "Portão sem vboards.check que passou ou sem revisão OK (revisor com erro ou ausente): sobe só com PIN.": "Gate without a passing vboards.check or without an OK review (reviewer errored or missing): ships only with PIN.",
 };

@@ -4620,4 +4620,5 @@ export const FR: Readonly<Record<string, string>> = {
   "Pensando no que fazer…": "Réflexion sur la marche à suivre…",
   "Recusado por você": "Refusé par vous",
   "Vendo o consumo": "Consultation de la consommation",
+  "Portão sem vboards.check que passou ou sem revisão OK (revisor com erro ou ausente): sobe só com PIN.": "Contrôle sans vboards.check réussi ou sans revue OK (relecteur en erreur ou absent) : envoi uniquement avec PIN.",
 };

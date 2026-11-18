@@ -25,7 +25,7 @@ import { errMsg, log } from '../log';
 import type { Provider } from '../../shared/types';
 import type { ChatOpener } from '../vboards/vboards';
 import type { QuotaBlock } from './quota';
-import { fixRequest, gatePassed, gateReport, type CheckResult, type QaResult, type ReviewResult } from './gate';
+import { fixRequest, gatePassed, gateReport, gateVerified, type CheckResult, type QaResult, type ReviewResult } from './gate';
 import { diffRisk, finalRisk, parseRisk } from './risk';
 import type { ChatService } from './service';
 import { appendJournal, trimJournal, type JournalStage } from './journal';
@@ -708,6 +708,7 @@ export class RunService {
     if (item.state !== 'running' || run.state !== 'running' || this.frozen) return;
     const passed = gatePassed(checks, review);
     item.gate = passed ? 'pass' : 'fail';
+    item.verified = gateVerified(checks, review);
     if (!passed && !item.retried) {
       item.retried = true;
       this.save();
