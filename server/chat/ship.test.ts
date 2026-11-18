@@ -126,8 +126,11 @@ describe('ship: o cartão (prepare)', () => {
 describe('ship: máquina de estados', () => {
   it('caminho feliz: push (squash) → PR → CI verde → merge pelo SHA que subiu → deployed, com registro, VBoards, avisos e descarte', async () => {
     const t = setup();
+    t.runs[0].items[0].report = ['Branch: x', 'Custo do agente: US$ 0.50.', 'Commits:', '- abc1234 fix: login'].join('\n');
     const run = await approved(t);
     expect(t.worktrees.push).toHaveBeenCalledWith(run.isolated, { url: 'https://github.com/acme/api.git', sha: SHA, token: TOKEN, baseBranch: 'main', message: 'corrigir login' });
+    // O relatório do portão (custo, commits) vai no corpo do PR.
+    expect((t.gh.openPr.mock.calls[0] as unknown[])[1]).toMatchObject({ body: expect.stringContaining('- abc1234 fix: login') });
     expect(run.ship).toMatchObject({ step: 'ci', prNumber: 7, prUrl: 'https://github.com/acme/api/pull/7', pushedSha: PUSHED });
     expect(t.settles).toContainEqual({ id: 'c1:s1', state: 'review', stage: 'pr', prUrl: 'https://github.com/acme/api/pull/7' });
     expect(t.notes).toEqual(['api:pr']);

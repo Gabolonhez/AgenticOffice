@@ -715,7 +715,11 @@ export class RunService {
       // Uma volta só: o próximo fim de rodada (turnEnded → finish) passa de novo pelo portão e termina em 'review'.
       if (this.deps.chat.send(agentId, { text: fixRequest(checks, review) }) === 'ok') return;
     }
-    item.report = gateReport({ branch: w.branch, checks, qa, review, summary: this.deps.chat.lastReply(agentId), retried: item.retried, missing: w.missing, risk: finalRisk([item], diffRisk(diff, { reworked: item.retried, extra: auto.riskPaths, maxLines: auto.riskLines })) });
+    const usd = this.deps.chat.record?.(agentId)?.spend?.usd;
+    const commits = await this.deps.worktrees?.commits?.(w).catch(() => undefined);
+    // Parada ou desligamento durante o await acima.
+    if (item.state !== 'running' || run.state !== 'running' || this.frozen) return;
+    item.report = gateReport({ branch: w.branch, checks, qa, review, summary: this.deps.chat.lastReply(agentId), retried: item.retried, missing: w.missing, risk: finalRisk([item], diffRisk(diff, { reworked: item.retried, extra: auto.riskPaths, maxLines: auto.riskLines })), usd, commits });
     item.state = 'review';
     item.endedAt = this.now();
     this.metric(run, item);

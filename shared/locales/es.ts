@@ -4606,4 +4606,8 @@ export const ES: Readonly<Record<string, string>> = {
   "Recusado por você": "Rechazado por ti",
   "Vendo o consumo": "Revisando el consumo",
   "Portão sem vboards.check que passou ou sem revisão OK (revisor com erro ou ausente): sobe só com PIN.": "Control sin un vboards.check aprobado o sin revisión OK (revisor con error o ausente): se sube solo con PIN.",
+  "Custo do agente: US$ {0}.": "Costo del agente: US$ {0}.",
+  "Commits:": "Commits:",
+  "(e mais {0})": "(y {0} más)",
+  "Commits: nenhum (o Juntar faz o commit).": "Commits: ninguno (Unir hace el commit).",
 };

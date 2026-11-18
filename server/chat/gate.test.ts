@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { gatePassed, gateReport, gateVerified, listShots, parseReview, refineArgs, refinerFor, REPORT_MAX, reviewerFor, runChecks, runQa } from './gate';
+import { gatePassed, gateReport, gateVerified, listShots, REPORT_COMMITS_MAX, parseReview, refineArgs, refinerFor, REPORT_MAX, reviewerFor, runChecks, runQa } from './gate';
 
 const cwd = process.cwd();
 
@@ -77,6 +77,19 @@ describe('portão: revisão e relatório', () => {
     expect(r).toContain('FALHARAM');
     expect(r).toContain('PROBLEMAS');
     expect(r.endsWith('…')).toBe(true);
+  });
+
+  it('relatório: custo do agente e commits (SHA curto + mensagem), com corte na lista', () => {
+    const r = gateReport({ branch: 'b', checks: { ok: true, tail: '' }, usd: 0.756, commits: ['abc1234 feat: botão novo', 'def5678 fix: cor'] });
+    expect(r).toContain('Custo do agente: US$ 0.76.');
+    expect(r).toContain('- abc1234 feat: botão novo');
+    expect(r).toContain('- def5678 fix: cor');
+    expect(gateReport({ branch: 'b', commits: [] })).toContain('Commits: nenhum');
+    const many = gateReport({ branch: 'b', commits: Array.from({ length: REPORT_COMMITS_MAX + 3 }, (_, i) => `sha${i} c${i}`) });
+    expect(many).toContain('(e mais 3)');
+    expect(many).not.toContain(`sha${REPORT_COMMITS_MAX} `);
+    // Sem os dados (lista antiga, sem a função): nada de linha de custo/commits.
+    expect(gateReport({ branch: 'b' })).not.toMatch(/Custo|Commits/);
   });
 
   it('revisor por provedor; sem a CLI do codex/agy cai no claude e diz no relatório', () => {

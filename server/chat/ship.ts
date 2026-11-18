@@ -253,7 +253,9 @@ export class ShipService {
         const gh = this.gh();
         if (!gh) return this.fail(run, s, tr('Sem token do GitHub: defina em Configurações > Token do GitHub.'));
         const [title, ...rest] = mergeMessage(run.items).split('\n');
-        const body = [rest.join('\n').trim(), tr('Aberto pelo Habblaud ("Subir"), commit {0}.', [s.sha])].filter(Boolean).join('\n\n');
+        // O relatório do portão de cada item (checagens, revisão, risco, custo, commits) vai junto; o GitHub corta em 65536.
+        const reports = run.items.map((i) => i.report?.trim()).filter(Boolean).join('\n\n---\n\n').slice(0, 60_000);
+        const body = [rest.join('\n').trim(), reports, tr('Aberto pelo Habblaud ("Subir"), commit {0}.', [s.sha])].filter(Boolean).join('\n\n');
         const pr = await gh.openPr(repo, { head: s.branch, base: s.base, title, body });
         s.prNumber = pr.number;
         s.prUrl = pr.url;

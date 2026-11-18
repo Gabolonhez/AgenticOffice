@@ -134,6 +134,11 @@ export function createWorktreeOps(dataDir: string, git: Git = realGit): ShipWork
       return (await git(['diff', w.base], w.path)).out;
     },
 
+    async commits(w) {
+      const log = await git(['log', '--format=%h %s', `${w.base}..HEAD`], w.path);
+      return log.code === 0 ? log.out.split(/\r?\n/).filter(Boolean) : [];
+    },
+
     commit: (w, message) => commitCopy(git, w, message),
 
     async merge(repo, w, message) {

@@ -579,7 +579,7 @@ describe('chat: métricas das listas (run-metrics.jsonl)', () => {
     const metricsFile = join(dir, 'run-metrics.jsonl');
     let now = 100;
     const gate = { checks: vi.fn(async () => ({ ok: true, tail: '' })), review: vi.fn(async () => ({ ok: true, findings: 'OK', by: 'claude' })) };
-    const t = setup({ metricsFile, worktrees: wt(), gate, exists: () => true, now: () => now });
+    const t = setup({ metricsFile, worktrees: { ...wt(), commits: vi.fn(async () => ['abc1234 feat: a']) }, gate, exists: () => true, now: () => now });
     (t.chat as unknown as { record: (id: string) => unknown }).record = (id: string) => ({ spend: { usd: id === 'chat:1' ? 0.75 : 0, tokens: 1234 } });
     t.svc.create({ items: items('a', 'b'), options: { ...options, model: 'sonnet' }, isolated: true }, { check: 'npm test', reviewer: 'claude' });
     await flush();
@@ -591,6 +591,8 @@ describe('chat: métricas das listas (run-metrics.jsonl)', () => {
     const lines = readMetrics(metricsFile);
     expect(lines).toHaveLength(2);
     expect(lines[0]).toEqual({ at: 5_100, runId: 'r1', folder: PROJ, state: 'review', gate: 'pass', retried: false, ms: 5_000, usd: 0.75, tokens: 1234, provider: 'claude', model: 'sonnet' });
+    // O mesmo gasto e os commits da cópia vão no relatório do item (card e PR).
+    expect(t.svc.get('r1')!.items[0].report).toMatch(/Custo do agente: US\$ 0\.75\.[\s\S]*- abc1234 feat: a/);
     expect(lines[1]).toMatchObject({ state: 'interrupted', gate: 'none' });
     expect(readMetrics(metricsFile, 5_101)).toHaveLength(1);
   });

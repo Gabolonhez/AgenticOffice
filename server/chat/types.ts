@@ -49,6 +49,8 @@ export interface WorktreeOps {
   summary(w: { path: string; base: string }): Promise<{ files: number; added: number; removed: number; commits: number; stat: string }>;
   /** Diff da cópia contra a base, com os arquivos novos (git add -A -N antes): o que o revisor do portão lê. */
   diff(w: { path: string; base: string; copied?: string[] }): Promise<string>;
+  /** Commits da cópia desde a base (`<sha curto> <assunto>`, do mais novo), para o relatório do portão. */
+  commits?(w: { path: string; base: string }): Promise<string[]>;
   /** Os `copied` ficam fora do commit; um trabalho que os commitou (desde `base`) não junta. */
   merge(repo: string, w: { path: string; branch: string; base?: string; copied?: string[] }, message: string): Promise<{ ok: true } | { ok: false; reason: string }>;
   discard(repo: string, w: { path: string; branch: string }): Promise<{ ok: true } | { ok: false; reason: string }>;

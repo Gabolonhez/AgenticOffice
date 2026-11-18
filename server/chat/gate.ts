@@ -248,8 +248,14 @@ export function fixRequest(checks: CheckResult | undefined, review: ReviewResult
   return cut(parts.join('\n\n'), CHAT_TEXT_MAX);
 }
 
-/** Relatório para o VBoards (até REPORT_MAX): branch, checagens, revisão e resumo do agente. */
-export function gateReport(r: { branch: string; checks?: CheckResult; qa?: QaResult; review?: ReviewResult; summary?: string; retried?: boolean; missing?: string[]; risk?: RiskVerdict }): string {
+/** Commits que entram no relatório (o resto vira "e mais N"). */
+export const REPORT_COMMITS_MAX = 10;
+
+/**
+ * Relatório para o VBoards e o PR (até REPORT_MAX): branch, checagens, revisão, risco, custo do agente (o mesmo do
+ * run-metrics), commits da cópia (SHA curto + mensagem) e resumo do agente.
+ */
+export function gateReport(r: { branch: string; checks?: CheckResult; qa?: QaResult; review?: ReviewResult; summary?: string; retried?: boolean; missing?: string[]; risk?: RiskVerdict; usd?: number; commits?: string[] }): string {
   const checks = !r.checks ? tr('Checagens: sem vboards.check.') : r.checks.ok ? tr('Checagens: OK.') : `${tr('Checagens: FALHARAM.')}\n${cut(r.checks.tail, 500)}`;
   const review = !r.review
     ? tr('Revisão: sem mudanças no diff.')
@@ -259,7 +265,11 @@ export function gateReport(r: { branch: string; checks?: CheckResult; qa?: QaRes
   const qa = r.qa ? [r.qa.ok ? tr('QA visual: {0} captura(s).', [r.qa.shots.length]) : `${tr('QA visual: FALHOU (só aviso, não reprova).')}\n${cut(r.qa.tail, 300)}`] : [];
   const risk = r.risk ? [cut(tr('Risco: {0}{1}', [riskLabel(r.risk.level), r.risk.why.length ? ` (${r.risk.why.join('; ')})` : '']), 400)] : [];
   const missing = r.missing?.length ? [tr('vboards.copy: não existem na pasta (não copiados): {0}.', [r.missing.join(', ')])] : [];
-  const head = [tr('Branch: {0} (falta revisar e Juntar no Habblaud).', [r.branch]), checks, ...qa, review, ...risk, ...missing, ...(r.retried ? [tr('O erro voltou uma vez ao agente para correção.')] : [])].join('\n');
+  const cost = r.usd !== undefined ? [tr('Custo do agente: US$ {0}.', [r.usd.toFixed(2)])] : [];
+  const more = (r.commits?.length ?? 0) - REPORT_COMMITS_MAX;
+  const list = r.commits?.slice(0, REPORT_COMMITS_MAX).map((c) => `- ${cut(c, 100)}`) ?? [];
+  const commits = !r.commits ? [] : r.commits.length ? [[tr('Commits:'), ...list, ...(more > 0 ? [tr('(e mais {0})', [more])] : [])].join('\n')] : [tr('Commits: nenhum (o Juntar faz o commit).')];
+  const head = [tr('Branch: {0} (falta revisar e Juntar no Habblaud).', [r.branch]), checks, ...qa, review, ...risk, ...cost, ...commits, ...missing, ...(r.retried ? [tr('O erro voltou uma vez ao agente para correção.')] : [])].join('\n');
   const summary = r.summary?.trim() ? `\n${tr('Resumo do agente:')}\n${r.summary.trim()}` : '';
   return cut(maskSecrets(`${head}${summary}`), REPORT_MAX);
 }

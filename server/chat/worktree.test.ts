@@ -254,6 +254,11 @@ describe('chat: Subir (commit, push e varredura)', { timeout: 30_000 }, () => {
     return { r, ops, w, sha: c.sha, bare };
   }
 
+  it('commits: SHA curto e assunto desde a base (o relatório do portão)', async () => {
+    const { ops, w, sha } = await shipped();
+    expect(await ops.commits!(w)).toEqual([`${sha.slice(0, 7)} feat: novo`]);
+  });
+
   it('commit devolve o HEAD da cópia e recusa arquivo copiado commitado', async () => {
     const { w, sha } = await shipped();
     expect(sha).toBe(git(w.path, 'rev-parse', 'HEAD'));
