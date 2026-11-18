@@ -134,12 +134,13 @@ describe('diff da cópia para o revisor', () => {
 
 describe('vboards.copy: arquivos copiados para a cópia', () => {
   async function withCopy() {
-    const { r, ops } = setup();
+    const { r, data, ops } = setup();
     mkdirSync(join(r, 'apps', 'web'), { recursive: true });
     writeFileSync(join(r, '.env'), 'SEGREDO=1\n');
     writeFileSync(join(r, 'apps', 'web', '.env.local'), 'X=2\n');
     writeFileSync(join(r, 'a.txt'), 'local sem commit\n');
-    git(r, 'config', 'vboards.copy', '.env, apps/web/.env.local, falta.env, a.txt, ../fora');
+    // vboards.copy é sensível: vale só o do folder-policy.json (o do git config o agente conseguiria gravar).
+    writePolicy(policyFile(data), r, { copy: '.env, apps/web/.env.local, falta.env, a.txt, ../fora' });
     const w = await made(ops, r);
     git(r, 'checkout', '-q', '--', 'a.txt');
     // O Juntar exige o projeto sem mudanças: num projeto de verdade o .env é ignorado; aqui, sai da pasta.
@@ -257,9 +258,9 @@ describe('chat: Subir (commit, push e varredura)', { timeout: 30_000 }, () => {
     const { w, sha } = await shipped();
     expect(sha).toBe(git(w.path, 'rev-parse', 'HEAD'));
     expect(git(w.path, 'log', '-1', '--format=%s')).toBe('feat: novo');
-    const { r, ops } = setup();
+    const { r, data, ops } = setup();
     writeFileSync(join(r, '.env'), 'X=1\n');
-    git(r, 'config', 'vboards.copy', '.env');
+    writePolicy(policyFile(data), r, { copy: '.env' });
     const w2 = await made(ops, r);
     git(w2.path, 'add', '-f', '.env');
     git(w2.path, 'commit', '-q', '-m', 'vazou');

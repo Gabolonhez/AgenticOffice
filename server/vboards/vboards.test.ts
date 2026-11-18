@@ -426,9 +426,10 @@ describe('configuração da pasta (git config --local vboards.*)', () => {
     expect(parseFolderConfig('vboards.qa npx playwright test')).toMatchObject({ qa: 'npx playwright test' });
     expect(validateFolderConfig({ qa: 'npx playwright test' })).toEqual({ values: { qa: 'npx playwright test' } });
     expect(parseFolderConfig(undefined)).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'sonnet', copy: [], ship: 'off', ciMinutes: 30, autoMerge: 'off', riskPaths: [] });
-    const out = 'vboards.card PostsBuilder\nvboards.auto TRUE\nvboards.provider agy\nvboards.budget 0.75\nvboards.check npm ci && npm test\nvboards.reviewer codex\nvboards.copy .env, config/local.json, ../fora, /etc/passwd';
-    expect(parseFolderConfig(out)).toEqual({ card: 'PostsBuilder', auto: true, provider: 'antigravity', budget: 0.75, check: 'npm ci && npm test', reviewer: 'codex', copy: ['.env', 'config/local.json'], ship: 'off', ciMinutes: 30, autoMerge: 'off', riskPaths: [] });
-    expect(parseFolderConfig('vboards.auto yes\nvboards.budget -1\nvboards.provider gpt\nvboards.reviewermodel opus')).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'opus', copy: [], ship: 'off', ciMinutes: 30, autoMerge: 'off', riskPaths: [] });
+    // budget, check, reviewer e copy são sensíveis: vêm da política (folder-policy.json), não do git config.
+    const out = 'vboards.card PostsBuilder\nvboards.auto TRUE\nvboards.provider agy';
+    expect(parseFolderConfig(out, { budget: '0.75', check: 'npm ci && npm test', reviewer: 'codex', copy: '.env, config/local.json, ../fora, /etc/passwd' })).toEqual({ card: 'PostsBuilder', auto: true, provider: 'antigravity', budget: 0.75, check: 'npm ci && npm test', reviewer: 'codex', copy: ['.env', 'config/local.json'], ship: 'off', ciMinutes: 30, autoMerge: 'off', riskPaths: [] });
+    expect(parseFolderConfig('vboards.auto yes\nvboards.provider gpt', { budget: '-1', reviewerModel: 'opus' })).toEqual({ auto: false, provider: 'claude', budget: 2, reviewer: 'claude', reviewerModel: 'opus', copy: [], ship: 'off', ciMinutes: 30, autoMerge: 'off', riskPaths: [] });
   });
 });
 
@@ -520,16 +521,18 @@ describe('tela de configuração das pastas', () => {
 
 describe('política sensível fora do git config (folder-policy.json)', () => {
   it('chave sensível no git config é ignorada e vira aviso; a do arquivo vale', () => {
-    const out = 'vboards.automerge low\nvboards.ship merge\nvboards.risklines 99999\nvboards.store ota\nvboards.check npm test';
+    // O portão também: um agente trocaria o check por `true`, o revisor ou o budget no git config da cópia.
+    const out = 'vboards.automerge low\nvboards.ship merge\nvboards.risklines 99999\nvboards.store ota\nvboards.check true\nvboards.reviewer agy\nvboards.budget 500\nvboards.copy .env.production\nvboards.qa npx playwright test';
     const c = parseFolderConfig(out);
-    expect(c).toMatchObject({ autoMerge: 'off', ship: 'off', check: 'npm test' });
+    expect(c).toMatchObject({ autoMerge: 'off', ship: 'off', reviewer: 'claude', budget: 2, copy: [], qa: 'npx playwright test' });
+    expect(c.check).toBeUndefined();
     expect(c.riskLines).toBeUndefined();
     expect(c.store).toBeUndefined();
-    expect(c.legacy).toEqual(['autoMerge', 'ship', 'riskLines', 'store']);
+    expect(c.legacy).toEqual(['autoMerge', 'ship', 'riskLines', 'store', 'check', 'reviewer', 'budget', 'copy']);
     // No arquivo: vale e não avisa; o do git config continua ignorado (nunca importado).
-    const d = parseFolderConfig(out, { ship: 'pr' });
-    expect(d).toMatchObject({ ship: 'pr', autoMerge: 'off' });
-    expect(d.legacy).toEqual(['autoMerge', 'riskLines', 'store']);
+    const d = parseFolderConfig(out, { ship: 'pr', check: 'npm test' });
+    expect(d).toMatchObject({ ship: 'pr', autoMerge: 'off', check: 'npm test' });
+    expect(d.legacy).toEqual(['autoMerge', 'riskLines', 'store', 'reviewer', 'budget', 'copy']);
   });
 
   it('grava as sensíveis no arquivo (não no git config), tira a cópia antiga e lê de volta', async () => {
@@ -538,11 +541,11 @@ describe('política sensível fora do git config (folder-policy.json)', () => {
     execFileSync('git', ['init', '-q'], { cwd: dir });
     execFileSync('git', ['config', 'vboards.automerge', 'low'], { cwd: dir });
     expect((await readFolderConfig(dir, data)).legacy).toEqual(['autoMerge']);
-    expect(await writeFolderConfig(dir, { ship: 'pr', autoMerge: 'off', check: 'npm test' }, data)).toBeUndefined();
+    expect(await writeFolderConfig(dir, { ship: 'pr', autoMerge: 'off', check: 'npm test', qa: 'npm run qa' }, data)).toBeUndefined();
     const git = execFileSync('git', ['config', '--local', '--get-regexp', '^vboards\\.'], { cwd: dir, encoding: 'utf8' });
-    expect(git).toContain('vboards.check npm test');
-    expect(git).not.toMatch(/ship|automerge/i);
-    expect(readPolicy(policyFile(data), dir)).toEqual({ ship: 'pr', autoMerge: 'off' });
+    expect(git).toContain('vboards.qa npm run qa');
+    expect(git).not.toMatch(/ship|automerge|check/i);
+    expect(readPolicy(policyFile(data), dir)).toEqual({ ship: 'pr', autoMerge: 'off', check: 'npm test' });
     const c = await readFolderConfig(dir, data);
     expect(c).toMatchObject({ ship: 'pr', autoMerge: 'off', check: 'npm test' });
     expect(c.legacy).toBeUndefined();
@@ -560,7 +563,10 @@ describe('política sensível fora do git config (folder-policy.json)', () => {
     expect(policyChangeNeedsPin(armed, { riskLines: '99999' })).toBe(true);
     expect(policyChangeNeedsPin(armed, { autoMerge: 'low', ship: 'merge' })).toBe(false);
     expect(policyChangeNeedsPin(armed, { autoMerge: 'off' })).toBe(false);
-    expect(policyChangeNeedsPin(armed, { check: 'npm test' })).toBe(false);
+    // Trocar o check ou o revisor com a subida sozinha ligada também pede PIN; o resto (qa, auto) não.
+    expect(policyChangeNeedsPin(armed, { check: 'true' })).toBe(true);
+    expect(policyChangeNeedsPin(armed, { reviewer: 'agy' })).toBe(true);
+    expect(policyChangeNeedsPin(armed, { qa: 'npm run qa', auto: 'true' })).toBe(false);
   });
 
   it('POST da configuração: ligar autoMerge sem PIN é recusado; com PIN grava', async () => {
@@ -581,10 +587,10 @@ describe('git config --local de verdade', () => {
   it('grava, lê de volta e tira (tirar o que não existe não é erro)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hb-vb-cfg-'));
     execFileSync('git', ['init', '-q'], { cwd: dir });
-    expect(await writeFolderConfig(dir, { auto: 'true', provider: 'agy', check: 'npm ci && npm test', reviewerModel: '' })).toBeUndefined();
-    expect(await readFolderConfig(dir)).toMatchObject({ auto: true, provider: 'antigravity', check: 'npm ci && npm test' });
-    expect(await writeFolderConfig(dir, { check: '' })).toBeUndefined();
-    expect(await readFolderConfig(dir)).not.toHaveProperty('check');
+    expect(await writeFolderConfig(dir, { auto: 'true', provider: 'agy', qa: 'npx playwright test', card: '' })).toBeUndefined();
+    expect(await readFolderConfig(dir)).toMatchObject({ auto: true, provider: 'antigravity', qa: 'npx playwright test' });
+    expect(await writeFolderConfig(dir, { qa: '' })).toBeUndefined();
+    expect(await readFolderConfig(dir)).not.toHaveProperty('qa');
     expect(await writeFolderConfig(mkdtempSync(join(tmpdir(), 'hb-vb-nogit-')), { auto: 'true' })).toEqual(expect.any(String));
   });
 });

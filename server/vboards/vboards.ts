@@ -221,7 +221,8 @@ const single = (m: { paths: string[]; error?: string }): string | undefined => (
 
 /**
  * Configuração de uma pasta: as chaves comuns no `git config --local` dela; as sensíveis (policy.ts SENSITIVE_KEYS:
- * subir, merge sozinho, loja, risco) só em <dataDir>/chat/folder-policy.json, gravado pelo servidor.
+ * subir, merge sozinho, loja, risco, portão, gasto e cópia de arquivos) só em <dataDir>/chat/folder-policy.json,
+ * gravado pelo servidor.
  */
 export interface FolderConfig {
   /** Chaves sensíveis achadas no git config da pasta e ignoradas (sem valor no folder-policy.json): configurar de novo. */
@@ -346,7 +347,10 @@ export function parseFolderConfig(out: string | undefined, policy: FolderPolicy 
 
 /** As chaves sensíveis da configuração já lida (com os padrões): o que a lista congela e o que o PIN compara. */
 export function policyOf(c: FolderConfig): FolderPolicy {
-  const p: FolderPolicy = { autoMerge: c.autoMerge, ship: c.ship, ciMinutes: String(c.ciMinutes) };
+  const p: FolderPolicy = { autoMerge: c.autoMerge, ship: c.ship, ciMinutes: String(c.ciMinutes), reviewer: c.reviewer, budget: String(c.budget) };
+  if (c.check) p.check = c.check;
+  if (c.reviewerModel) p.reviewerModel = c.reviewerModel;
+  if (c.copy.length) p.copy = c.copy.join(',');
   if (c.base) p.base = c.base;
   if (c.remote) p.remote = c.remote;
   if (c.deploy) p.deploy = c.deploy;

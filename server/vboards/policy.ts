@@ -3,11 +3,13 @@
 // estas chaves vivem em <dataDir>/chat/folder-policy.json (chave = caminho real da pasta), gravado só pelo servidor
 // (tela local ou cartão do Jarvis). Valores antigos no git config são IGNORADOS (nunca importados: o agente pode tê-los
 // gravado); a tela avisa para configurar de novo.
+// O portão também é sensível: com `vboards.check true` ou outro revisor no git config, o agente aprovaria o próprio
+// trabalho; `budget` (gasto por item) e `copy` (arquivos copiados para a cópia, ex.: .env) também ficam aqui.
 import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { errMsg } from '../log';
 
-export const SENSITIVE_KEYS = ['autoMerge', 'ship', 'base', 'remote', 'deploy', 'ciMinutes', 'riskPaths', 'riskLines', 'store', 'storeWorkflow', 'otaChannel', 'versionBump'] as const;
+export const SENSITIVE_KEYS = ['autoMerge', 'ship', 'base', 'remote', 'deploy', 'ciMinutes', 'riskPaths', 'riskLines', 'store', 'storeWorkflow', 'otaChannel', 'versionBump', 'check', 'reviewer', 'reviewerModel', 'budget', 'copy'] as const;
 export type SensitiveKey = (typeof SENSITIVE_KEYS)[number];
 export type FolderPolicy = Partial<Record<SensitiveKey, string>>;
 
