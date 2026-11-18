@@ -42,11 +42,14 @@ export interface RiskVerdict {
 const LOCKFILES = new Set(['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock', 'bun.lockb', 'podfile.lock', 'gemfile.lock', 'cargo.lock', 'poetry.lock', 'composer.lock', 'go.sum', 'pubspec.lock', 'gradle.lockfile']);
 /** Manifestos de dependência que contam inteiros (o package.json e o app.json olham o que mudou). */
 const MANIFESTS = new Set(['podfile', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts', 'requirements.txt', 'gemfile', 'go.mod', 'cargo.toml', 'pyproject.toml', 'composer.json', 'pubspec.yaml', 'eas.json']);
-const SENSITIVE = /auth|billing|payment|paywall|subscription|stripe|superwall|revenuecat/i;
+// `pix(?!el)`: o Pix, não pixel/pixelart.
+const SENSITIVE = /auth|billing|payment|paywall|subscription|stripe|superwall|revenuecat|middleware|token|identity|session|pricing|checkout|pix(?!el)|pagarleve|entitlement|premium/i;
 const APP_CONFIG = /^app\.(json|config\.(js|ts|cjs|mjs|json))$/;
-const PKG_DEP_KEY = /"(dependencies|devDependencies|peerDependencies|optionalDependencies|bundledDependencies|overrides|resolutions|engines|packageManager)"/;
-/** `"nome": "versão"` (dependência), fora de "version". */
-const PKG_DEP_LINE = /^\s*"(?!version")[@\w./-]+"\s*:\s*"(\^|~|[<>=]|\d|\*|latest|workspace:|file:|link:|npm:|git|https?:|github:)/;
+/** Testes: o agente que mexe neles pode fazer o check passar sem consertar nada. */
+const TEST_FILE = /\.(test|spec)\.[^/]+$/;
+const TEST_CONFIG = /^(jest|vitest|playwright)\.(config|workspace)\.[^/]+$/;
+/** Linhas do package.json que não pesam: a versão e a descrição. O resto (dependências, scripts, config de teste) é alto. */
+const PKG_SAFE_LINE = /^\s*"(version|description)"\s*:/;
 
 interface FileDiff {
   paths: string[];
@@ -92,7 +95,9 @@ function highReason(path: string, f: FileDiff | undefined, extra: Array<{ glob: 
   if (name.startsWith('.env')) return tr('arquivo .env');
   if (LOCKFILES.has(name)) return tr('lockfile de dependências');
   if (MANIFESTS.has(name)) return name === 'eas.json' ? tr('eas.json (build/loja)') : tr('manifesto de dependências');
-  if (name === 'package.json' && (!f || f.changed.some((l) => PKG_DEP_KEY.test(l) || PKG_DEP_LINE.test(l)))) return tr('dependências do package.json');
+  // Sem o arquivo inteiro não dá para saber de que bloco é uma linha: tudo que não é versão/descrição conta (scripts também).
+  if (name === 'package.json' && (!f || f.changed.some((l) => l.trim() && !PKG_SAFE_LINE.test(l)))) return tr('dependências/scripts do package.json');
+  if (TEST_FILE.test(name) || segs.includes('__tests__') || TEST_CONFIG.test(name)) return tr('testes ou config de teste (o check depende deles)');
   if (APP_CONFIG.test(name) && (!f || /plugins/.test(f.text))) return tr('plugins do app.json/app.config');
   if (SENSITIVE.test(p)) return tr('login/pagamento/assinatura');
   const hit = extra.find((x) => x.re.test(x.base ? name : p));

@@ -31,15 +31,33 @@ describe('diffRisk: cada padrão de risco alto', () => {
     ['ios/Podfile'],
     ['android/app/build.gradle'],
     ['eas.json'],
+    ['src/app.test.ts'],
+    ['web/login.spec.tsx'],
+    ['src/__tests__/util.ts'],
+    ['vitest.config.ts'],
+    ['jest.config.js'],
+    ['playwright.config.ts'],
+    ['src/middleware.ts'],
+    ['lib/token.ts'],
+    ['src/identity/provider.ts'],
+    ['app/session-store.ts'],
+    ['src/pricing.ts'],
+    ['app/checkout/page.tsx'],
+    ['src/pix/qrcode.ts'],
+    ['server/PagarLeve.ts'],
+    ['src/entitlements.ts'],
+    ['app/PremiumGate.tsx'],
   ])('%s', (path) => {
     const r = diffRisk(file(path, '+x'));
     expect(r.level).toBe('high');
     expect(r.why.join(' ')).toContain(path);
   });
 
-  it('package.json: só dependências (não scripts nem version)', () => {
-    expect(level(file('package.json', '-    "build": "tsc"', '+    "build": "tsc -b"'))).toBe('low');
+  it('package.json: dependências e scripts são altos; só versão/descrição não', () => {
+    expect(level(file('package.json', '-    "build": "tsc"', '+    "build": "tsc -b"'))).toBe('high');
+    expect(level(file('package.json', ' "scripts": {', '-    "test": "vitest run",', '+    "test": "echo ok",'))).toBe('high');
     expect(level(file('package.json', '-  "version": "1.0.0",', '+  "version": "1.0.1",'))).toBe('low');
+    expect(level(file('package.json', '-  "description": "a",', '+  "description": "b",'))).toBe('low');
     expect(level(file('package.json', '+    "lodash": "^4.17.21",'))).toBe('high');
     expect(level(file('package.json', '+  "devDependencies": {'))).toBe('high');
   });
@@ -57,6 +75,10 @@ describe('diffRisk: cada padrão de risco alto', () => {
     expect(level(file('infra/main.tf', '+x'), { extra: ['*.tf'] })).toBe('high');
     expect(level(file('infra/main.tf', '+x'), { extra: ['other/*.tf'] })).toBe('low');
     expect(diffRisk(d, { extra: ['src/core/**'] }).why[0]).toContain('src/core/**');
+  });
+
+  it('pixel não é Pix', () => {
+    expect(level(file('client/src/art/pixel-font.ts', '+x'))).toBe('low');
   });
 
   it('diff pequeno e comum = low, sem motivo', () => {
