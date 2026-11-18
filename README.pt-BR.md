@@ -657,19 +657,19 @@ lista as subtarefas que você mandou para o agente no quadro do time. **Iniciar*
 Code, Codex ou Antigravity), e a subtarefa só é concluída quando essa sessão acaba.
 
 **A abertura automática é opt-in e vem desligada.** Enquanto você não liga numa pasta, nada roda sem o seu clique. Cada
-pasta guarda a própria configuração no git config local dela (os mesmos valores aparecem em **Configurações › VBoards
+pasta guarda a própria configuração no git config local dela, menos as sensíveis, que ficam no Habblaud (os mesmos valores aparecem em **Configurações › VBoards
 por pasta**, só leitura pelo celular):
 
-| Chave (`git config --local`) | Padrão | O que faz |
+| Chave | Padrão | O que faz |
 | --- | --- | --- |
 | `vboards.card` | nome da pasta | Título do card que combina com esta pasta. |
 | `vboards.auto` | `false` | `true` liga a abertura automática nesta pasta. |
 | `vboards.provider` | `claude` | Agente que faz o trabalho: `claude`, `codex` ou `agy`. |
-| `vboards.budget` | `2` | Limite de custo por item, em US$. |
-| `vboards.check` | nenhum | Comando de shell rodado na cópia isolada depois de cada item. A cópia não tem `node_modules` nem `.env`, então o comando instala o que precisar (ex.: `npm ci && npm test`). |
-| `vboards.reviewer` | `claude` | Quem revisa o diff: `claude`, `codex` ou `agy`. |
-| `vboards.reviewerModel` | `sonnet` (Claude) | Modelo do revisor; Codex e agy usam o padrão da CLI. |
-| `vboards.copy` | nenhum | Arquivos (caminhos relativos, separados por vírgula, ex.: `.env`) copiados da pasta para cada cópia isolada. Ficam fora do diff do revisor e do commit do Juntar. |
+| `vboards.budget` | `2` | Limite de custo por item, em US$. **Sensível:** fica no Habblaud, não no git config (veja **Modos de autonomia**). |
+| `vboards.check` | nenhum | Comando de shell rodado na cópia isolada depois de cada item. A cópia não tem `node_modules` nem `.env`, então o comando instala o que precisar (ex.: `npm ci && npm test`). **Sensível:** fica no Habblaud, não no git config (veja **Modos de autonomia**). |
+| `vboards.reviewer` | `claude` | Quem revisa o diff: `claude`, `codex` ou `agy`. **Sensível:** fica no Habblaud, não no git config (veja **Modos de autonomia**). |
+| `vboards.reviewerModel` | `sonnet` (Claude) | Modelo do revisor; Codex e agy usam o padrão da CLI. **Sensível:** fica no Habblaud, não no git config (veja **Modos de autonomia**). |
+| `vboards.copy` | nenhum | Arquivos (caminhos relativos, separados por vírgula, ex.: `.env`) copiados da pasta para cada cópia isolada. Ficam fora do diff do revisor e do commit do Juntar. **Sensível:** fica no Habblaud, não no git config (veja **Modos de autonomia**). |
 
 Com `vboards.auto` ligado (e o chat com agentes ligado), cada subtarefa cujo card combina **só** com esta pasta vira uma
 lista (uma de cada vez por pasta; listas de pastas diferentes rodam em paralelo, até `HABBLAUD_MAX_PARALLEL_RUNS`,
@@ -708,6 +708,54 @@ do segredo antigo; com ele o e-mail vem do token. As ferramentas do Jarvis e a c
 Escopos: `read` (consultas), `write` (criar e mudar tarefas e cards, refinar) e `agent` (a fila dos agentes, a caixa do
 Jarvis, mandar subtarefas para a fila e aprovar o plano). Sem o escopo, ou com o token expirado, o painel do VBoards
 mostra o motivo.
+
+### Modos de autonomia
+
+Quanto o escritório faz sozinho depende de chaves por pasta. `vboards.card`, `vboards.auto`, `vboards.provider` e
+`vboards.qa` ficam no git config da pasta; as **sensíveis** (`vboards.check`, `vboards.reviewer`,
+`vboards.reviewerModel`, `vboards.budget`, `vboards.copy`, `vboards.ship`, `vboards.autoMerge`, `vboards.base`,
+`vboards.remote`, `vboards.deploy`, `vboards.riskPaths`, `vboards.riskLines` e as da loja) ficam no Habblaud
+(`~/.habblaud/chat/folder-policy.json`), gravadas só pela tela **Configurações › VBoards por pasta** ou pelo Jarvis com
+PIN. A cópia isolada compartilha o `.git/config` do repo, então um agente conseguiria trocar o que estivesse lá (ex.:
+`vboards.check true`): valores sensíveis achados no git config são ignorados e a tela pede para configurar de novo.
+
+| Modo | Chaves | O que acontece |
+| --- | --- | --- |
+| **Padrão** (recomendado) | `vboards.auto=true`, `vboards.autoMerge=off` (o padrão do código para `auto` é `false`) | Cada subtarefa vira uma lista: o agente trabalha na cópia isolada, o portão roda (check + revisão) e a subtarefa vai para **review**. Nada sobe sozinho: você **Junta** ou clica em **Subir** com o PIN (push, PR e, com `ship=merge`, o merge depois do CI verde). |
+| **Automático** | `vboards.auto=true`, `vboards.ship=merge`, `vboards.autoMerge=low` (ligar pede PIN) | A lista que terminou sobe **sem PIN** (push, PR, merge com CI verde e deploy) só se TODAS valerem: plano aprovado no VBoards (`approvedAt`) em todo item; todo item passou no portão **com `vboards.check` configurado e aprovado e a revisão com resultado OK** (revisor com erro ou sem revisão = PIN); nenhuma volta de correção; risco final baixo (o da IA e o do diff); o diff não mexe em hooks/CI; a política da pasta é a mesma de quando a lista foi criada; a lista não veio de antes de um reinício. Qualquer falha = espera o PIN, com o motivo. |
+| **Sempre humano** | `vboards.autoMerge=off` | Produção (repo em que o merge já é o deploy de produção, sem ambiente de teste no meio), billing/auth/paywall, dinheiro (preço, checkout, Pix, assinatura) e ads. O cálculo de risco marca vários desses caminhos como alto (auth, billing, payment, paywall, subscription, stripe, superwall, revenuecat, middleware, token, identity, session, pricing, checkout, pix, pagarleve, entitlement, premium), mas pelo nome do arquivo não dá para garantir: nessas pastas deixe o automático desligado. |
+
+O risco do diff também é **alto** para: CI e hooks (`.github/`, `.husky/`, `.githooks/`), migrations e `.sql`, `.env*`,
+lockfiles e manifestos de dependência, qualquer linha do `package.json` fora de `version`/`description` (scripts
+inclusive), testes (`*.test.*`, `*.spec.*`, `__tests__/`), configs do jest/vitest/playwright, plugins do
+`app.json`/`app.config` e os globs do `vboards.riskPaths`. Mais linhas que `vboards.riskLines` (padrão 300), diff
+incompleto ou volta de correção = no mínimo médio.
+
+**Pré-requisitos do automático:**
+
+- **CI de PR no repo-alvo.** Sem nenhum check no PR (`no-ci`), o merge NUNCA acontece sem PIN ("este repo não tem CI de
+  PR; merge = deploy em produção").
+- **`vboards.check` configurado** (ex.: `npm ci && npm test`): sem ele, nada sobe sozinho.
+- **Ruleset no GitHub** na branch base: PR obrigatório, checks obrigatórios e ninguém no bypass. As travas de push do
+  Habblaud (regras negadas do Claude Code para `git push` no Bash e no PowerShell, inclusive `git -C <pasta> push`;
+  sandbox sem rede do Codex; a configuração do git que quebra o push) dificultam, mas não garantem: um agente com
+  shell pode achar outro caminho (alias, script, outra CLI). Quem garante é o ruleset.
+- **`approvedAt` só por uma pessoa:** o Habblaud confia no campo que o VBoards manda; garanta no VBoards que só um
+  humano aprova o plano do card.
+
+**Avisos:**
+
+- **`vboards.copy` com o `.env` de produção entrega as chaves de produção ao agente.** Copie só um `.env` de teste.
+- As listas automáticas rodam sem os MCPs do seu usuário (`--strict-mcp-config`: só o do escritório e o `.mcp.json` do
+  próprio projeto). O automático comum, fora das listas, continua com eles.
+- **Conflito entre listas seguidas volta para você:** cada lista nasce da base de quando começou; se outra lista juntou
+  antes algo que conflita, o merge do PR falha e a subida para com o motivo.
+- **Subida interrompida exige PIN:** depois de um reinício, o que ainda ia fazer push ou merge espera o PIN de novo
+  (só o acompanhamento do deploy de algo já juntado segue sozinho).
+- **Paralelismo:** `HABBLAUD_MAX_PARALLEL_RUNS` (padrão 2) conta só as listas. Agentes abertos à mão, pelo Jarvis ou
+  pelo VBoards fora de lista somam por fora, e cada lista roda um agente de cada vez.
+- O relatório de cada item (no card e no corpo do PR) traz branch, checagens, revisão, risco, custo do agente e os
+  commits da cópia.
 
 ### Jarvis (o orquestrador)
 

@@ -10,6 +10,22 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Portão e subida sozinha mais seguros
+
+- **Subida sem PIN mais exigente:** com `vboards.autoMerge=low`, a lista só sobe sozinha se cada item tiver o
+  `vboards.check` configurado e aprovado e a revisão com resultado OK. Sem check, revisor com erro ou sem revisão, a
+  subida espera o PIN.
+- **Check, revisor, budget e copy saem do git config:** `vboards.check`, `reviewer`, `reviewerModel`, `budget` e `copy`
+  passam a ficar no Habblaud (como `ship` e `autoMerge`), fora do alcance do agente na cópia isolada. Valores antigos
+  no git config são ignorados: a tela **VBoards por pasta** avisa para configurar de novo.
+- **Mais risco alto:** scripts e qualquer outra linha do `package.json` (fora de version/description), testes
+  (`*.test.*`, `*.spec.*`, `__tests__/`), configs do jest/vitest/playwright e nomes como middleware, token, session,
+  checkout, pricing, Pix, PagarLeve, entitlement e premium.
+- **Listas automáticas sem os MCPs do usuário** (só o do escritório e o `.mcp.json` do projeto) e com a trava de push
+  também no PowerShell e no `git -C <pasta> push`.
+- **Relatório do portão** com o custo do agente e os commits da cópia; o PR do "Subir" leva os relatórios.
+- **README:** nova seção "Modos de autonomia" (padrão, automático e sempre humano, pré-requisitos e avisos).
+
 ### Jarvis em tela cheia com cara de HUD
 
 - **Orb vivo:** núcleo de luz com anéis finos girando e um movimento por estado (respira parado, ondas e raios com a sua

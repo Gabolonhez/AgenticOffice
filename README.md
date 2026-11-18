@@ -659,19 +659,19 @@ open conversation** attaches the subtask to a session that is already open in th
 Code, Codex or Antigravity), and the subtask is completed only when that session ends.
 
 **Automatic start is opt-in and comes turned off.** Until you turn it on for a folder, nothing runs without your click.
-Each folder keeps its own settings in its local git config (the same values appear in **Settings › VBoards per folder**,
+Each folder keeps its own settings in its local git config, except the sensitive ones, stored in Habblaud (the same values appear in **Settings › VBoards per folder**,
 which is read-only from the phone):
 
-| Key (`git config --local`) | Default | What it does |
+| Key | Default | What it does |
 | --- | --- | --- |
 | `vboards.card` | folder name | Card title that matches this folder. |
 | `vboards.auto` | `false` | `true` turns on automatic start for this folder. |
 | `vboards.provider` | `claude` | Agent that does the work: `claude`, `codex` or `agy`. |
-| `vboards.budget` | `2` | Cost limit per item, in US$. |
-| `vboards.check` | none | Shell command run on the isolated copy after each item. The copy has no `node_modules` or `.env`, so the command installs what it needs (e.g. `npm ci && npm test`). |
-| `vboards.reviewer` | `claude` | Who reviews the diff: `claude`, `codex` or `agy`. |
-| `vboards.reviewerModel` | `sonnet` (Claude) | Reviewer model; Codex and agy use the CLI default. |
-| `vboards.copy` | none | Files (comma-separated relative paths, e.g. `.env`) copied from the folder into each isolated copy. They stay out of the reviewer's diff and of the Merge commit. |
+| `vboards.budget` | `2` | Cost limit per item, in US$. **Sensitive:** stored in Habblaud, not in git config (see **Autonomy modes**). |
+| `vboards.check` | none | Shell command run on the isolated copy after each item. The copy has no `node_modules` or `.env`, so the command installs what it needs (e.g. `npm ci && npm test`). **Sensitive:** stored in Habblaud, not in git config (see **Autonomy modes**). |
+| `vboards.reviewer` | `claude` | Who reviews the diff: `claude`, `codex` or `agy`. **Sensitive:** stored in Habblaud, not in git config (see **Autonomy modes**). |
+| `vboards.reviewerModel` | `sonnet` (Claude) | Reviewer model; Codex and agy use the CLI default. **Sensitive:** stored in Habblaud, not in git config (see **Autonomy modes**). |
+| `vboards.copy` | none | Files (comma-separated relative paths, e.g. `.env`) copied from the folder into each isolated copy. They stay out of the reviewer's diff and of the Merge commit. **Sensitive:** stored in Habblaud, not in git config (see **Autonomy modes**). |
 
 With `vboards.auto` on (and the agent chat on), each subtask whose card matches **only** this folder becomes a list
 (one at a time per folder; lists of different folders run in parallel, up to `HABBLAUD_MAX_PARALLEL_RUNS`, default 2;
@@ -703,6 +703,53 @@ installed), which sends the plan, questions and suggested subtasks back to the c
 **Phone notification:** Settings › VBoards per folder takes an optional [ntfy](https://ntfy.sh) topic
 (`https://ntfy.sh/<topic>` or your own server; http only on the local network). It only gets the card title and
 "waiting for review", "plan ready" or "failed", never code or summaries. Stored in `~/.habblaud/notify.json`.
+
+### Autonomy modes
+
+How much the office does on its own depends on per-folder keys. `vboards.card`, `vboards.auto`, `vboards.provider` and
+`vboards.qa` live in the folder's git config; the **sensitive** ones (`vboards.check`, `vboards.reviewer`,
+`vboards.reviewerModel`, `vboards.budget`, `vboards.copy`, `vboards.ship`, `vboards.autoMerge`, `vboards.base`,
+`vboards.remote`, `vboards.deploy`, `vboards.riskPaths`, `vboards.riskLines` and the store ones) live in Habblaud
+(`~/.habblaud/chat/folder-policy.json`), written only by **Settings › VBoards per folder** or by Jarvis with the PIN.
+The isolated copy shares the repo's `.git/config`, so an agent could change anything stored there (e.g.
+`vboards.check true`): sensitive values found in git config are ignored and the screen asks you to set them again.
+
+| Mode | Keys | What happens |
+| --- | --- | --- |
+| **Default** (recommended) | `vboards.auto=true`, `vboards.autoMerge=off` (the code default for `auto` is `false`) | Each subtask becomes a list: the agent works in the isolated copy, the gate runs (check + review) and the subtask goes to **review**. Nothing ships on its own: you **Merge** or click **Ship** with the PIN (push, PR and, with `ship=merge`, the merge after green CI). |
+| **Automatic** | `vboards.auto=true`, `vboards.ship=merge`, `vboards.autoMerge=low` (turning it on needs the PIN) | A finished list ships **without the PIN** (push, PR, merge with green CI and deploy) only if ALL hold: plan approved in VBoards (`approvedAt`) on every item; every item passed the gate **with `vboards.check` set and passing and the review returning OK** (reviewer error or no review = PIN); no fix round; low final risk (the AI's and the diff's); the diff doesn't touch hooks/CI; the folder policy is the same as when the list was created; the list doesn't come from before a restart. Anything else = it waits for the PIN, with the reason. |
+| **Always human** | `vboards.autoMerge=off` | Production (repos where the merge is already the production deploy, with no test environment in between), billing/auth/paywall, money (pricing, checkout, Pix, subscriptions) and ads. The risk check flags many of these paths as high (auth, billing, payment, paywall, subscription, stripe, superwall, revenuecat, middleware, token, identity, session, pricing, checkout, pix, pagarleve, entitlement, premium), but file names are no guarantee: keep automatic off in those folders. |
+
+The diff risk is also **high** for: CI and hooks (`.github/`, `.husky/`, `.githooks/`), migrations and `.sql`, `.env*`,
+lockfiles and dependency manifests, any `package.json` line other than `version`/`description` (scripts included),
+tests (`*.test.*`, `*.spec.*`, `__tests__/`), jest/vitest/playwright configs, `app.json`/`app.config` plugins and the
+`vboards.riskPaths` globs. More lines than `vboards.riskLines` (default 300), an incomplete diff or a fix round = at
+least medium.
+
+**Automatic prerequisites:**
+
+- **PR CI on the target repo.** With no check at all on the PR (`no-ci`), the merge NEVER happens without the PIN.
+- **`vboards.check` set** (e.g. `npm ci && npm test`): without it, nothing ships on its own.
+- **A GitHub ruleset** on the base branch: PR required, required checks and nobody in the bypass list. Habblaud's push
+  guards (Claude Code denied rules for `git push` in Bash and PowerShell, including `git -C <folder> push`; Codex's
+  sandbox without network; the git setting that breaks pushes) make it harder but are no guarantee: an agent with a
+  shell can find another way (alias, script, another CLI). The ruleset is what guarantees it.
+- **`approvedAt` set only by a person:** Habblaud trusts the field VBoards sends; make sure only a human approves the
+  card's plan in VBoards.
+
+**Warnings:**
+
+- **`vboards.copy` with the production `.env` hands production keys to the agent.** Copy only a test `.env`.
+- Automatic lists run without your user's MCP servers (`--strict-mcp-config`: only the office one and the project's own
+  `.mcp.json`). Regular automatic agents, outside lists, keep them.
+- **A conflict between consecutive lists comes back to you:** each list starts from the base of when it began; if
+  another list merged something conflicting first, the PR merge fails and shipping stops with the reason.
+- **An interrupted ship needs the PIN:** after a restart, anything that still had to push or merge waits for the PIN
+  again (only following the deploy of something already merged continues on its own).
+- **Parallelism:** `HABBLAUD_MAX_PARALLEL_RUNS` (default 2) counts lists only. Agents opened by hand, by Jarvis or by
+  VBoards outside a list add up on top, and each list runs one agent at a time.
+- Each item's report (on the card and in the PR body) has branch, checks, review, risk, agent cost and the copy's
+  commits.
 
 ### Demo mode
 
