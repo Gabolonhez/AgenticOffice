@@ -1,5 +1,7 @@
 // Claude Code sem tela: `claude -p --output-format stream-json --verbose`, uma rodada por mensagem, retomada pelo id.
 // O pedido vai por stdin (nunca no argv: um texto que começa com "-" viraria opção).
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { tr } from '../../../shared/i18n';
 import type { ChatDriver, ChatEvent, StreamParser, TurnSpec } from '../types';
 
@@ -13,6 +15,13 @@ export function claudeMcpConfig(mcp: { url: string; token: string }): unknown {
   return { mcpServers: { habblaud: { type: 'http', url: mcp.url, headers: { Authorization: `Bearer ${mcp.token}` }, timeout: MCP_SERVER_TIMEOUT_MS } } };
 }
 
+/**
+ * Sem push (denyPush): o Bash e o PowerShell do Claude Code aceitam `*` em qualquer ponto da regra. Cobre `git push` e
+ * `git -C <pasta> push`/`git -c x=y push`; outras formas (alias, script, `--git-dir`) escapam: quem garante de verdade é
+ * o env sem push (noPushEnv) e o ruleset do GitHub (README, "Modos de autonomia").
+ */
+export const DENY_PUSH_RULES = ['Bash(git push:*)', 'Bash(git -C * push*)', 'Bash(git -c * push*)', 'PowerShell(git push*)', 'PowerShell(git -C * push*)', 'PowerShell(git -c * push*)'];
+
 export function claudeArgs(spec: TurnSpec): string[] {
   const args = ['-p', '--output-format', 'stream-json', '--verbose'];
   if (spec.first) args.push('--session-id', spec.sessionId ?? '');
@@ -22,19 +31,21 @@ export function claudeArgs(spec: TurnSpec): string[] {
   if (spec.role) args.push('--append-system-prompt', spec.role);
   if (spec.budgetUsd !== undefined) args.push('--max-budget-usd', String(spec.budgetUsd));
   // A regra de negação vale mesmo com bypassPermissions.
-  if (spec.denyPush) args.push('--disallowedTools', 'Bash(git push:*)');
+  if (spec.denyPush) args.push('--disallowedTools', ...DENY_PUSH_RULES);
   // `--tools ''` desliga todas as internas (Bash, Edit, Read...); as do MCP continuam.
   if (spec.tools !== undefined) args.push('--tools', spec.tools);
   // Com imagem, o pedido vai como mensagem stream-json (blocos de imagem): o modelo vê sem precisar da ferramenta Read
   // (o Jarvis roda com `--tools ''`).
   if (spec.images?.length) args.push('--input-format', 'stream-json');
-  // MCP do escritório sempre (ferramentas office_*); no automático sem strict, para os MCPs do usuário continuarem.
-  if (spec.mcp) {
-    if (spec.permission === 'ask') args.push('--strict-mcp-config');
-    // Com `mcpConfigFile` (o ChatService grava, modo 600), o token não fica no argv, que outros processos leem.
-    args.push('--mcp-config', spec.mcpConfigFile ?? JSON.stringify(claudeMcpConfig(spec.mcp)));
-    if (spec.permission === 'ask') args.push('--permission-prompt-tool', PERMISSION_TOOL);
-  }
+  // MCP do escritório sempre (ferramentas office_*). No automático comum, sem strict: os MCPs do usuário continuam. Na
+  // lista automática (denyPush), strict: nada de MCP do usuário (google-ads, stripe...); só o do escritório e o
+  // .mcp.json do próprio projeto, se houver.
+  // Com `mcpConfigFile` (o ChatService grava, modo 600), o token não fica no argv, que outros processos leem.
+  const project = spec.denyPush && existsSync(join(spec.folder, '.mcp.json')) ? [join(spec.folder, '.mcp.json')] : [];
+  const configs = [...(spec.mcp ? [spec.mcpConfigFile ?? JSON.stringify(claudeMcpConfig(spec.mcp))] : []), ...project];
+  if ((spec.mcp && spec.permission === 'ask') || spec.denyPush) args.push('--strict-mcp-config');
+  if (configs.length) args.push('--mcp-config', ...configs);
+  if (spec.mcp && spec.permission === 'ask') args.push('--permission-prompt-tool', PERMISSION_TOOL);
   return args;
 }
 

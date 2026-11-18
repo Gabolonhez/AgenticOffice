@@ -1,7 +1,8 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { claudeArgs, claudeDriver, claudeStdin, MCP_SERVER_TIMEOUT_MS, PERMISSION_TOOL } from './claude';
+import { claudeArgs, claudeDriver, claudeStdin, DENY_PUSH_RULES, MCP_SERVER_TIMEOUT_MS, PERMISSION_TOOL } from './claude';
 import type { ChatEvent, TurnSpec } from '../types';
 
 const fx = (n: string) => readFileSync(join(__dirname, '..', 'fixtures', n), 'utf8').split(/\r?\n/).filter(Boolean);
@@ -69,7 +70,27 @@ describe('chat: Claude sem push', () => {
   it('denyPush: --disallowedTools com o git push, mesmo no automático', () => {
     const args = claudeArgs({ ...base, denyPush: true });
     expect(args[args.indexOf('--disallowedTools') + 1]).toBe('Bash(git push:*)');
+    expect(args.slice(args.indexOf('--disallowedTools') + 1, args.indexOf('--disallowedTools') + 1 + DENY_PUSH_RULES.length)).toEqual(DENY_PUSH_RULES);
+    expect(DENY_PUSH_RULES).toEqual(expect.arrayContaining(['PowerShell(git push*)', 'Bash(git -C * push*)', 'PowerShell(git -C * push*)']));
     expect(claudeArgs(base)).not.toContain('--disallowedTools');
+  });
+
+  it('lista automática (denyPush): --strict-mcp-config (sem os MCPs do usuário), o do escritório e o .mcp.json do projeto', () => {
+    const mcp = { url: 'http://127.0.0.1:4747/api/chat/mcp/chat:1', token: 't0k' };
+    const plain = claudeArgs({ ...base, denyPush: true, mcp, mcpConfigFile: 'C:\\data\\mcp.json' });
+    expect(plain).toContain('--strict-mcp-config');
+    expect(plain.slice(plain.indexOf('--mcp-config') + 1)).toEqual(['C:\\data\\mcp.json']);
+    expect(plain).not.toContain('--permission-prompt-tool');
+    const folder = mkdtempSync(join(tmpdir(), 'hb-claude-mcp-'));
+    writeFileSync(join(folder, '.mcp.json'), '{"mcpServers":{}}');
+    const withProject = claudeArgs({ ...base, folder, denyPush: true, mcp, mcpConfigFile: 'C:\\data\\mcp.json' });
+    expect(withProject.slice(withProject.indexOf('--mcp-config') + 1)).toEqual(['C:\\data\\mcp.json', join(folder, '.mcp.json')]);
+    // Sem o MCP do escritório, continua strict e leva só o do projeto.
+    const noOffice = claudeArgs({ ...base, folder, denyPush: true });
+    expect(noOffice).toContain('--strict-mcp-config');
+    expect(noOffice.slice(noOffice.indexOf('--mcp-config') + 1)).toEqual([join(folder, '.mcp.json')]);
+    // O automático comum (sem denyPush) não muda: sem strict, o .mcp.json o Claude já lê sozinho.
+    expect(claudeArgs({ ...base, folder, mcp })).not.toContain('--strict-mcp-config');
   });
 });
 
