@@ -43,7 +43,7 @@ describe('VBoards API v1', () => {
     expect(apiErrorText(401, 'expired')).toBe('Token do VBoards expirado ou inválido.');
     expect(apiErrorText(500, 'internal error')).toBe('VBoards respondeu 500: internal error');
     const f = vi.fn(async () => res(403, { error: 'missing scope agent' }));
-    await expect(new VBoardsApi({ base: 'https://vb.dev', token: 'vb_abc' }, f as unknown as typeof fetch).approve('c')).rejects.toThrow('escopo agent');
+    await expect(new VBoardsApi({ base: 'https://vb.dev', token: 'vb_abc' }, f as unknown as typeof fetch).refine('c')).rejects.toThrow('escopo agent');
     expect(f).toHaveBeenCalledTimes(1);
   });
 

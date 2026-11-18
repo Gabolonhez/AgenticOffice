@@ -91,6 +91,12 @@ function setup(answer: Answer = 'deny', over: Partial<JarvisToolsDeps> = {}) {
 
 const v1Calls = (f: ReturnType<typeof setup>['fetchMock']) => (f.mock.calls as unknown as Array<[string, RequestInit?]>).map((c) => `${(c[1] as RequestInit | undefined)?.method ?? 'GET'} ${String(c[0])}`);
 
+describe('Jarvis: aprovar plano é só humano', () => {
+  it('vboards_approve não é exposta ao modelo', () => {
+    expect(setup('deny').names()).not.toContain('vboards_approve');
+  });
+});
+
 describe('Jarvis: GATED nunca roda sem o dono', () => {
   for (const answer of ['deny', 'timeout'] as const) {
     it(`cartão ${answer === 'deny' ? 'recusado' : 'sem resposta'}: merge, discard, config, VBoards, agendamentos, fechar e abrir fora da cópia não acontecem`, async () => {
@@ -99,7 +105,6 @@ describe('Jarvis: GATED nunca roda sem o dono', () => {
         await s.call('runs_merge', { id: 'r1', reason: 'pronto' }),
         await s.call('runs_discard', { id: 'r1' }),
         await s.call('projects_config_set', { folder: 'C:\\proj', values: { auto: 'true' } }),
-        await s.call('vboards_approve', { id: 'card1' }),
         await s.call('vboards_task_update', { id: 'task1', status: 'deployed' }),
         await s.call('schedule_create', { name: 'x', mode: 'continuous', minutes: 30, message: 'oi' }),
         await s.call('schedule_update', { id: 't1', message: 'outra' }),

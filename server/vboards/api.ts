@@ -80,9 +80,6 @@ export class VBoardsApi {
   refine(id: string) {
     return this.call<{ card: unknown }>('POST', `/schedule/${encodeURIComponent(id)}/refine`, {});
   }
-  approve(id: string) {
-    return this.call<{ card: unknown; queuedSubtaskIds: string[] }>('POST', `/schedule/${encodeURIComponent(id)}/approve`, {});
-  }
   summary(date?: string) {
     return this.call<Record<string, unknown>>('GET', `/summary${query({ date })}`);
   }

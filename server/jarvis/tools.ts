@@ -1047,12 +1047,6 @@ export class JarvisTools {
           return this.scheduleCreate({ name: tr('Pesquisar ideias para {0}', [product]).slice(0, 60), mode: 'scheduled', time: str(a.time) || '09:00', days: Array.isArray(a.days) && a.days.length ? a.days : [1], message: researchMessage(product), reason: a.reason });
         },
       ),
-      t('vboards_approve', 'GATED. Approves the refine plan of a schedule card (its subtasks go to the agents queue).', obj({ id: S(), ...REASON }, ['id']), async (a) => {
-        const cardId = id(a.id);
-        const refused = await this.gate('vboards_approve', { id: cardId }, [tr('Aprovar o plano do card {0} no VBoards: as subtarefas vão para a fila dos agentes', [cardId])], a.reason);
-        if (refused) return fail(refused);
-        return data('approve', await api.approve(cardId));
-      }),
     ];
   }
 }
